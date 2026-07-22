@@ -1,0 +1,178 @@
+[
+  {
+    "id": "scarpin-slingback-preto",
+    "name": "Scarpin Slingback Preto Biqueira",
+    "brand": "Constance",
+    "category": "Calçados",
+    "collection": "",
+    "tag": "Feminino",
+    "price": 249.9,
+    "img": "assets/img/processed/produto-scarpin-preto.jpg",
+    "desc": "Scarpin slingback em couro preto com biqueira metalizada dourada. Salto médio, confortável para o dia a dia e elegante o suficiente para ocasiões especiais."
+  },
+  {
+    "id": "tenis-constance-branco-bordo",
+    "name": "Tênis Constance Branco & Bordô",
+    "brand": "Constance",
+    "category": "Calçados",
+    "collection": "",
+    "tag": "Feminino",
+    "price": null,
+    "img": "assets/img/processed/produto-tenis-constance.jpg",
+    "desc": "Tênis casual branco com detalhes em bordô e cadarços contrastantes. Combina com looks do dia a dia, do jeans ao conjunto de moletom."
+  },
+  {
+    "id": "conjunto-alfaiataria-off-white",
+    "name": "Conjunto Alfaiataria Off White",
+    "brand": "By NaNa",
+    "category": "Feminino",
+    "collection": "",
+    "tag": "Peça exclusiva",
+    "price": null,
+    "img": "assets/img/processed/look-alfaiataria-off-white.jpg",
+    "desc": "Colete alfaiataria off white com fechamento em botões, combinado com calça pantalona no mesmo tom. Um look leve e sofisticado, ótimo para o trabalho ou um evento de dia."
+  },
+  {
+    "id": "conjunto-tricot-grafite",
+    "name": "Conjunto Tricot Grafite",
+    "brand": "By NaNa",
+    "category": "Feminino",
+    "collection": "",
+    "tag": "Peça exclusiva",
+    "price": null,
+    "img": "assets/img/processed/look-tricot-conjunto.jpg",
+    "desc": "Conjunto em tricot grafite com manga bufante, casaco e shorts. Peça confortável e cheia de atitude, perfeita para os dias mais frios."
+  },
+  {
+    "id": "pijama-xadrez-com-punho",
+    "name": "Conjunto Loungewear Xadrez",
+    "brand": "By NaNa",
+    "category": "Feminino",
+    "collection": "",
+    "tag": "Conforto",
+    "price": null,
+    "img": "assets/img/processed/look-pijama-xadrez.jpg",
+    "desc": "Conjunto loungewear xadrez com gola em suede, zíper frontal e calça de cintura alta. Conforto com muito estilo para ficar em casa ou sair para um café."
+  },
+  {
+    "id": "look-camisa-preta-bermuda",
+    "name": "Camisa Preta & Bermuda Linho",
+    "brand": "By NaNa",
+    "category": "Masculino",
+    "collection": "",
+    "tag": "Peça exclusiva",
+    "price": null,
+    "img": "assets/img/processed/look-masc-camisa-preta.jpg",
+    "desc": "Camisa preta de manga curta com bermuda de linho cinza. Combinação leve e versátil, do escritório informal ao happy hour."
+  },
+  {
+    "id": "look-regata-jeans-destroyed",
+    "name": "Regata Branca & Jeans Destroyed",
+    "brand": "By NaNa",
+    "category": "Masculino",
+    "collection": "",
+    "tag": "Casual",
+    "price": null,
+    "img": "assets/img/processed/look-masc-regata.jpg",
+    "desc": "Regata branca básica com bermuda jeans destroyed. Um look despojado para o dia a dia, fácil de combinar com tênis branco."
+  },
+  {
+    "id": "look-camiseta-jeans",
+    "name": "Camiseta & Jeans Claro",
+    "brand": "By NaNa",
+    "category": "Masculino",
+    "collection": "",
+    "tag": "Casual",
+    "price": null,
+    "img": "assets/img/processed/look-masc-tshirt-jeans.jpg",
+    "desc": "Camiseta verde-água combinada com calça jeans clara. Visual clean e casual, ótimo para o dia a dia."
+  },
+  {
+    "id": "look-jaqueta-animal-print",
+    "name": "Jaqueta Animal Print & Calça Off White",
+    "brand": "By NaNa",
+    "category": "Feminino",
+    "collection": "",
+    "tag": "Peça exclusiva",
+    "price": null,
+    "img": "assets/img/processed/look-jaqueta-animal-print.jpg",
+    "desc": "Jaqueta animal print combinada com calça jogger off white e lenço de seda no pescoço. Um look cheio de personalidade para sair à noite com estilo."
+  },
+  {
+    "id": "conjunto-camisa-calca-xadrez",
+    "name": "Conjunto Camisa & Calça Xadrez",
+    "brand": "By NaNa",
+    "category": "Feminino",
+    "collection": "",
+    "tag": "Peça exclusiva",
+    "price": null,
+    "img": "assets/img/processed/look-camisa-calca-xadrez.jpg",
+    "desc": "Conjunto em tricot xadrez com camisa de gola contrastante e calça reta. Elegante e confortável, perfeito para um almoço especial ou um dia mais frio."
+  },
+  {
+    "id": "conjunto-blazer-shorts-tweed",
+    "name": "Conjunto Blazer & Shorts Tweed",
+    "brand": "By NaNa",
+    "category": "Feminino",
+    "collection": "",
+    "tag": "Peça exclusiva",
+    "price": null,
+    "img": "assets/img/processed/look-blazer-shorts-tweed.jpg",
+    "desc": "Conjunto tricot tweed chumbo com blazer canelado e shorts combinando. Combinado com bolsa transversal e scarpin, é aposta certa para o trabalho ou um encontro."
+  },
+  {
+    "id": "camisa-saia-xadrez-amarela",
+    "name": "Camisa & Saia Xadrez Amarela",
+    "brand": "By NaNa",
+    "category": "Feminino",
+    "collection": "",
+    "tag": "Peça exclusiva",
+    "price": null,
+    "img": "assets/img/processed/look-camisa-saia-xadrez.jpg",
+    "desc": "Camisa azul clara com saia longa xadrez amarela e fenda frontal. Combinação leve e cheia de charme para os dias mais quentes."
+  },
+  {
+    "id": "blazer-marinho-bermuda-jeans",
+    "name": "Blazer Marinho & Bermuda Jeans",
+    "brand": "By NaNa",
+    "category": "Feminino",
+    "collection": "",
+    "tag": "Peça exclusiva",
+    "price": null,
+    "img": "assets/img/processed/look-blazer-marinho-bermuda.jpg",
+    "desc": "Blazer marinho alfaiataria amarrado na cintura com lenço, sobre bermuda jeans clara. Um mix descontraído e chique para o dia a dia."
+  },
+  {
+    "id": "conjunto-alfaiataria-off-white-shorts",
+    "name": "Conjunto Alfaiataria Off White Shorts",
+    "brand": "By NaNa",
+    "category": "Feminino",
+    "collection": "Coleção Festa",
+    "tag": "Peça exclusiva",
+    "price": null,
+    "img": "assets/img/processed/look-alfaiataria-off-white-shorts.jpg",
+    "desc": "Colete alfaiataria off white com botões e shorts no mesmo tecido, finalizado com faixa amarrada na cintura. Versão curta e leve do clássico look de alfaiataria By NaNa."
+  },
+  {
+    "id": "cropped-bege-calca-pantalona",
+    "name": "Cropped Bege & Calça Pantalona",
+    "brand": "By NaNa",
+    "category": "Feminino",
+    "collection": "Verão 2026",
+    "tag": "Peça exclusiva",
+    "price": null,
+    "img": "assets/img/processed/look-cropped-bege-pantalona.jpg",
+    "desc": "Cropped alfaiataria bege com botões e calça pantalona no mesmo tom. Um look minimalista e sofisticado, fácil de compor com bolsas coloridas."
+  },
+  {
+    "id": "regata-renda-bermuda-jeans",
+    "name": "Regata Renda Branca & Bermuda Jeans",
+    "brand": "By NaNa",
+    "category": "Feminino",
+    "collection": "Verão 2026",
+    "tag": "Casual",
+    "price": null,
+    "img": "assets/img/processed/look-regata-renda-bermuda.jpg",
+    "desc": "Regata branca de cetim com barra em renda, combinada com bermuda jeans clara. Look leve e feminino para o dia a dia."
+  }
+]

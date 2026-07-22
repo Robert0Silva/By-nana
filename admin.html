@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>By NaNa — Painel Admin</title>
+<meta name="robots" content="noindex, nofollow" />
+<link rel="icon" href="assets/img/processed/logo.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,600;1,500&family=Poppins:wght@300;400;500;600&family=Great+Vibes&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css" />
+<link rel="stylesheet" href="assets/css/admin.css" />
+</head>
+<body class="admin-body">
+
+<div id="loginScreen" class="admin-login">
+  <form id="loginForm" class="admin-login-box">
+    <span class="brand-mark admin-login-mark">By NaNa</span>
+    <h1>Painel Admin</h1>
+    <p>Entre com a senha para gerenciar coleções, categorias e produtos do catálogo.</p>
+    <input type="password" id="loginPassword" placeholder="Senha" autocomplete="current-password" required />
+    <button type="submit" class="btn btn-primary btn-block">Entrar</button>
+    <a href="index.html" class="btn btn-ghost btn-block">Sair</a>
+    <p class="admin-error" id="loginError" hidden>Senha incorreta.</p>
+  </form>
+</div>
+
+<div id="adminApp" class="admin-app" hidden>
+  <header class="admin-header">
+    <a href="index.html" class="brand"><span class="brand-mark">By NaNa</span></a>
+    <div class="admin-header-actions">
+      <a href="index.html" target="_blank" class="btn btn-ghost">Ver site</a>
+      <button id="logoutBtn" class="btn btn-outline">Sair</button>
+    </div>
+  </header>
+
+  <main class="admin-main wrap">
+    <h1>Painel Admin — By NaNa</h1>
+    <p class="admin-sub">Gerencie categorias, coleções, produtos, promoções e as fotos fixas do site.</p>
+
+    <nav class="admin-tabs" id="adminTabs">
+      <button type="button" class="admin-tab is-active" data-target="categorias">Categorias</button>
+      <button type="button" class="admin-tab" data-target="colecoes">Coleções</button>
+      <button type="button" class="admin-tab" data-target="produtos">Produtos</button>
+      <button type="button" class="admin-tab" data-target="promocoes">Promoções</button>
+      <button type="button" class="admin-tab" data-target="cupons">Cupons</button>
+      <button type="button" class="admin-tab" data-target="imagens">Imagens do site</button>
+    </nav>
+
+    <section class="admin-panel admin-panel-narrow" id="panel-categorias">
+      <section class="admin-card">
+        <h2>Categorias</h2>
+        <p class="admin-card-hint">Usadas nos filtros e nos cards de "Categorias" da home.</p>
+        <form id="categoryForm" class="admin-inline-form">
+          <input type="text" id="categoryName" placeholder="Nova categoria (ex: Acessórios)" required />
+          <button type="submit" class="btn btn-primary">Adicionar</button>
+        </form>
+        <ul class="admin-tag-list" id="categoryList"></ul>
+      </section>
+    </section>
+
+    <section class="admin-panel admin-panel-narrow" id="panel-colecoes" hidden>
+      <section class="admin-card">
+        <h2>Coleções</h2>
+        <p class="admin-card-hint">Opcional: agrupe peças de uma mesma coleção/temporada.</p>
+        <form id="collectionForm" class="admin-inline-form">
+          <input type="text" id="collectionName" placeholder="Nova coleção (ex: Verão 2026)" required />
+          <button type="submit" class="btn btn-primary">Adicionar</button>
+        </form>
+        <ul class="admin-tag-list" id="collectionList"></ul>
+      </section>
+    </section>
+
+    <section class="admin-panel" id="panel-produtos" hidden>
+      <section class="admin-card admin-card-wide">
+        <h2>Adicionar produto</h2>
+        <p class="admin-card-hint">A foto é ajustada automaticamente (cor, nitidez e tamanho) ao ser publicada.</p>
+        <form id="productForm" class="admin-product-form">
+          <div class="admin-form-row">
+            <label>
+              Nome da peça
+              <input type="text" id="pName" placeholder="Ex: Vestido Midi Floral" required />
+            </label>
+            <label>
+              Marca
+              <input type="text" id="pBrand" placeholder="By NaNa" value="By NaNa" />
+            </label>
+          </div>
+
+          <div class="admin-form-row">
+            <label>
+              Categoria
+              <select id="pCategory" required></select>
+            </label>
+            <label>
+              Coleção (opcional)
+              <select id="pCollection"><option value="">Nenhuma</option></select>
+            </label>
+          </div>
+
+          <div class="admin-form-row">
+            <label>
+              Selo/tag
+              <input type="text" id="pTag" placeholder="Ex: Peça exclusiva, Casual, Promoção" />
+            </label>
+            <label>
+              Valor (R$) — deixe em branco para "Sob consulta"
+              <input type="number" id="pPrice" min="0" step="0.01" placeholder="Ex: 199.90" />
+            </label>
+          </div>
+
+          <label>
+            Descrição
+            <textarea id="pDesc" rows="3" placeholder="Descreva o tecido, caimento, detalhes..." required></textarea>
+          </label>
+
+          <label>
+            Foto do produto
+            <input type="file" id="pImage" accept="image/*" required />
+          </label>
+          <img id="pPreview" class="admin-preview" hidden alt="Pré-visualização" />
+
+          <button type="submit" class="btn btn-primary btn-lg" id="pSubmit">Publicar no catálogo</button>
+          <p class="admin-form-msg" id="productMsg" hidden></p>
+        </form>
+      </section>
+
+      <section class="admin-card admin-card-wide">
+        <h2>Produtos no catálogo (<span id="productCount">0</span>)</h2>
+        <div class="admin-product-list" id="productList"></div>
+      </section>
+    </section>
+
+    <section class="admin-panel" id="panel-promocoes" hidden>
+      <section class="admin-card admin-card-wide">
+        <h2>Promoções</h2>
+        <p class="admin-card-hint">Aplique desconto numa peça específica, numa categoria, numa coleção inteira ou na loja toda. Com datas de início/fim a promoção entra e sai do ar sozinha.</p>
+        <form id="promoForm" class="admin-product-form">
+          <div class="admin-form-row">
+            <label>
+              Escopo da promoção
+              <select id="promoScope">
+                <option value="product">Produto específico</option>
+                <option value="category">Categoria</option>
+                <option value="collection">Coleção</option>
+                <option value="site">Loja inteira</option>
+              </select>
+            </label>
+            <label id="promoTargetWrap">
+              Alvo
+              <select id="promoTarget"></select>
+            </label>
+          </div>
+          <div class="admin-form-row">
+            <label>
+              Tipo de desconto
+              <select id="promoType">
+                <option value="percent">Porcentagem (%)</option>
+                <option value="fixed">Valor fixo (R$)</option>
+              </select>
+            </label>
+            <label>
+              Valor do desconto
+              <input type="number" id="promoValue" min="0.01" step="0.01" placeholder="Ex: 15" required />
+            </label>
+          </div>
+          <div class="admin-form-row">
+            <label>
+              Início (opcional)
+              <input type="date" id="promoStart" />
+            </label>
+            <label>
+              Fim (opcional)
+              <input type="date" id="promoEnd" />
+            </label>
+          </div>
+          <label>
+            Selo personalizado (opcional)
+            <input type="text" id="promoLabel" placeholder="Ex: Black Friday — deixe em branco para usar o % automático" />
+          </label>
+          <button type="submit" class="btn btn-primary" id="promoSubmit">Aplicar promoção</button>
+          <p class="admin-form-msg" id="promoMsg" hidden></p>
+        </form>
+        <div class="admin-promo-list" id="promoList"></div>
+      </section>
+    </section>
+
+    <section class="admin-panel" id="panel-cupons" hidden>
+      <section class="admin-card admin-card-wide">
+        <h2>Cupons de desconto</h2>
+        <p class="admin-card-hint">O cliente informa o código na sacola do site; o desconto entra no total combinado pelo WhatsApp.</p>
+        <form id="couponForm" class="admin-product-form">
+          <div class="admin-form-row">
+            <label>
+              Código do cupom
+              <input type="text" id="couponCode" placeholder="Ex: VERAO10" required />
+            </label>
+            <label>
+              Tipo de desconto
+              <select id="couponType">
+                <option value="percent">Porcentagem (%)</option>
+                <option value="fixed">Valor fixo (R$)</option>
+              </select>
+            </label>
+          </div>
+          <div class="admin-form-row">
+            <label>
+              Valor do desconto
+              <input type="number" id="couponValue" min="0.01" step="0.01" placeholder="Ex: 10" required />
+            </label>
+            <label>
+              Validade (opcional)
+              <input type="date" id="couponEnd" />
+            </label>
+          </div>
+          <button type="submit" class="btn btn-primary" id="couponSubmit">Criar cupom</button>
+          <p class="admin-form-msg" id="couponMsg" hidden></p>
+        </form>
+        <ul class="admin-tag-list" id="couponList"></ul>
+      </section>
+    </section>
+
+    <section class="admin-panel" id="panel-imagens" hidden>
+      <section class="admin-card admin-card-wide">
+        <h2>Imagens do site</h2>
+        <p class="admin-card-hint">Essas fotos ficam em locais fixos da página inicial (capa, seção "Sobre", logo). Escolha uma nova foto para substituir a atual — o lugar dela no site continua o mesmo.</p>
+        <div class="admin-site-images" id="siteImageList"></div>
+      </section>
+    </section>
+  </main>
+</div>
+
+<script src="assets/js/promo.js"></script>
+<script src="assets/js/admin.js"></script>
+</body>
+</html>
