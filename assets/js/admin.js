@@ -10,10 +10,12 @@
   let PASSWORD = sessionStorage.getItem(PASS_KEY) || '';
 
   let CATEGORIES = [];
+  let CATEGORY_GROUPS = [];
   let COLLECTIONS = [];
   let PRODUCTS = [];
   let PROMOTIONS = [];
   let COUPONS = [];
+  let CUSTOMERS = [];
 
   const money = (v) =>
     v == null ? 'Sob consulta' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -40,6 +42,7 @@
     const data = await res.json();
     PRODUCTS = data.products || [];
     CATEGORIES = data.categories || [];
+    CATEGORY_GROUPS = data.categoryGroups || [];
     COLLECTIONS = data.collections || [];
     PROMOTIONS = data.promotions || [];
     COUPONS = data.coupons || [];
@@ -52,6 +55,7 @@
     renderPromoList();
     renderCouponList();
     loadSiteImages();
+    loadCustomers();
   }
 
   // ---------- tabs ----------
@@ -111,13 +115,29 @@
   function renderCategories() {
     categoryList.innerHTML = '';
     if (!CATEGORIES.length) {
-      categoryList.innerHTML = '<li class="admin-empty">Nenhuma categoria ainda.</li>';
+      categoryList.innerHTML = '<p class="admin-empty">Nenhuma categoria ainda.</p>';
       return;
     }
     CATEGORIES.forEach((c) => {
-      const li = document.createElement('li');
-      li.innerHTML = `<span>${c}</span><button type="button" aria-label="Remover">✕</button>`;
-      li.querySelector('button').addEventListener('click', async () => {
+      const groupInfo = CATEGORY_GROUPS.find((g) => g.name === c);
+      const row = document.createElement('div');
+      row.className = 'admin-category-item';
+      row.innerHTML = `
+        <span class="admin-category-item-name">${c}</span>
+        <input type="text" class="admin-category-group-input" placeholder="Grupo no mega-menu (opcional)" value="${groupInfo && groupInfo.groupName ? groupInfo.groupName : ''}" />
+        <button type="button" class="admin-category-save">Salvar</button>
+        <button type="button" class="admin-category-remove" aria-label="Remover">✕</button>
+      `;
+      row.querySelector('.admin-category-save').addEventListener('click', async () => {
+        const groupName = row.querySelector('.admin-category-group-input').value.trim();
+        try {
+          const data = await api('/api/categories/group', 'POST', { name: c, groupName });
+          CATEGORY_GROUPS = data.categoryGroups;
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+      row.querySelector('.admin-category-remove').addEventListener('click', async () => {
         if (!confirm(`Remover a categoria "${c}"?`)) return;
         try {
           const data = await api('/api/categories', 'DELETE', { name: c });
@@ -129,7 +149,7 @@
           alert(err.message);
         }
       });
-      categoryList.appendChild(li);
+      categoryList.appendChild(row);
     });
   }
 
@@ -558,6 +578,62 @@
     };
     reader.readAsDataURL(file);
   });
+
+  // ---------- clientes (CRM) ----------
+  const customerList = document.getElementById('customerList');
+  const customerCount = document.getElementById('customerCount');
+  const customerSearch = document.getElementById('customerSearch');
+
+  async function loadCustomers() {
+    try {
+      const data = await api('/api/customers/list', 'POST', {});
+      CUSTOMERS = data.customers || [];
+      renderCustomerList();
+    } catch (err) {
+      customerList.innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+    }
+  }
+
+  function renderCustomerList() {
+    const term = (customerSearch.value || '').trim().toLowerCase();
+    const list = term
+      ? CUSTOMERS.filter((c) => `${c.firstName} ${c.lastName} ${c.email}`.toLowerCase().includes(term))
+      : CUSTOMERS;
+
+    customerCount.textContent = CUSTOMERS.length;
+    customerList.innerHTML = '';
+    if (!list.length) {
+      customerList.innerHTML = '<p class="admin-empty-block">Nenhum cliente encontrado.</p>';
+      return;
+    }
+    list.forEach((c) => {
+      const div = document.createElement('div');
+      div.className = 'admin-customer-item';
+      div.innerHTML = `
+        <div class="admin-customer-info">
+          <span class="admin-customer-name">${c.firstName} ${c.lastName}</span>
+          <span class="admin-customer-meta">${c.email} · ${c.phone} · CPF ${c.cpf} · cliente desde ${formatDate(c.createdAt.slice(0, 10))}</span>
+        </div>
+        <div class="admin-customer-actions">
+          <span class="admin-customer-badge ${c.marketingOptIn ? '' : 'is-off'}">${c.marketingOptIn ? 'Recebe novidades' : 'Não recebe novidades'}</span>
+          <button type="button" class="admin-customer-remove" aria-label="Remover cliente">✕</button>
+        </div>
+      `;
+      div.querySelector('.admin-customer-remove').addEventListener('click', async () => {
+        if (!confirm(`Remover o cadastro de "${c.firstName} ${c.lastName}"?`)) return;
+        try {
+          const data = await api('/api/customers', 'DELETE', { id: c.id });
+          CUSTOMERS = data.customers;
+          renderCustomerList();
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+      customerList.appendChild(div);
+    });
+  }
+
+  customerSearch.addEventListener('input', renderCustomerList);
 
   // ---------- boot ----------
   (async () => {

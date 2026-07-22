@@ -46,17 +46,18 @@
       <button type="button" class="admin-tab" data-target="promocoes">Promoções</button>
       <button type="button" class="admin-tab" data-target="cupons">Cupons</button>
       <button type="button" class="admin-tab" data-target="imagens">Imagens do site</button>
+      <button type="button" class="admin-tab" data-target="clientes">Clientes</button>
     </nav>
 
     <section class="admin-panel admin-panel-narrow" id="panel-categorias">
       <section class="admin-card">
         <h2>Categorias</h2>
-        <p class="admin-card-hint">Usadas nos filtros e nos cards de "Categorias" da home.</p>
+        <p class="admin-card-hint">Usadas nos filtros, nos cards de "Categorias" da home e no mega-menu do topo. O campo "Grupo" define em qual coluna do mega-menu a categoria aparece — deixe em branco para ela cair numa coluna genérica "Categorias".</p>
         <form id="categoryForm" class="admin-inline-form">
           <input type="text" id="categoryName" placeholder="Nova categoria (ex: Acessórios)" required />
           <button type="submit" class="btn btn-primary">Adicionar</button>
         </form>
-        <ul class="admin-tag-list" id="categoryList"></ul>
+        <div class="admin-category-list" id="categoryList"></div>
       </section>
     </section>
 
@@ -226,6 +227,15 @@
         <h2>Imagens do site</h2>
         <p class="admin-card-hint">Essas fotos ficam em locais fixos da página inicial (capa, seção "Sobre", logo). Escolha uma nova foto para substituir a atual — o lugar dela no site continua o mesmo.</p>
         <div class="admin-site-images" id="siteImageList"></div>
+      </section>
+    </section>
+
+    <section class="admin-panel" id="panel-clientes" hidden>
+      <section class="admin-card admin-card-wide">
+        <h2>Clientes (<span id="customerCount">0</span>)</h2>
+        <p class="admin-card-hint">Cadastros feitos pelos próprios clientes no site — use como base para ações de CRM (aniversário, novidades, campanhas). O CPF é exibido parcialmente por privacidade.</p>
+        <input type="search" id="customerSearch" class="admin-search" placeholder="Buscar por nome ou e-mail..." />
+        <div class="admin-customer-list" id="customerList"></div>
       </section>
     </section>
   </main>

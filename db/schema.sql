@@ -5,6 +5,8 @@ CREATE TABLE IF NOT EXISTS categories (
   name TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS categories_name_lower_idx ON categories (lower(name));
+-- agrupamento usado pelo mega-menu da vitrine; categorias sem grupo caem numa coluna "Categorias" no front.
+ALTER TABLE categories ADD COLUMN IF NOT EXISTS group_name TEXT;
 
 CREATE TABLE IF NOT EXISTS collections (
   id   SERIAL PRIMARY KEY,
@@ -61,3 +63,21 @@ CREATE TABLE IF NOT EXISTS coupons (
   active         BOOLEAN NOT NULL DEFAULT true,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS customers (
+  id                  UUID PRIMARY KEY,
+  first_name          TEXT NOT NULL,
+  last_name           TEXT NOT NULL,
+  email               TEXT NOT NULL,
+  phone               TEXT NOT NULL,
+  birth_date          DATE NOT NULL,
+  cpf                 TEXT NOT NULL,
+  gender              TEXT NOT NULL DEFAULT 'nao_informado'
+                        CHECK (gender IN ('feminino', 'masculino', 'nao_informado')),
+  password_hash       TEXT NOT NULL,
+  marketing_opt_in    BOOLEAN NOT NULL DEFAULT false,
+  privacy_accepted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS customers_email_lower_idx ON customers (lower(email));
+CREATE UNIQUE INDEX IF NOT EXISTS customers_cpf_idx ON customers (cpf);

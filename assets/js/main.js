@@ -10,6 +10,7 @@
   let COLLECTIONS = [];
   let PROMOTIONS = [];
   let COUPONS = [];
+  let CATEGORY_GROUPS = [];
 
   const money = (v) =>
     v == null ? 'Sob consulta' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -66,6 +67,7 @@
     else favs.add(id);
     saveFavs();
     renderGrid(currentFilter, currentSearch);
+    renderNovidades();
     syncQuickviewFav();
   }
 
@@ -201,9 +203,62 @@
     collectionWrap.appendChild(select);
   }
 
+  // ---------- mega-menu (categorias agrupadas no header) ----------
+  const megaMenuEl = document.getElementById('megaMenu');
+
+  function buildMegaMenu() {
+    if (!megaMenuEl) return;
+    if (!CATEGORY_GROUPS.length) {
+      megaMenuEl.innerHTML = '<p class="mega-menu-empty">Nenhuma categoria cadastrada ainda.</p>';
+      return;
+    }
+    const groups = new Map();
+    CATEGORY_GROUPS.forEach((c) => {
+      const key = c.groupName || 'Categorias';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(c.name);
+    });
+    const columnsHtml = [...groups.entries()]
+      .map(
+        ([groupName, names]) => `
+        <div class="mega-menu-col">
+          <p class="mega-menu-col-title">${groupName}</p>
+          <ul>${names.map((n) => `<li><a href="#colecao" data-cat="${n}">${n}</a></li>`).join('')}</ul>
+        </div>`
+      )
+      .join('');
+    megaMenuEl.innerHTML = `<div class="mega-menu-columns">${columnsHtml}</div>`;
+  }
+
+  megaMenuEl.addEventListener('click', (e) => {
+    const link = e.target.closest('a[data-cat]');
+    if (!link) return;
+    e.preventDefault();
+    setFilter(link.dataset.cat);
+    document.getElementById('colecao').scrollIntoView({ behavior: 'smooth' });
+  });
+
+  // ---------- novidades (últimos produtos cadastrados) ----------
+  const novidadesGrid = document.getElementById('novidadesGrid');
+  function renderNovidades() {
+    if (!novidadesGrid) return;
+    novidadesGrid.innerHTML = '';
+    PRODUCTS.slice(0, 8).forEach((p) => novidadesGrid.appendChild(productCard(p)));
+  }
+
   const searchInput = document.getElementById('searchInput');
   searchInput.addEventListener('input', () => {
     renderGrid(currentFilter, searchInput.value.trim().toLowerCase());
+  });
+
+  // ---------- busca no cabeçalho (espelha a busca do catálogo) ----------
+  const headerSearchForm = document.getElementById('headerSearchForm');
+  const headerSearchInput = document.getElementById('headerSearchInput');
+  headerSearchForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    searchInput.value = headerSearchInput.value;
+    renderGrid(currentFilter, headerSearchInput.value.trim().toLowerCase());
+    document.getElementById('colecao').scrollIntoView({ behavior: 'smooth' });
   });
 
   const bagCount = document.getElementById('bagCount');
@@ -323,6 +378,8 @@
   });
 
   function validateCheckout() {
+    if (!bagNameInput.value.trim()) return 'Informe seu nome.';
+    if (!bagPhoneInput.value.trim()) return 'Informe seu telefone.';
     if (!selectedPayment) return 'Selecione a forma de pagamento.';
     if (!selectedDelivery) return 'Selecione retirada em loja ou entrega.';
     if (selectedDelivery === 'Entrega') {
@@ -335,6 +392,7 @@
 
   function buildOrderMessage(ids) {
     let msg = 'Olá! Vim pelo site da By NaNa e quero fazer um pedido:\n\n';
+    msg += `Nome: ${bagNameInput.value.trim()}\nTelefone: ${bagPhoneInput.value.trim()}\n\n`;
     ids.forEach((id) => {
       const p = PRODUCTS.find((x) => x.id === id);
       if (!p) return;
@@ -539,6 +597,7 @@
   const bagOverlay = document.getElementById('bagOverlay');
   function openBag() {
     closeQuickview();
+    prefillBagContact();
     bagDrawer.classList.add('is-open');
     bagOverlay.classList.add('is-open');
   }
@@ -631,10 +690,223 @@
     if (rel) openQuickview(rel.dataset.id);
   });
 
-  // ---------- mobile menu ----------
+  // ---------- conta do cliente (cadastro/login — base do CRM) ----------
+  const CUSTOMER_TOKEN_KEY = 'bynana_customer_token';
+  const CUSTOMER_KEY = 'bynana_customer';
+
+  const accountBtn = document.getElementById('accountBtn');
+  const accountOverlay = document.getElementById('accountOverlay');
+  const accountModal = document.getElementById('accountModal');
+  const accountViewLogin = document.getElementById('accountViewLogin');
+  const accountViewSignup = document.getElementById('accountViewSignup');
+  const accountViewProfile = document.getElementById('accountViewProfile');
+  const loginForm = document.getElementById('loginForm');
+  const loginMsg = document.getElementById('loginMsg');
+  const signupForm = document.getElementById('signupForm');
+  const signupMsg = document.getElementById('signupMsg');
+  const profileName = document.getElementById('profileName');
+  const bagNameInput = document.getElementById('bagName');
+  const bagPhoneInput = document.getElementById('bagPhone');
+
+  let currentCustomer = JSON.parse(localStorage.getItem(CUSTOMER_KEY) || 'null');
+
+  function setFormMsg(el, text, kind) {
+    el.textContent = text;
+    el.className = `account-form-msg ${kind === 'ok' ? 'is-ok' : 'is-error'}`;
+    el.hidden = !text;
+  }
+
+  function showAccountView(view) {
+    accountViewLogin.hidden = view !== 'login';
+    accountViewSignup.hidden = view !== 'signup';
+    accountViewProfile.hidden = view !== 'profile';
+  }
+
+  function prefillBagContact() {
+    if (!currentCustomer) return;
+    if (bagNameInput && !bagNameInput.value) {
+      bagNameInput.value = `${currentCustomer.firstName} ${currentCustomer.lastName || ''}`.trim();
+    }
+    if (bagPhoneInput && !bagPhoneInput.value) bagPhoneInput.value = currentCustomer.phone || '';
+  }
+
+  function updateAccountButton() {
+    accountBtn.classList.toggle('is-logged', !!currentCustomer);
+    accountBtn.title = currentCustomer ? `Olá, ${currentCustomer.firstName}` : 'Minha conta';
+    if (currentCustomer) {
+      profileName.textContent = currentCustomer.firstName;
+      prefillBagContact();
+    }
+  }
+  updateAccountButton();
+
+  function setCustomer(customer, token) {
+    currentCustomer = customer;
+    localStorage.setItem(CUSTOMER_KEY, JSON.stringify(customer));
+    if (token) localStorage.setItem(CUSTOMER_TOKEN_KEY, token);
+    updateAccountButton();
+  }
+
+  function clearCustomer() {
+    currentCustomer = null;
+    localStorage.removeItem(CUSTOMER_KEY);
+    localStorage.removeItem(CUSTOMER_TOKEN_KEY);
+    updateAccountButton();
+  }
+
+  function openAccountModal() {
+    showAccountView(currentCustomer ? 'profile' : 'login');
+    accountOverlay.classList.add('is-open');
+    accountModal.classList.add('is-open');
+  }
+  function closeAccountModal() {
+    accountOverlay.classList.remove('is-open');
+    accountModal.classList.remove('is-open');
+  }
+
+  accountBtn.addEventListener('click', openAccountModal);
+  document.getElementById('accountClose').addEventListener('click', closeAccountModal);
+  accountOverlay.addEventListener('click', closeAccountModal);
+  document.getElementById('goSignup').addEventListener('click', () => showAccountView('signup'));
+  document.getElementById('goLogin').addEventListener('click', () => showAccountView('login'));
+  document.getElementById('logoutBtn').addEventListener('click', () => {
+    clearCustomer();
+    closeAccountModal();
+  });
+
+  loginForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    setFormMsg(loginMsg, '', '');
+    const email = document.getElementById('loginEmail').value.trim();
+    const password = document.getElementById('loginPassword').value;
+    try {
+      const res = await fetch('/api/customers/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Não foi possível entrar');
+      setCustomer(data.customer, data.token);
+      loginForm.reset();
+      showAccountView('profile');
+    } catch (err) {
+      setFormMsg(loginMsg, err.message, 'error');
+    }
+  });
+
+  signupForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    setFormMsg(signupMsg, '', '');
+    const password = document.getElementById('suPassword').value;
+    const passwordConfirm = document.getElementById('suPasswordConfirm').value;
+    if (password !== passwordConfirm) {
+      setFormMsg(signupMsg, 'As senhas não coincidem.', 'error');
+      return;
+    }
+    if (!document.getElementById('suPrivacy').checked) {
+      setFormMsg(signupMsg, 'É preciso aceitar a política de privacidade.', 'error');
+      return;
+    }
+    const body = {
+      firstName: document.getElementById('suFirstName').value.trim(),
+      lastName: document.getElementById('suLastName').value.trim(),
+      email: document.getElementById('suEmail').value.trim(),
+      phone: document.getElementById('suPhone').value.trim(),
+      birthDate: document.getElementById('suBirthDate').value,
+      cpf: document.getElementById('suCpf').value,
+      gender: document.getElementById('suGender').value,
+      password,
+      marketingOptIn: document.getElementById('suMarketing').checked,
+      privacyAccepted: document.getElementById('suPrivacy').checked,
+    };
+    try {
+      const res = await fetch('/api/customers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Não foi possível criar a conta');
+      setCustomer(data.customer, data.token);
+      signupForm.reset();
+      showAccountView('profile');
+    } catch (err) {
+      setFormMsg(signupMsg, err.message, 'error');
+    }
+  });
+
+  async function restoreSession() {
+    const token = localStorage.getItem(CUSTOMER_TOKEN_KEY);
+    if (!token) return;
+    try {
+      const res = await fetch('/api/customers/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error();
+      setCustomer(data.customer, token);
+    } catch {
+      clearCustomer();
+    }
+  }
+
+  function formatPhone(v) {
+    const digits = v.replace(/\D/g, '').slice(0, 11);
+    const pattern = digits.length > 10 ? /(\d{2})(\d{5})(\d{0,4})/ : /(\d{2})(\d{4})(\d{0,4})/;
+    return digits.replace(pattern, (_, a, b, c) => (c ? `(${a}) ${b}-${c}` : b ? `(${a}) ${b}` : `(${a}`));
+  }
+  ['suPhone', 'bagPhone'].forEach((id) => {
+    const el = document.getElementById(id);
+    el.addEventListener('input', () => {
+      el.value = formatPhone(el.value);
+    });
+  });
+  document.getElementById('suCpf').addEventListener('input', (e) => {
+    const digits = e.target.value.replace(/\D/g, '').slice(0, 11);
+    e.target.value = digits
+      .replace(/(\d{3})(\d)/, '$1.$2')
+      .replace(/(\d{3})(\d)/, '$1.$2')
+      .replace(/(\d{3})(\d{1,2})$/, '$1-$2');
+  });
+
+  // ---------- mobile menu + mega-menu open/close ----------
   const nav = document.getElementById('mainNav');
+  const megaTrigger = document.getElementById('megaTrigger');
+  const megaItem = megaTrigger.closest('.nav-item');
+
   document.getElementById('menuToggle').addEventListener('click', () => nav.classList.toggle('is-open'));
-  nav.querySelectorAll('a').forEach((a) => a.addEventListener('click', () => nav.classList.remove('is-open')));
+
+  function closeMegaMenu() {
+    megaItem.classList.remove('is-open');
+    megaTrigger.setAttribute('aria-expanded', 'false');
+  }
+
+  megaTrigger.addEventListener('click', () => {
+    const isOpen = megaItem.classList.toggle('is-open');
+    megaTrigger.setAttribute('aria-expanded', String(isOpen));
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!megaItem.contains(e.target)) closeMegaMenu();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeMegaMenu();
+      closeAccountModal();
+    }
+  });
+
+  // fecha o menu mobile (e o mega-menu) ao clicar em qualquer link dentro do nav,
+  // via delegação — funciona também para os links do mega-menu, gerados depois via JS
+  nav.addEventListener('click', (e) => {
+    if (e.target.closest('a')) {
+      nav.classList.remove('is-open');
+      closeMegaMenu();
+    }
+  });
 
   document.getElementById('year').textContent = new Date().getFullYear();
 
@@ -648,19 +920,24 @@
       COLLECTIONS = data.collections || [];
       PROMOTIONS = data.promotions || [];
       COUPONS = data.coupons || [];
+      CATEGORY_GROUPS = data.categoryGroups || [];
     } catch (e) {
       PRODUCTS = [];
       CATEGORIES = [];
       COLLECTIONS = [];
       PROMOTIONS = [];
       COUPONS = [];
+      CATEGORY_GROUPS = [];
     }
     buildFilters();
     buildCatCards();
+    buildMegaMenu();
     buildCollectionFilter();
     renderPromoBanner();
     renderGrid('Todos', '');
+    renderNovidades();
     renderCart();
+    restoreSession();
   }
 
   function renderPromoBanner() {

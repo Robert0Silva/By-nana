@@ -2,6 +2,7 @@ require('dotenv').config({ quiet: true });
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const sharp = require('sharp');
 const { Pool, types } = require('pg');
 
@@ -17,6 +18,10 @@ const uploadDir = path.join(root, 'assets/img/processed');
 
 // Change this to control who can use the admin panel (/admin.html).
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+
+// Secret used to sign customer session tokens (HMAC). Set in .env, never commit it.
+const SESSION_SECRET = process.env.SESSION_SECRET;
+const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 dias
 
 // Fixed-location landing page photos the admin can replace. The key ("slot") is the only
 // thing the client ever sends — the real file path always comes from this whitelist, so a
@@ -116,6 +121,39 @@ async function getCoupons() {
   return rows;
 }
 
+// grupos usados só pelo mega-menu da vitrine; não altera o formato de getCategories().
+async function getCategoryGroups() {
+  const { rows } = await pool.query('SELECT name, group_name AS "groupName" FROM categories ORDER BY id');
+  return rows;
+}
+
+function maskCpf(cpf) {
+  const digits = (cpf || '').replace(/\D/g, '');
+  if (digits.length < 2) return '***.***.**-**';
+  return `***.***.**-${digits.slice(-2)}`;
+}
+
+async function getCustomerById(id) {
+  const { rows } = await pool.query(
+    `SELECT id, first_name AS "firstName", last_name AS "lastName", email, phone,
+            marketing_opt_in AS "marketingOptIn"
+     FROM customers WHERE id = $1`,
+    [id]
+  );
+  return rows[0] || null;
+}
+
+async function getCustomersForAdmin() {
+  const { rows } = await pool.query(`
+    SELECT id, first_name AS "firstName", last_name AS "lastName", email, phone,
+           birth_date AS "birthDate", cpf, gender, marketing_opt_in AS "marketingOptIn",
+           created_at AS "createdAt"
+    FROM customers
+    ORDER BY created_at DESC
+  `);
+  return rows.map((c) => ({ ...c, cpf: maskCpf(c.cpf) }));
+}
+
 // ---------- request helpers ----------
 function sendJSON(res, status, obj) {
   const body = JSON.stringify(obj);
@@ -151,6 +189,45 @@ function checkAuth(body) {
   return typeof body.password === 'string' && body.password === ADMIN_PASSWORD;
 }
 
+// ---------- customer auth (hash + sessão assinada, sem dependências novas) ----------
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  const [salt, hash] = (stored || '').split(':');
+  if (!salt || !hash) return false;
+  const expected = Buffer.from(hash, 'hex');
+  const actual = crypto.scryptSync(password, salt, 64);
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}
+
+function signSessionToken(customerId) {
+  const payload = { id: customerId, exp: Date.now() + SESSION_MAX_AGE_MS };
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(body).digest('base64url');
+  return `${body}.${sig}`;
+}
+
+function verifySessionToken(token) {
+  const [body, sig] = (token || '').split('.');
+  if (!body || !sig) return null;
+  const expected = crypto.createHmac('sha256', SESSION_SECRET).update(body).digest('base64url');
+  const expBuf = Buffer.from(expected);
+  const sigBuf = Buffer.from(sig);
+  if (expBuf.length !== sigBuf.length || !crypto.timingSafeEqual(expBuf, sigBuf)) return null;
+  let payload;
+  try {
+    payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (!payload || !payload.exp || payload.exp < Date.now()) return null;
+  return payload;
+}
+
 function validateDiscount(body) {
   const type = body.type === 'fixed' ? 'fixed' : 'percent';
   const value = Number(body.value);
@@ -164,14 +241,15 @@ async function handleApi(req, res, pathname) {
   try {
     // ------ catalog ------
     if (pathname === '/api/data' && req.method === 'GET') {
-      const [products, categories, collections, promotions, coupons] = await Promise.all([
+      const [products, categories, collections, promotions, coupons, categoryGroups] = await Promise.all([
         getProducts(),
         getCategories(),
         getCollections(),
         getPromotions(),
         getCoupons(),
+        getCategoryGroups(),
       ]);
-      return sendJSON(res, 200, { products, categories, collections, promotions, coupons });
+      return sendJSON(res, 200, { products, categories, collections, promotions, coupons, categoryGroups });
     }
 
     if (pathname === '/api/login' && req.method === 'POST') {
@@ -278,6 +356,16 @@ async function handleApi(req, res, pathname) {
       return sendJSON(res, 200, { categories: await getCategories() });
     }
 
+    if (pathname === '/api/categories/group' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const name = (body.name || '').trim();
+      const groupName = (body.groupName || '').trim() || null;
+      if (!name) return sendJSON(res, 400, { error: 'Informe a categoria' });
+      await pool.query('UPDATE categories SET group_name = $1 WHERE lower(name) = lower($2)', [groupName, name]);
+      return sendJSON(res, 200, { categoryGroups: await getCategoryGroups() });
+    }
+
     // ------ collections ------
     if (pathname === '/api/collections' && req.method === 'POST') {
       const body = await readJSONBody(req);
@@ -382,6 +470,88 @@ async function handleApi(req, res, pathname) {
       const code = (body.code || '').trim().toUpperCase();
       await pool.query('DELETE FROM coupons WHERE code = $1', [code]);
       return sendJSON(res, 200, { coupons: await getCoupons() });
+    }
+
+    // ------ customers (cadastro/login público + CRM no admin) ------
+    if (pathname === '/api/customers' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+
+      const firstName = (body.firstName || '').trim();
+      const lastName = (body.lastName || '').trim();
+      const email = (body.email || '').trim().toLowerCase();
+      const phone = (body.phone || '').trim();
+      const birthDate = (body.birthDate || '').trim();
+      const cpf = (body.cpf || '').replace(/\D/g, '');
+      const password = body.password || '';
+      const gender = ['feminino', 'masculino'].includes(body.gender) ? body.gender : 'nao_informado';
+      const marketingOptIn = body.marketingOptIn === true;
+
+      if (!firstName || !lastName || !email || !phone || !birthDate || !cpf || !password) {
+        return sendJSON(res, 400, { error: 'Preencha todos os campos obrigatórios' });
+      }
+      if (!/^\S+@\S+\.\S+$/.test(email)) return sendJSON(res, 400, { error: 'E-mail inválido' });
+      if (cpf.length !== 11) return sendJSON(res, 400, { error: 'CPF inválido' });
+      if (password.length < 6) return sendJSON(res, 400, { error: 'A senha deve ter ao menos 6 caracteres' });
+      if (body.privacyAccepted !== true) {
+        return sendJSON(res, 400, { error: 'É preciso aceitar a política de privacidade' });
+      }
+
+      const dup = await pool.query(
+        'SELECT 1 FROM customers WHERE lower(email) = $1 OR cpf = $2',
+        [email, cpf]
+      );
+      if (dup.rowCount) return sendJSON(res, 409, { error: 'Já existe uma conta com esse e-mail ou CPF' });
+
+      const id = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO customers (id, first_name, last_name, email, phone, birth_date, cpf, gender, password_hash, marketing_opt_in)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [id, firstName, lastName, email, phone, birthDate, cpf, gender, hashPassword(password), marketingOptIn]
+      );
+
+      const customer = { id, firstName, lastName, email, phone, marketingOptIn };
+      return sendJSON(res, 201, { customer, token: signSessionToken(id) });
+    }
+
+    if (pathname === '/api/customers' && req.method === 'DELETE') {
+      const body = await readJSONBody(req);
+      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
+      await pool.query('DELETE FROM customers WHERE id = $1', [body.id]);
+      return sendJSON(res, 200, { customers: await getCustomersForAdmin() });
+    }
+
+    if (pathname === '/api/customers/login' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const email = (body.email || '').trim().toLowerCase();
+      const password = body.password || '';
+      if (!email || !password) return sendJSON(res, 400, { error: 'Informe e-mail e senha' });
+
+      const { rows } = await pool.query(
+        'SELECT id, first_name AS "firstName", last_name AS "lastName", email, phone, marketing_opt_in AS "marketingOptIn", password_hash AS "passwordHash" FROM customers WHERE lower(email) = $1',
+        [email]
+      );
+      const row = rows[0];
+      if (!row || !verifyPassword(password, row.passwordHash)) {
+        return sendJSON(res, 401, { error: 'E-mail ou senha inválidos' });
+      }
+      const { passwordHash, ...customer } = row;
+      return sendJSON(res, 200, { customer, token: signSessionToken(customer.id) });
+    }
+
+    if (pathname === '/api/customers/session' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const payload = verifySessionToken(body.token);
+      if (!payload) return sendJSON(res, 401, { error: 'Sessão inválida' });
+      const customer = await getCustomerById(payload.id);
+      if (!customer) return sendJSON(res, 401, { error: 'Sessão inválida' });
+      return sendJSON(res, 200, { customer });
+    }
+
+    if (pathname === '/api/customers/list' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      return sendJSON(res, 200, { customers: await getCustomersForAdmin() });
     }
 
     // ------ site images (fixed-location landing page photos) ------
