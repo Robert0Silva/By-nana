@@ -18,12 +18,15 @@ const uploadDir = path.join(root, 'assets/img/processed');
 const videosDir = path.join(root, 'assets/videos');
 fs.mkdirSync(videosDir, { recursive: true });
 
-// Change this to control who can use the admin panel (/admin.html).
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
-
 // Secret used to sign customer session tokens (HMAC). Set in .env, never commit it.
 const SESSION_SECRET = process.env.SESSION_SECRET;
 const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 dias
+
+// Secret usado para assinar o token de sessão do admin — separado do SESSION_SECRET dos
+// clientes de propósito, para que um token de cliente nunca possa ser reaproveitado como
+// admin (e vice-versa), mesmo que a checagem de "scope" abaixo tenha algum bug.
+const ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET;
+const ADMIN_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 dias — teto no servidor; o navegador já derruba a sessão ao fechar (sessionStorage)
 
 // Fixed-location landing page photos the admin can replace. The key ("slot") is the only
 // thing the client ever sends — the real file path always comes from this whitelist, so a
@@ -240,8 +243,71 @@ async function readJSONBody(req, maxBytes = 15 * 1024 * 1024) {
   return JSON.parse(buf.toString('utf8'));
 }
 
-function checkAuth(body) {
-  return typeof body.password === 'string' && body.password === ADMIN_PASSWORD;
+// ---------- admin auth (login multiusuário: e-mail+senha, token assinado, papéis) ----------
+function signAdminSessionToken(adminUser) {
+  const payload = { id: adminUser.id, role: adminUser.role, scope: 'admin', exp: Date.now() + ADMIN_SESSION_MAX_AGE_MS };
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const sig = crypto.createHmac('sha256', ADMIN_SESSION_SECRET).update(body).digest('base64url');
+  return `${body}.${sig}`;
+}
+
+function verifyAdminSessionToken(token) {
+  const [body, sig] = (token || '').split('.');
+  if (!body || !sig) return null;
+  const expected = crypto.createHmac('sha256', ADMIN_SESSION_SECRET).update(body).digest('base64url');
+  const expBuf = Buffer.from(expected);
+  const sigBuf = Buffer.from(sig);
+  if (expBuf.length !== sigBuf.length || !crypto.timingSafeEqual(expBuf, sigBuf)) return null;
+  let payload;
+  try {
+    payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (!payload || payload.scope !== 'admin' || !payload.exp || payload.exp < Date.now()) return null;
+  return payload;
+}
+
+// Confere o token E consulta o banco (diferente do token de cliente, que só confere assinatura/validade):
+// desativar um admin precisa derrubar o acesso dele na hora, não só quando o token expirar.
+async function requireAdmin(body) {
+  const payload = verifyAdminSessionToken(body.adminToken);
+  if (!payload) return null;
+  const { rows } = await pool.query('SELECT id, name, email, role, active FROM admin_users WHERE id = $1', [payload.id]);
+  const user = rows[0];
+  if (!user || !user.active) return null;
+  return user;
+}
+
+function requireOwner(admin) {
+  return !!admin && admin.role === 'owner';
+}
+
+// Registra "quem fez o quê" nas ações mais relevantes — nunca derruba a requisição real se falhar.
+async function logActivity(admin, action, entityType, entityId, details) {
+  try {
+    await pool.query(
+      'INSERT INTO admin_activity_log (admin_user_id, admin_name, action, entity_type, entity_id, details) VALUES ($1,$2,$3,$4,$5,$6)',
+      [admin.id, admin.name, action, entityType || null, entityId || null, details ? JSON.stringify(details) : null]
+    );
+  } catch (err) {
+    console.error('Falha ao registrar atividade:', err);
+  }
+}
+
+async function getAdminUsers() {
+  const { rows } = await pool.query(
+    'SELECT id, name, email, role, active, created_at AS "createdAt" FROM admin_users ORDER BY created_at ASC'
+  );
+  return rows;
+}
+
+async function getActivityLog(limit = 200) {
+  const { rows } = await pool.query(
+    'SELECT id, admin_name AS "adminName", action, entity_type AS "entityType", entity_id AS "entityId", details, created_at AS "createdAt" FROM admin_activity_log ORDER BY created_at DESC LIMIT $1',
+    [limit]
+  );
+  return rows;
 }
 
 // ---------- customer auth (hash + sessão assinada, sem dependências novas) ----------
@@ -309,15 +375,114 @@ async function handleApi(req, res, pathname) {
       return sendJSON(res, 200, { products, categories, collections, promotions, coupons, categoryGroups, stories, novidades });
     }
 
-    if (pathname === '/api/login' && req.method === 'POST') {
+    // ------ admin auth (login multiusuário, papéis, log de atividade) ------
+    if (pathname === '/api/admin/login' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      return sendJSON(res, 200, { ok: checkAuth(body) });
+      const email = (body.email || '').trim().toLowerCase();
+      const password = body.password || '';
+      if (!email || !password) return sendJSON(res, 400, { error: 'Informe e-mail e senha' });
+
+      const { rows } = await pool.query(
+        'SELECT id, name, email, password_hash AS "passwordHash", role, active FROM admin_users WHERE lower(email) = $1',
+        [email]
+      );
+      const row = rows[0];
+      if (!row || !row.active || !verifyPassword(password, row.passwordHash)) {
+        return sendJSON(res, 401, { error: 'E-mail ou senha inválidos' });
+      }
+      const adminUser = { id: row.id, name: row.name, email: row.email, role: row.role };
+      return sendJSON(res, 200, { adminUser, token: signAdminSessionToken(adminUser) });
+    }
+
+    if (pathname === '/api/admin/session' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      return sendJSON(res, 200, { adminUser: { id: admin.id, name: admin.name, email: admin.email, role: admin.role } });
+    }
+
+    if (pathname === '/api/admin/users/list' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      return sendJSON(res, 200, { adminUsers: await getAdminUsers() });
+    }
+
+    if (pathname === '/api/admin/users' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      if (!requireOwner(admin)) return sendJSON(res, 403, { error: 'Só o owner pode criar usuários admin' });
+
+      const name = (body.name || '').trim();
+      const email = (body.email || '').trim().toLowerCase();
+      const password = body.password || '';
+      const role = body.role === 'owner' ? 'owner' : 'staff';
+      if (!name || !email || !password) return sendJSON(res, 400, { error: 'Nome, e-mail e senha são obrigatórios' });
+      if (!/^\S+@\S+\.\S+$/.test(email)) return sendJSON(res, 400, { error: 'E-mail inválido' });
+      if (password.length < 6) return sendJSON(res, 400, { error: 'A senha deve ter ao menos 6 caracteres' });
+
+      const dup = await pool.query('SELECT 1 FROM admin_users WHERE lower(email) = $1', [email]);
+      if (dup.rowCount) return sendJSON(res, 409, { error: 'Já existe um usuário admin com esse e-mail' });
+
+      const id = crypto.randomUUID();
+      await pool.query(
+        'INSERT INTO admin_users (id, name, email, password_hash, role) VALUES ($1,$2,$3,$4,$5)',
+        [id, name, email, hashPassword(password), role]
+      );
+      logActivity(admin, 'admin_user.create', 'admin_user', id, { name, email, role });
+      return sendJSON(res, 201, { adminUsers: await getAdminUsers() });
+    }
+
+    if (pathname === '/api/admin/users/update' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      if (!requireOwner(admin)) return sendJSON(res, 403, { error: 'Só o owner pode gerenciar usuários admin' });
+      if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
+      if (body.id === admin.id && body.active === false) {
+        return sendJSON(res, 400, { error: 'Você não pode desativar a própria conta' });
+      }
+
+      const name = (body.name || '').trim();
+      const role = body.role === 'owner' ? 'owner' : 'staff';
+      const active = body.active !== false;
+      await pool.query(
+        "UPDATE admin_users SET name = COALESCE(NULLIF($1,''), name), role = $2, active = $3 WHERE id = $4",
+        [name, role, active, body.id]
+      );
+      logActivity(admin, 'admin_user.update', 'admin_user', body.id, { role, active });
+      return sendJSON(res, 200, { adminUsers: await getAdminUsers() });
+    }
+
+    if (pathname === '/api/admin/users/password' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      const currentPassword = body.currentPassword || '';
+      const newPassword = body.newPassword || '';
+      if (newPassword.length < 6) return sendJSON(res, 400, { error: 'A nova senha deve ter ao menos 6 caracteres' });
+
+      const { rows } = await pool.query('SELECT password_hash AS "passwordHash" FROM admin_users WHERE id = $1', [admin.id]);
+      if (!rows[0] || !verifyPassword(currentPassword, rows[0].passwordHash)) {
+        return sendJSON(res, 401, { error: 'Senha atual incorreta' });
+      }
+      await pool.query('UPDATE admin_users SET password_hash = $1 WHERE id = $2', [hashPassword(newPassword), admin.id]);
+      return sendJSON(res, 200, { ok: true });
+    }
+
+    if (pathname === '/api/admin/activity/list' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      return sendJSON(res, 200, { activity: await getActivityLog() });
     }
 
     // ------ products ------
     if (pathname === '/api/products' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
 
       const name = (body.name || '').trim();
       const category = (body.category || '').trim();
@@ -372,12 +537,14 @@ async function handleApi(req, res, pathname) {
 
       const product = { id, name, brand, category, collection, tag, price, img, desc };
       const [categories, collections] = await Promise.all([getCategories(), getCollections()]);
+      logActivity(admin, 'product.create', 'product', id, { name });
       return sendJSON(res, 201, { product, categories, collections });
     }
 
     if (pathname === '/api/products/update' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
 
       const name = (body.name || '').trim();
@@ -429,12 +596,14 @@ async function handleApi(req, res, pathname) {
         [name, brand, category, collection || null, tag, price, desc, img, body.id]
       );
       if (!rowCount) return sendJSON(res, 404, { error: 'Produto não encontrado' });
+      logActivity(admin, 'product.update', 'product', body.id, { name });
       return sendJSON(res, 200, { products: await getProducts() });
     }
 
     if (pathname === '/api/products/featured' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
 
       if (body.featured) {
@@ -448,7 +617,8 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === '/api/products/featured/reorder' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       const direction = body.direction === 'up' ? 'up' : body.direction === 'down' ? 'down' : null;
       if (!body.id || !direction) return sendJSON(res, 400, { error: 'id e direção são obrigatórios' });
 
@@ -471,18 +641,21 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === '/api/products' && req.method === 'DELETE') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
 
       const { rowCount } = await pool.query('DELETE FROM products WHERE id = $1', [body.id]);
       if (!rowCount) return sendJSON(res, 404, { error: 'Produto não encontrado' });
+      logActivity(admin, 'product.delete', 'product', body.id, null);
       return sendJSON(res, 200, { products: await getProducts() });
     }
 
     // ------ categories ------
     if (pathname === '/api/categories' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       const name = (body.name || '').trim();
       if (!name) return sendJSON(res, 400, { error: 'Informe um nome' });
 
@@ -494,7 +667,8 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === '/api/categories' && req.method === 'DELETE') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       const name = (body.name || '').trim();
       try {
         await pool.query('DELETE FROM categories WHERE lower(name) = lower($1)', [name]);
@@ -509,7 +683,8 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === '/api/categories/group' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       const name = (body.name || '').trim();
       const groupName = (body.groupName || '').trim() || null;
       if (!name) return sendJSON(res, 400, { error: 'Informe a categoria' });
@@ -520,7 +695,8 @@ async function handleApi(req, res, pathname) {
     // ------ collections ------
     if (pathname === '/api/collections' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       const name = (body.name || '').trim();
       if (!name) return sendJSON(res, 400, { error: 'Informe um nome' });
 
@@ -532,7 +708,8 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === '/api/collections' && req.method === 'DELETE') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       const name = (body.name || '').trim();
       // products in this collection just lose the tag (collection_id -> NULL), same as before
       await pool.query('DELETE FROM collections WHERE lower(name) = lower($1)', [name]);
@@ -542,7 +719,8 @@ async function handleApi(req, res, pathname) {
     // ------ promotions ------
     if (pathname === '/api/promotions' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
 
       const scope = body.scope;
       if (!['product', 'category', 'collection', 'site'].includes(scope)) {
@@ -584,12 +762,14 @@ async function handleApi(req, res, pathname) {
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
         [id, scope, productId, categoryId, collectionId, discount.type, discount.value, (body.label || '').trim(), startDate, endDate]
       );
+      logActivity(admin, 'promotion.create', 'promotion', id, { scope, target });
       return sendJSON(res, 201, { promotions: await getPromotions() });
     }
 
     if (pathname === '/api/promotions/update' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
 
       const scope = body.scope;
@@ -633,20 +813,24 @@ async function handleApi(req, res, pathname) {
         [scope, productId, categoryId, collectionId, discount.type, discount.value, (body.label || '').trim(), startDate, endDate, body.id]
       );
       if (!rowCount) return sendJSON(res, 404, { error: 'Promoção não encontrada' });
+      logActivity(admin, 'promotion.update', 'promotion', body.id, { scope, target });
       return sendJSON(res, 200, { promotions: await getPromotions() });
     }
 
     if (pathname === '/api/promotions' && req.method === 'DELETE') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       await pool.query('DELETE FROM promotions WHERE id = $1', [body.id]);
+      logActivity(admin, 'promotion.delete', 'promotion', body.id, null);
       return sendJSON(res, 200, { promotions: await getPromotions() });
     }
 
     // ------ coupons ------
     if (pathname === '/api/coupons' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
 
       const code = (body.code || '').trim().toUpperCase();
       if (!code) return sendJSON(res, 400, { error: 'Informe um código para o cupom' });
@@ -661,12 +845,14 @@ async function handleApi(req, res, pathname) {
         'INSERT INTO coupons (code, discount_type, discount_value, end_date) VALUES ($1,$2,$3,$4)',
         [code, discount.type, discount.value, endDate]
       );
+      logActivity(admin, 'coupon.create', 'coupon', code, null);
       return sendJSON(res, 201, { coupons: await getCoupons() });
     }
 
     if (pathname === '/api/coupons/update' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       const code = (body.code || '').trim().toUpperCase();
       if (!code) return sendJSON(res, 400, { error: 'Cupom não encontrado' });
       const discount = validateDiscount(body);
@@ -678,14 +864,17 @@ async function handleApi(req, res, pathname) {
         [discount.type, discount.value, endDate, code]
       );
       if (!rowCount) return sendJSON(res, 404, { error: 'Cupom não encontrado' });
+      logActivity(admin, 'coupon.update', 'coupon', code, null);
       return sendJSON(res, 200, { coupons: await getCoupons() });
     }
 
     if (pathname === '/api/coupons' && req.method === 'DELETE') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       const code = (body.code || '').trim().toUpperCase();
       await pool.query('DELETE FROM coupons WHERE code = $1', [code]);
+      logActivity(admin, 'coupon.delete', 'coupon', code, null);
       return sendJSON(res, 200, { coupons: await getCoupons() });
     }
 
@@ -723,19 +912,22 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === '/api/orders/list' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       return sendJSON(res, 200, { orders: await getOrders() });
     }
 
     if (pathname === '/api/orders/status' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       const status = body.status;
       if (!['novo', 'em_andamento', 'concluido', 'cancelado'].includes(status)) {
         return sendJSON(res, 400, { error: 'Status inválido' });
       }
       if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
       await pool.query('UPDATE orders SET status = $1 WHERE id = $2', [status, body.id]);
+      logActivity(admin, 'order.status_update', 'order', body.id, { status });
       return sendJSON(res, 200, { orders: await getOrders() });
     }
 
@@ -782,9 +974,11 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === '/api/customers' && req.method === 'DELETE') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
       await pool.query('DELETE FROM customers WHERE id = $1', [body.id]);
+      logActivity(admin, 'customer.delete', 'customer', body.id, null);
       return sendJSON(res, 200, { customers: await getCustomersForAdmin() });
     }
 
@@ -817,14 +1011,16 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === '/api/customers/list' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       return sendJSON(res, 200, { customers: await getCustomersForAdmin() });
     }
 
     // ------ stories (carrossel de vídeo estilo Instagram) ------
     if (pathname === '/api/stories' && req.method === 'POST') {
       const body = await readJSONBody(req, 40 * 1024 * 1024);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
 
       if (!body.video || typeof body.video !== 'string' || !body.video.startsWith('data:video/')) {
         return sendJSON(res, 400, { error: 'Envie um vídeo' });
@@ -878,7 +1074,8 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === '/api/stories/product' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
 
       let productId = null;
@@ -893,7 +1090,8 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === '/api/stories' && req.method === 'DELETE') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
 
       const { rows } = await pool.query('SELECT video, cover FROM stories WHERE id = $1', [body.id]);
@@ -909,7 +1107,8 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === '/api/stories/reorder' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       const direction = body.direction === 'up' ? 'up' : body.direction === 'down' ? 'down' : null;
       if (!body.id || !direction) return sendJSON(res, 400, { error: 'id e direção são obrigatórios' });
 
@@ -932,7 +1131,8 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === '/api/stories/active' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
       await pool.query('UPDATE stories SET active = $1 WHERE id = $2', [body.active === true, body.id]);
       return sendJSON(res, 200, { stories: await getStories(false) });
@@ -940,7 +1140,8 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === '/api/stories/list' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       return sendJSON(res, 200, { stories: await getStories(false) });
     }
 
@@ -956,7 +1157,8 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === '/api/site-images' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
 
       const cfg = SITE_IMAGE_SLOTS[body.slot];
       if (!cfg) return sendJSON(res, 400, { error: 'Local de imagem inválido' });
@@ -969,6 +1171,7 @@ async function handleApi(req, res, pathname) {
 
       const destPath = path.join(root, cfg.path);
       await processSiteImage(buffer, destPath);
+      logActivity(admin, 'site_image.update', 'site_image', body.slot, null);
       return sendJSON(res, 200, { ok: true, slot: body.slot, path: cfg.path });
     }
 

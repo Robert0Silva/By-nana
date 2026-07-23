@@ -1,13 +1,16 @@
 (() => {
-  const PASS_KEY = 'bynana_admin_pass';
+  const TOKEN_KEY = 'bynana_admin_token';
 
   const loginScreen = document.getElementById('loginScreen');
   const adminApp = document.getElementById('adminApp');
   const loginForm = document.getElementById('loginForm');
+  const loginEmail = document.getElementById('loginEmail');
   const loginPassword = document.getElementById('loginPassword');
   const loginError = document.getElementById('loginError');
+  const adminCurrentUser = document.getElementById('adminCurrentUser');
 
-  let PASSWORD = sessionStorage.getItem(PASS_KEY) || '';
+  let ADMIN_TOKEN = sessionStorage.getItem(TOKEN_KEY) || '';
+  let CURRENT_ADMIN = null;
 
   let CATEGORIES = [];
   let CATEGORY_GROUPS = [];
@@ -18,6 +21,8 @@
   let CUSTOMERS = [];
   let STORIES = [];
   let ORDERS = [];
+  let ADMIN_USERS = [];
+  let ACTIVITY = [];
 
   const money = (v) =>
     v == null ? 'Sob consulta' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -32,11 +37,24 @@
     const res = await fetch(path, {
       method,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...body, password: PASSWORD }),
+      body: JSON.stringify({ ...body, adminToken: ADMIN_TOKEN }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Erro inesperado');
     return data;
+  }
+
+  function updateCurrentUserDisplay() {
+    if (!CURRENT_ADMIN) {
+      adminCurrentUser.textContent = '';
+      return;
+    }
+    adminCurrentUser.textContent = `${CURRENT_ADMIN.name} · ${CURRENT_ADMIN.role === 'owner' ? 'owner' : 'equipe'}`;
+  }
+
+  function applyRoleVisibility() {
+    const isOwner = !!CURRENT_ADMIN && CURRENT_ADMIN.role === 'owner';
+    document.getElementById('createAdminUserCard').hidden = !isOwner;
   }
 
   async function loadData() {
@@ -62,6 +80,8 @@
     loadCustomers();
     loadStories();
     loadOrders();
+    loadAdminUsers();
+    loadActivity();
   }
 
   // ---------- tabs (menu "Catálogo/Marketing/Conteúdo/Vendas" com submenus em dropdown) ----------
@@ -114,40 +134,50 @@
 
   setActiveTabGroupFor('categorias');
 
-  // ---------- login ----------
-  async function tryLogin(password) {
-    const res = await fetch('/api/login', {
+  // ---------- login (admin multiusuário: e-mail + senha, token de sessão) ----------
+  async function fetchSession(token) {
+    const res = await fetch('/api/admin/session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ adminToken: token }),
     });
-    const data = await res.json();
-    return !!data.ok;
+    const data = await res.json().catch(() => ({}));
+    return res.ok ? data.adminUser : null;
   }
 
   async function showApp() {
     loginScreen.hidden = true;
     adminApp.hidden = false;
+    updateCurrentUserDisplay();
+    applyRoleVisibility();
     await loadData();
   }
 
   loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     loginError.hidden = true;
-    const pass = loginPassword.value;
-    const ok = await tryLogin(pass);
-    if (!ok) {
+    try {
+      const res = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: loginEmail.value.trim(), password: loginPassword.value }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Falha no login');
+      ADMIN_TOKEN = data.token;
+      CURRENT_ADMIN = data.adminUser;
+      sessionStorage.setItem(TOKEN_KEY, ADMIN_TOKEN);
+      loginForm.reset();
+      showApp();
+    } catch {
       loginError.hidden = false;
-      return;
     }
-    PASSWORD = pass;
-    sessionStorage.setItem(PASS_KEY, pass);
-    showApp();
   });
 
   document.getElementById('logoutBtn').addEventListener('click', () => {
-    sessionStorage.removeItem(PASS_KEY);
-    PASSWORD = '';
+    sessionStorage.removeItem(TOKEN_KEY);
+    ADMIN_TOKEN = '';
+    CURRENT_ADMIN = null;
     adminApp.hidden = true;
     loginScreen.hidden = false;
     loginPassword.value = '';
@@ -1175,16 +1205,175 @@
     });
   }
 
+  // ---------- usuários admin (Acesso) ----------
+  const adminUserForm = document.getElementById('adminUserForm');
+  const auName = document.getElementById('auName');
+  const auEmail = document.getElementById('auEmail');
+  const auPassword = document.getElementById('auPassword');
+  const auRole = document.getElementById('auRole');
+  const auSubmit = document.getElementById('auSubmit');
+  const adminUserMsg = document.getElementById('adminUserMsg');
+  const adminUserList = document.getElementById('adminUserList');
+  const adminUserCount = document.getElementById('adminUserCount');
+
+  function setAdminUserMsg(text, kind) {
+    adminUserMsg.textContent = text;
+    adminUserMsg.className = `admin-form-msg ${kind ? `is-${kind}` : ''}`;
+    adminUserMsg.hidden = !text;
+  }
+
+  async function loadAdminUsers() {
+    try {
+      const data = await api('/api/admin/users/list', 'POST', {});
+      ADMIN_USERS = data.adminUsers || [];
+      renderAdminUserList();
+    } catch (err) {
+      adminUserList.innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+    }
+  }
+
+  function renderAdminUserList() {
+    adminUserCount.textContent = ADMIN_USERS.length;
+    adminUserList.innerHTML = '';
+    const isOwner = !!CURRENT_ADMIN && CURRENT_ADMIN.role === 'owner';
+    ADMIN_USERS.forEach((u) => {
+      const isSelf = CURRENT_ADMIN && u.id === CURRENT_ADMIN.id;
+      const div = document.createElement('div');
+      div.className = 'admin-user-item';
+      div.innerHTML = `
+        <div class="admin-user-info">
+          <span class="admin-user-name">${u.name}${isSelf ? ' (você)' : ''}</span>
+          <span class="admin-user-meta">${u.email} · desde ${formatDate(u.createdAt.slice(0, 10))}</span>
+        </div>
+        <div class="admin-user-actions">
+          <span class="admin-user-role-badge ${u.role === 'staff' ? 'is-staff' : ''}">${u.role === 'owner' ? 'Owner' : 'Equipe'}</span>
+          <button type="button" class="admin-user-active-badge ${u.active ? '' : 'is-off'}" ${!isOwner || isSelf ? 'disabled' : ''}>${u.active ? 'Ativo' : 'Inativo'}</button>
+        </div>
+      `;
+      div.querySelector('.admin-user-active-badge').addEventListener('click', async () => {
+        if (!isOwner || isSelf) return;
+        try {
+          const data = await api('/api/admin/users/update', 'POST', { id: u.id, name: u.name, role: u.role, active: !u.active });
+          ADMIN_USERS = data.adminUsers;
+          renderAdminUserList();
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+      adminUserList.appendChild(div);
+    });
+  }
+
+  adminUserForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    setAdminUserMsg('', '');
+    auSubmit.disabled = true;
+    try {
+      const data = await api('/api/admin/users', 'POST', {
+        name: auName.value.trim(),
+        email: auEmail.value.trim(),
+        password: auPassword.value,
+        role: auRole.value,
+      });
+      ADMIN_USERS = data.adminUsers;
+      renderAdminUserList();
+      adminUserForm.reset();
+      setAdminUserMsg('Usuário criado ✓', 'ok');
+    } catch (err) {
+      setAdminUserMsg(err.message, 'error');
+    } finally {
+      auSubmit.disabled = false;
+    }
+  });
+
+  // ---------- trocar minha senha ----------
+  const myPasswordForm = document.getElementById('myPasswordForm');
+  const mpCurrent = document.getElementById('mpCurrent');
+  const mpNew = document.getElementById('mpNew');
+  const mpSubmit = document.getElementById('mpSubmit');
+  const myPasswordMsg = document.getElementById('myPasswordMsg');
+
+  function setMyPasswordMsg(text, kind) {
+    myPasswordMsg.textContent = text;
+    myPasswordMsg.className = `admin-form-msg ${kind ? `is-${kind}` : ''}`;
+    myPasswordMsg.hidden = !text;
+  }
+
+  myPasswordForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    setMyPasswordMsg('', '');
+    mpSubmit.disabled = true;
+    try {
+      await api('/api/admin/users/password', 'POST', { currentPassword: mpCurrent.value, newPassword: mpNew.value });
+      myPasswordForm.reset();
+      setMyPasswordMsg('Senha atualizada ✓', 'ok');
+    } catch (err) {
+      setMyPasswordMsg(err.message, 'error');
+    } finally {
+      mpSubmit.disabled = false;
+    }
+  });
+
+  // ---------- atividade recente ----------
+  const activityList = document.getElementById('activityList');
+  const ACTIVITY_LABELS = {
+    'product.create': 'criou o produto',
+    'product.update': 'editou o produto',
+    'product.delete': 'removeu o produto',
+    'promotion.create': 'criou a promoção',
+    'promotion.update': 'editou a promoção',
+    'promotion.delete': 'removeu a promoção',
+    'coupon.create': 'criou o cupom',
+    'coupon.update': 'editou o cupom',
+    'coupon.delete': 'removeu o cupom',
+    'order.status_update': 'atualizou o status do pedido',
+    'customer.delete': 'removeu o cliente',
+    'site_image.update': 'trocou a imagem do site',
+    'admin_user.create': 'criou o usuário admin',
+    'admin_user.update': 'atualizou o usuário admin',
+  };
+
+  async function loadActivity() {
+    try {
+      const data = await api('/api/admin/activity/list', 'POST', {});
+      ACTIVITY = data.activity || [];
+      renderActivityList();
+    } catch (err) {
+      activityList.innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+    }
+  }
+
+  function renderActivityList() {
+    activityList.innerHTML = '';
+    if (!ACTIVITY.length) {
+      activityList.innerHTML = '<p class="admin-empty-block">Nenhuma atividade registrada ainda.</p>';
+      return;
+    }
+    ACTIVITY.forEach((a) => {
+      const when = new Date(a.createdAt).toLocaleString('pt-BR');
+      const label = ACTIVITY_LABELS[a.action] || a.action;
+      const div = document.createElement('div');
+      div.className = 'admin-activity-item';
+      div.innerHTML = `
+        <span class="admin-activity-when">${when}</span>
+        <span class="admin-activity-who">${a.adminName}</span>
+        <span class="admin-activity-action">${label}${a.entityId ? ` (${a.entityId})` : ''}</span>
+      `;
+      activityList.appendChild(div);
+    });
+  }
+
   // ---------- boot ----------
   (async () => {
-    if (PASSWORD) {
-      const ok = await tryLogin(PASSWORD);
-      if (ok) {
+    if (ADMIN_TOKEN) {
+      const adminUser = await fetchSession(ADMIN_TOKEN);
+      if (adminUser) {
+        CURRENT_ADMIN = adminUser;
         showApp();
         return;
       }
-      sessionStorage.removeItem(PASS_KEY);
-      PASSWORD = '';
+      sessionStorage.removeItem(TOKEN_KEY);
+      ADMIN_TOKEN = '';
     }
     loginScreen.hidden = false;
   })();

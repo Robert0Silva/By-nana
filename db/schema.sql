@@ -70,6 +70,32 @@ CREATE TABLE IF NOT EXISTS coupons (
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- usuários do painel admin (login multiusuário — substitui a senha única compartilhada).
+CREATE TABLE IF NOT EXISTS admin_users (
+  id            UUID PRIMARY KEY,
+  name          TEXT NOT NULL,
+  email         TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  role          TEXT NOT NULL DEFAULT 'staff' CHECK (role IN ('owner', 'staff')),
+  active        BOOLEAN NOT NULL DEFAULT true,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS admin_users_email_lower_idx ON admin_users (lower(email));
+
+-- "quem fez o quê" nas ações mais relevantes do admin; admin_user_id fica nulo se o usuário
+-- for removido no futuro, mas admin_name preserva o nome de quem fez a ação na época.
+CREATE TABLE IF NOT EXISTS admin_activity_log (
+  id            BIGSERIAL PRIMARY KEY,
+  admin_user_id UUID REFERENCES admin_users(id) ON DELETE SET NULL,
+  admin_name    TEXT NOT NULL,
+  action        TEXT NOT NULL,
+  entity_type   TEXT,
+  entity_id     TEXT,
+  details       JSONB,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_activity_created ON admin_activity_log(created_at DESC);
+
 CREATE TABLE IF NOT EXISTS customers (
   id                  UUID PRIMARY KEY,
   first_name          TEXT NOT NULL,

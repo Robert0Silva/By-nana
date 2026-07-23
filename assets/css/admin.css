@@ -27,7 +27,8 @@
   background:var(--white);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10;
 }
 .admin-header .brand .brand-mark{font-size:1.7rem;}
-.admin-header-actions{display:flex;gap:10px;}
+.admin-header-actions{display:flex;align-items:center;gap:10px;}
+.admin-current-user{font-size:.82rem;color:var(--ink-soft);white-space:nowrap;}
 .admin-main{padding:36px 24px 90px;}
 .admin-main h1{font-size:1.7rem;margin-bottom:.2em;}
 .admin-sub{color:var(--ink-soft);margin-bottom:32px;}
@@ -195,6 +196,38 @@
 }
 .admin-promo-remove:hover{background:var(--wine);color:#fff;}
 .admin-empty-block{color:var(--ink-soft);font-size:.85rem;padding:4px 0;}
+
+/* ---------- usuários admin (Acesso) ---------- */
+.admin-user-list{display:flex;flex-direction:column;gap:10px;}
+.admin-user-item{
+  display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;
+  padding:12px 16px;border-radius:12px;border:1px solid var(--line);background:var(--cream);
+}
+.admin-user-info{display:flex;flex-direction:column;gap:2px;}
+.admin-user-name{font-size:.9rem;font-weight:600;}
+.admin-user-meta{font-size:.76rem;color:var(--ink-soft);}
+.admin-user-actions{display:flex;align-items:center;gap:8px;}
+.admin-user-role-badge{
+  font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
+  padding:4px 10px;border-radius:999px;white-space:nowrap;background:#fdf1dc;color:var(--camel);
+}
+.admin-user-role-badge.is-staff{background:#f1ece6;color:var(--ink-soft);}
+.admin-user-active-badge{
+  font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;cursor:pointer;
+  padding:4px 10px;border-radius:999px;white-space:nowrap;background:#e4f3e9;color:#2f7d4f;border:none;
+}
+.admin-user-active-badge.is-off{background:#f1ece6;color:var(--ink-soft);}
+.admin-user-active-badge:disabled{cursor:not-allowed;opacity:.6;}
+
+/* ---------- atividade recente ---------- */
+.admin-activity-list{display:flex;flex-direction:column;gap:6px;max-height:520px;overflow-y:auto;}
+.admin-activity-item{
+  display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
+  padding:8px 12px;border-radius:8px;background:var(--cream);font-size:.82rem;
+}
+.admin-activity-when{color:var(--ink-soft);font-size:.72rem;white-space:nowrap;}
+.admin-activity-who{font-weight:600;}
+.admin-activity-action{color:var(--ink-soft);}
 
 /* ---------- pedidos ---------- */
 .admin-order-list{display:flex;flex-direction:column;gap:10px;}

@@ -18,11 +18,12 @@
   <form id="loginForm" class="admin-login-box">
     <span class="brand-mark admin-login-mark">By NaNa</span>
     <h1>Painel Admin</h1>
-    <p>Entre com a senha para gerenciar coleções, categorias e produtos do catálogo.</p>
+    <p>Entre com seu e-mail e senha para gerenciar o catálogo, pedidos e clientes.</p>
+    <input type="email" id="loginEmail" placeholder="E-mail" autocomplete="username" required />
     <input type="password" id="loginPassword" placeholder="Senha" autocomplete="current-password" required />
     <button type="submit" class="btn btn-primary btn-block">Entrar</button>
     <a href="/" class="btn btn-ghost btn-block">Sair</a>
-    <p class="admin-error" id="loginError" hidden>Senha incorreta.</p>
+    <p class="admin-error" id="loginError" hidden>E-mail ou senha inválidos.</p>
   </form>
 </div>
 
@@ -30,6 +31,7 @@
   <header class="admin-header">
     <a href="/" class="brand"><span class="brand-mark">By NaNa</span></a>
     <div class="admin-header-actions">
+      <span class="admin-current-user" id="adminCurrentUser"></span>
       <a href="/" target="_blank" class="btn btn-ghost">Ver site</a>
       <button id="logoutBtn" class="btn btn-outline">Sair</button>
     </div>
@@ -80,6 +82,16 @@
         <div class="admin-tab-submenu" id="submenu-vendas">
           <button type="button" class="admin-tab" data-target="pedidos">Pedidos</button>
           <button type="button" class="admin-tab" data-target="clientes">Clientes</button>
+        </div>
+      </div>
+      <div class="admin-tab-group" data-group="acesso">
+        <button type="button" class="admin-tab-group-btn" aria-expanded="false" aria-controls="submenu-acesso">
+          Acesso
+          <svg class="chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <div class="admin-tab-submenu" id="submenu-acesso">
+          <button type="button" class="admin-tab" data-target="usuarios">Usuários admin</button>
+          <button type="button" class="admin-tab" data-target="atividade">Atividade recente</button>
         </div>
       </div>
     </nav>
@@ -357,6 +369,69 @@
         </form>
 
         <div class="admin-story-list" id="storyList"></div>
+      </section>
+    </section>
+
+    <section class="admin-panel" id="panel-usuarios" hidden>
+      <section class="admin-card">
+        <h2>Trocar minha senha</h2>
+        <form id="myPasswordForm" class="admin-product-form">
+          <label>
+            Senha atual
+            <input type="password" id="mpCurrent" autocomplete="current-password" required />
+          </label>
+          <label>
+            Nova senha
+            <input type="password" id="mpNew" minlength="6" autocomplete="new-password" required />
+          </label>
+          <button type="submit" class="btn btn-primary" id="mpSubmit">Salvar nova senha</button>
+          <p class="admin-form-msg" id="myPasswordMsg" hidden></p>
+        </form>
+      </section>
+
+      <section class="admin-card admin-card-wide" id="createAdminUserCard">
+        <h2>Novo usuário admin</h2>
+        <p class="admin-card-hint">Só quem é "owner" pode criar ou gerenciar outros usuários do painel.</p>
+        <form id="adminUserForm" class="admin-product-form">
+          <div class="admin-form-row">
+            <label>
+              Nome
+              <input type="text" id="auName" required />
+            </label>
+            <label>
+              E-mail
+              <input type="email" id="auEmail" autocomplete="off" required />
+            </label>
+          </div>
+          <div class="admin-form-row">
+            <label>
+              Senha
+              <input type="password" id="auPassword" minlength="6" autocomplete="new-password" required />
+            </label>
+            <label>
+              Papel
+              <select id="auRole">
+                <option value="staff">Equipe (staff)</option>
+                <option value="owner">Owner</option>
+              </select>
+            </label>
+          </div>
+          <button type="submit" class="btn btn-primary" id="auSubmit">Criar usuário</button>
+          <p class="admin-form-msg" id="adminUserMsg" hidden></p>
+        </form>
+      </section>
+
+      <section class="admin-card admin-card-wide">
+        <h2>Usuários admin (<span id="adminUserCount">0</span>)</h2>
+        <div class="admin-user-list" id="adminUserList"></div>
+      </section>
+    </section>
+
+    <section class="admin-panel" id="panel-atividade" hidden>
+      <section class="admin-card admin-card-wide">
+        <h2>Atividade recente</h2>
+        <p class="admin-card-hint">Registro de quem fez o quê no painel — criação/edição/remoção de produtos, promoções, cupons, mudança de status de pedidos e mais.</p>
+        <div class="admin-activity-list" id="activityList"></div>
       </section>
     </section>
   </main>
