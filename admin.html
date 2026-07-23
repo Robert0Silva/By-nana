@@ -21,16 +21,16 @@
     <p>Entre com a senha para gerenciar coleções, categorias e produtos do catálogo.</p>
     <input type="password" id="loginPassword" placeholder="Senha" autocomplete="current-password" required />
     <button type="submit" class="btn btn-primary btn-block">Entrar</button>
-    <a href="index.html" class="btn btn-ghost btn-block">Sair</a>
+    <a href="/" class="btn btn-ghost btn-block">Sair</a>
     <p class="admin-error" id="loginError" hidden>Senha incorreta.</p>
   </form>
 </div>
 
 <div id="adminApp" class="admin-app" hidden>
   <header class="admin-header">
-    <a href="index.html" class="brand"><span class="brand-mark">By NaNa</span></a>
+    <a href="/" class="brand"><span class="brand-mark">By NaNa</span></a>
     <div class="admin-header-actions">
-      <a href="index.html" target="_blank" class="btn btn-ghost">Ver site</a>
+      <a href="/" target="_blank" class="btn btn-ghost">Ver site</a>
       <button id="logoutBtn" class="btn btn-outline">Sair</button>
     </div>
   </header>
@@ -40,14 +40,35 @@
     <p class="admin-sub">Gerencie categorias, coleções, produtos, promoções e as fotos fixas do site.</p>
 
     <nav class="admin-tabs" id="adminTabs">
-      <button type="button" class="admin-tab is-active" data-target="categorias">Categorias</button>
-      <button type="button" class="admin-tab" data-target="colecoes">Coleções</button>
-      <button type="button" class="admin-tab" data-target="produtos">Produtos</button>
-      <button type="button" class="admin-tab" data-target="promocoes">Promoções</button>
-      <button type="button" class="admin-tab" data-target="cupons">Cupons</button>
-      <button type="button" class="admin-tab" data-target="imagens">Imagens do site</button>
-      <button type="button" class="admin-tab" data-target="clientes">Clientes</button>
-      <button type="button" class="admin-tab" data-target="stories">Stories</button>
+      <div class="admin-tabs-group">
+        <span class="admin-tabs-group-label">Catálogo</span>
+        <div class="admin-tabs-group-items">
+          <button type="button" class="admin-tab is-active" data-target="categorias">Categorias</button>
+          <button type="button" class="admin-tab" data-target="colecoes">Coleções</button>
+          <button type="button" class="admin-tab" data-target="produtos">Produtos</button>
+        </div>
+      </div>
+      <div class="admin-tabs-group">
+        <span class="admin-tabs-group-label">Marketing</span>
+        <div class="admin-tabs-group-items">
+          <button type="button" class="admin-tab" data-target="promocoes">Promoções</button>
+          <button type="button" class="admin-tab" data-target="cupons">Cupons</button>
+        </div>
+      </div>
+      <div class="admin-tabs-group">
+        <span class="admin-tabs-group-label">Conteúdo</span>
+        <div class="admin-tabs-group-items">
+          <button type="button" class="admin-tab" data-target="imagens">Imagens do site</button>
+          <button type="button" class="admin-tab" data-target="stories">Stories</button>
+        </div>
+      </div>
+      <div class="admin-tabs-group">
+        <span class="admin-tabs-group-label">Vendas</span>
+        <div class="admin-tabs-group-items">
+          <button type="button" class="admin-tab" data-target="pedidos">Pedidos</button>
+          <button type="button" class="admin-tab" data-target="clientes">Clientes</button>
+        </div>
+      </div>
     </nav>
 
     <section class="admin-panel admin-panel-narrow" id="panel-categorias">
@@ -59,6 +80,7 @@
           <button type="submit" class="btn btn-primary">Adicionar</button>
         </form>
         <div class="admin-category-list" id="categoryList"></div>
+        <datalist id="categoryGroupList"></datalist>
       </section>
     </section>
 
@@ -76,9 +98,10 @@
 
     <section class="admin-panel" id="panel-produtos" hidden>
       <section class="admin-card admin-card-wide">
-        <h2>Adicionar produto</h2>
+        <h2 id="productFormTitle">Adicionar produto</h2>
         <p class="admin-card-hint">A foto é ajustada automaticamente (cor, nitidez e tamanho) ao ser publicada.</p>
         <form id="productForm" class="admin-product-form">
+          <input type="hidden" id="pEditId" value="" />
           <div class="admin-form-row">
             <label>
               Nome da peça
@@ -118,27 +141,32 @@
           </label>
 
           <label>
-            Foto do produto
-            <input type="file" id="pImage" accept="image/*" required />
+            Foto do produto <span id="pImageHint"></span>
+            <input type="file" id="pImage" accept="image/*" />
           </label>
           <img id="pPreview" class="admin-preview" hidden alt="Pré-visualização" />
 
-          <button type="submit" class="btn btn-primary btn-lg" id="pSubmit">Publicar no catálogo</button>
+          <div class="admin-form-actions">
+            <button type="submit" class="btn btn-primary btn-lg" id="pSubmit">Publicar no catálogo</button>
+            <button type="button" class="btn btn-ghost" id="pCancelEdit" hidden>Cancelar edição</button>
+          </div>
           <p class="admin-form-msg" id="productMsg" hidden></p>
         </form>
       </section>
 
       <section class="admin-card admin-card-wide">
         <h2>Produtos no catálogo (<span id="productCount">0</span>)</h2>
+        <input type="search" id="productSearch" class="admin-search" placeholder="Buscar por nome, categoria ou coleção..." />
         <div class="admin-product-list" id="productList"></div>
       </section>
     </section>
 
     <section class="admin-panel" id="panel-promocoes" hidden>
       <section class="admin-card admin-card-wide">
-        <h2>Promoções</h2>
+        <h2 id="promoFormTitle">Promoções</h2>
         <p class="admin-card-hint">Aplique desconto numa peça específica, numa categoria, numa coleção inteira ou na loja toda. Com datas de início/fim a promoção entra e sai do ar sozinha.</p>
         <form id="promoForm" class="admin-product-form">
+          <input type="hidden" id="promoEditId" value="" />
           <div class="admin-form-row">
             <label>
               Escopo da promoção
@@ -181,7 +209,10 @@
             Selo personalizado (opcional)
             <input type="text" id="promoLabel" placeholder="Ex: Black Friday — deixe em branco para usar o % automático" />
           </label>
-          <button type="submit" class="btn btn-primary" id="promoSubmit">Aplicar promoção</button>
+          <div class="admin-form-actions">
+            <button type="submit" class="btn btn-primary" id="promoSubmit">Aplicar promoção</button>
+            <button type="button" class="btn btn-ghost" id="promoCancelEdit" hidden>Cancelar edição</button>
+          </div>
           <p class="admin-form-msg" id="promoMsg" hidden></p>
         </form>
         <div class="admin-promo-list" id="promoList"></div>
@@ -190,9 +221,10 @@
 
     <section class="admin-panel" id="panel-cupons" hidden>
       <section class="admin-card admin-card-wide">
-        <h2>Cupons de desconto</h2>
+        <h2 id="couponFormTitle">Cupons de desconto</h2>
         <p class="admin-card-hint">O cliente informa o código na sacola do site; o desconto entra no total combinado pelo WhatsApp.</p>
         <form id="couponForm" class="admin-product-form">
+          <input type="hidden" id="couponEditCode" value="" />
           <div class="admin-form-row">
             <label>
               Código do cupom
@@ -216,7 +248,10 @@
               <input type="date" id="couponEnd" />
             </label>
           </div>
-          <button type="submit" class="btn btn-primary" id="couponSubmit">Criar cupom</button>
+          <div class="admin-form-actions">
+            <button type="submit" class="btn btn-primary" id="couponSubmit">Criar cupom</button>
+            <button type="button" class="btn btn-ghost" id="couponCancelEdit" hidden>Cancelar edição</button>
+          </div>
           <p class="admin-form-msg" id="couponMsg" hidden></p>
         </form>
         <ul class="admin-tag-list" id="couponList"></ul>
@@ -231,11 +266,23 @@
       </section>
     </section>
 
+    <section class="admin-panel" id="panel-pedidos" hidden>
+      <section class="admin-card admin-card-wide">
+        <h2>Pedidos (<span id="orderCount">0</span>)</h2>
+        <p class="admin-card-hint">Pedidos fechados pelo cliente na sacola do site, registrados no instante em que ele abre o WhatsApp para confirmar. Atualize o status conforme for atendendo.</p>
+        <input type="search" id="orderSearch" class="admin-search" placeholder="Buscar por nome ou telefone..." />
+        <div class="admin-order-list" id="orderList"></div>
+      </section>
+    </section>
+
     <section class="admin-panel" id="panel-clientes" hidden>
       <section class="admin-card admin-card-wide">
         <h2>Clientes (<span id="customerCount">0</span>)</h2>
         <p class="admin-card-hint">Cadastros feitos pelos próprios clientes no site — use como base para ações de CRM (aniversário, novidades, campanhas). O CPF é exibido parcialmente por privacidade.</p>
-        <input type="search" id="customerSearch" class="admin-search" placeholder="Buscar por nome ou e-mail..." />
+        <div class="admin-toolbar-row">
+          <input type="search" id="customerSearch" class="admin-search" placeholder="Buscar por nome ou e-mail..." />
+          <button type="button" id="customerExport" class="btn btn-outline">Exportar CSV</button>
+        </div>
         <div class="admin-customer-list" id="customerList"></div>
       </section>
     </section>

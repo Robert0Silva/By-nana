@@ -120,6 +120,25 @@
     return haystack.includes(term);
   }
 
+  function skeletonCard() {
+    const div = document.createElement('div');
+    div.className = 'skeleton-card';
+    div.innerHTML = `
+      <div class="skeleton-media"></div>
+      <div class="skeleton-lines">
+        <div class="skeleton-line short"></div>
+        <div class="skeleton-line"></div>
+      </div>
+    `;
+    return div;
+  }
+
+  function renderSkeleton(count) {
+    grid.innerHTML = '';
+    emptyState.hidden = true;
+    for (let i = 0; i < count; i++) grid.appendChild(skeletonCard());
+  }
+
   let currentCollection = '';
 
   function renderGrid(filter, search) {
@@ -132,6 +151,15 @@
     if (currentCollection) list = list.filter((p) => p.collection === currentCollection);
     list = list.filter((p) => matchesSearch(p, currentSearch));
 
+    if (list.length === 0) {
+      if (currentSearch) {
+        emptyState.textContent = `Nenhuma peça encontrada para "${search}". Tente outro termo.`;
+      } else if (filter === 'Favoritos') {
+        emptyState.textContent = 'Você ainda não salvou nenhuma peça nos favoritos. Toque no ♡ de uma peça para guardá-la aqui.';
+      } else {
+        emptyState.textContent = 'Nenhuma peça encontrada por aqui. Que tal ver outra categoria?';
+      }
+    }
     emptyState.hidden = list.length !== 0;
     list.forEach((p) => grid.appendChild(productCard(p)));
     syncAddButtons();
@@ -247,10 +275,19 @@
     PRODUCTS.slice(0, 8).forEach((p) => novidadesGrid.appendChild(productCard(p)));
   }
 
+  function debounce(fn, wait) {
+    let t;
+    return (...args) => {
+      clearTimeout(t);
+      t = setTimeout(() => fn(...args), wait);
+    };
+  }
+
   const searchInput = document.getElementById('searchInput');
-  searchInput.addEventListener('input', () => {
+  const debouncedSearch = debounce(() => {
     renderGrid(currentFilter, searchInput.value.trim().toLowerCase());
-  });
+  }, 220);
+  searchInput.addEventListener('input', debouncedSearch);
 
   // ---------- busca no cabeçalho (espelha a busca do catálogo) ----------
   const headerSearchForm = document.getElementById('headerSearchForm');
@@ -420,6 +457,39 @@
     return msg;
   }
 
+  async function persistOrder(ids) {
+    const items = ids.map((id) => {
+      const p = PRODUCTS.find((x) => x.id === id);
+      const { price } = p ? getEffective(p) : { price: null };
+      return { id, name: p ? p.name : id, qty: cart[id], price };
+    });
+    const coupon = activeCoupon();
+    const payload = {
+      customerName: bagNameInput.value.trim(),
+      customerPhone: bagPhoneInput.value.trim(),
+      items,
+      subtotal: cartSubtotal(ids),
+      discount: coupon ? cartSubtotal(ids) - cartFinalTotal(ids) : 0,
+      total: cartFinalTotal(ids),
+      couponCode: coupon ? coupon.code : null,
+      paymentMethod: selectedPayment,
+      deliveryMethod: selectedDelivery,
+      address: selectedDelivery === 'Entrega' ? address : null,
+      customerToken: localStorage.getItem(CUSTOMER_TOKEN_KEY) || null,
+    };
+    try {
+      const res = await fetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      return data.orderId || null;
+    } catch {
+      return null;
+    }
+  }
+
   checkoutBtn.addEventListener('click', (e) => {
     const ids = Object.keys(cart);
     if (ids.length === 0) return;
@@ -431,7 +501,13 @@
       return;
     }
     bagFormError.hidden = true;
-    window.open(waLink(buildOrderMessage(ids)), '_blank', 'noopener');
+    checkoutBtn.classList.add('is-loading');
+    checkoutBtn.textContent = 'Enviando...';
+    persistOrder(ids).finally(() => {
+      window.open(waLink(buildOrderMessage(ids)), '_blank', 'noopener');
+      checkoutBtn.classList.remove('is-loading');
+      checkoutBtn.textContent = 'Finalizar no WhatsApp';
+    });
   });
 
   // ---------- coupon input ----------
@@ -546,9 +622,16 @@
     syncAddButtons();
   }
 
+  const cartAnnouncer = document.getElementById('cartAnnouncer');
+  function announce(text) {
+    if (cartAnnouncer) cartAnnouncer.textContent = text;
+  }
+
   function addToCart(id) {
     cart[id] = (cart[id] || 0) + 1;
     saveCart();
+    const p = PRODUCTS.find((x) => x.id === id);
+    announce(p ? `${p.name} adicionada à sacola.` : 'Peça adicionada à sacola.');
   }
 
   document.addEventListener('click', (e) => {
@@ -593,6 +676,41 @@
     }
   });
 
+  // ---------- foco em modais (trap de Tab + devolve o foco ao fechar) ----------
+  const modalFocusState = new Map();
+  function openModalFocus(container) {
+    const previousFocus = document.activeElement;
+    const getFocusable = () =>
+      container.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+    const keydownHandler = (e) => {
+      if (e.key !== 'Tab') return;
+      const items = getFocusable();
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    container.addEventListener('keydown', keydownHandler);
+    modalFocusState.set(container, { previousFocus, keydownHandler });
+    const items = getFocusable();
+    (items[0] || container).focus();
+  }
+  function closeModalFocus(container) {
+    const state = modalFocusState.get(container);
+    if (!state) return;
+    container.removeEventListener('keydown', state.keydownHandler);
+    modalFocusState.delete(container);
+    if (state.previousFocus && typeof state.previousFocus.focus === 'function') {
+      state.previousFocus.focus();
+    }
+  }
+
   // ---------- bag drawer open/close ----------
   const bagDrawer = document.getElementById('bagDrawer');
   const bagOverlay = document.getElementById('bagOverlay');
@@ -601,10 +719,12 @@
     prefillBagContact();
     bagDrawer.classList.add('is-open');
     bagOverlay.classList.add('is-open');
+    openModalFocus(bagDrawer);
   }
   function closeBag() {
     bagDrawer.classList.remove('is-open');
     bagOverlay.classList.remove('is-open');
+    closeModalFocus(bagDrawer);
   }
   document.getElementById('bagBtn').addEventListener('click', openBag);
   document.getElementById('bagClose').addEventListener('click', closeBag);
@@ -670,12 +790,15 @@
 
     qvOverlay.classList.add('is-open');
     quickview.classList.add('is-open');
+    openModalFocus(quickview);
   }
 
   function closeQuickview() {
+    if (!quickview.classList.contains('is-open')) return;
     qvOverlay.classList.remove('is-open');
     quickview.classList.remove('is-open');
     qvCurrentId = null;
+    closeModalFocus(quickview);
   }
 
   qvOverlay.addEventListener('click', closeQuickview);
@@ -774,6 +897,7 @@
     storyOverlay.classList.add('is-open');
     storyViewer.classList.add('is-open');
     playStoryAt(index);
+    openModalFocus(storyViewer);
   }
 
   function nextStory() {
@@ -791,12 +915,14 @@
   }
 
   function closeStoryViewer() {
+    if (!storyViewer.classList.contains('is-open')) return;
     storyOverlay.classList.remove('is-open');
     storyViewer.classList.remove('is-open');
     storyVideo.pause();
     storyVideo.removeAttribute('src');
     storyVideo.load();
     currentStoryIndex = -1;
+    closeModalFocus(storyViewer);
   }
 
   storyVideo.addEventListener('loadedmetadata', () => {
@@ -909,10 +1035,13 @@
     showAccountView(currentCustomer ? 'profile' : 'login');
     accountOverlay.classList.add('is-open');
     accountModal.classList.add('is-open');
+    openModalFocus(accountModal);
   }
   function closeAccountModal() {
+    if (!accountModal.classList.contains('is-open')) return;
     accountOverlay.classList.remove('is-open');
     accountModal.classList.remove('is-open');
+    closeModalFocus(accountModal);
   }
 
   accountBtn.addEventListener('click', openAccountModal);
@@ -1048,6 +1177,12 @@
       closeMegaMenu();
       closeAccountModal();
       closeStoryViewer();
+      closeQuickview();
+      closeBag();
+    }
+    if (storyViewer.classList.contains('is-open')) {
+      if (e.key === 'ArrowRight') nextStory();
+      else if (e.key === 'ArrowLeft') prevStory();
     }
   });
 
@@ -1063,9 +1198,19 @@
   document.getElementById('year').textContent = new Date().getFullYear();
 
   // ---------- load catalog from the server ----------
+  const loadBar = document.getElementById('loadBar');
+  const dataError = document.getElementById('dataError');
+  const dataErrorRetry = document.getElementById('dataErrorRetry');
+
   async function init() {
+    dataError.hidden = true;
+    loadBar.classList.remove('is-done');
+    loadBar.classList.add('is-active');
+    renderSkeleton(8);
+
     try {
       const res = await fetch('/api/data', { cache: 'no-store' });
+      if (!res.ok) throw new Error('bad response');
       const data = await res.json();
       PRODUCTS = data.products || [];
       CATEGORIES = data.categories || [];
@@ -1075,14 +1220,15 @@
       CATEGORY_GROUPS = data.categoryGroups || [];
       STORIES = data.stories || [];
     } catch (e) {
-      PRODUCTS = [];
-      CATEGORIES = [];
-      COLLECTIONS = [];
-      PROMOTIONS = [];
-      COUPONS = [];
-      CATEGORY_GROUPS = [];
-      STORIES = [];
+      loadBar.classList.remove('is-active');
+      grid.innerHTML = '';
+      emptyState.hidden = true;
+      dataError.hidden = false;
+      return;
     }
+
+    loadBar.classList.remove('is-active');
+    loadBar.classList.add('is-done');
     buildFilters();
     buildCatCards();
     buildMegaMenu();
@@ -1094,6 +1240,8 @@
     renderCart();
     restoreSession();
   }
+
+  dataErrorRetry.addEventListener('click', init);
 
   function renderPromoBanner() {
     const banner = document.getElementById('promoBanner');

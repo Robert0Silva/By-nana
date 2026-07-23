@@ -17,6 +17,7 @@
   let COUPONS = [];
   let CUSTOMERS = [];
   let STORIES = [];
+  let ORDERS = [];
 
   const money = (v) =>
     v == null ? 'Sob consulta' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -59,6 +60,7 @@
     loadSiteImages();
     loadCustomers();
     loadStories();
+    loadOrders();
   }
 
   // ---------- tabs ----------
@@ -114,9 +116,16 @@
   const categoryList = document.getElementById('categoryList');
   const categoryForm = document.getElementById('categoryForm');
   const categoryName = document.getElementById('categoryName');
+  const categoryGroupList = document.getElementById('categoryGroupList');
+
+  function renderCategoryGroupOptions() {
+    const groups = [...new Set(CATEGORY_GROUPS.map((g) => g.groupName).filter(Boolean))];
+    categoryGroupList.innerHTML = groups.map((g) => `<option value="${g}"></option>`).join('');
+  }
 
   function renderCategories() {
     categoryList.innerHTML = '';
+    renderCategoryGroupOptions();
     if (!CATEGORIES.length) {
       categoryList.innerHTML = '<p class="admin-empty">Nenhuma categoria ainda.</p>';
       return;
@@ -127,7 +136,7 @@
       row.className = 'admin-category-item';
       row.innerHTML = `
         <span class="admin-category-item-name">${c}</span>
-        <input type="text" class="admin-category-group-input" placeholder="Grupo no mega-menu (opcional)" value="${groupInfo && groupInfo.groupName ? groupInfo.groupName : ''}" />
+        <input type="text" class="admin-category-group-input" list="categoryGroupList" placeholder="Grupo no mega-menu (opcional)" value="${groupInfo && groupInfo.groupName ? groupInfo.groupName : ''}" />
         <button type="button" class="admin-category-save">Salvar</button>
         <button type="button" class="admin-category-remove" aria-label="Remover">✕</button>
       `;
@@ -136,12 +145,17 @@
         try {
           const data = await api('/api/categories/group', 'POST', { name: c, groupName });
           CATEGORY_GROUPS = data.categoryGroups;
+          renderCategoryGroupOptions();
         } catch (err) {
           alert(err.message);
         }
       });
       row.querySelector('.admin-category-remove').addEventListener('click', async () => {
-        if (!confirm(`Remover a categoria "${c}"?`)) return;
+        const count = PRODUCTS.filter((p) => p.category === c).length;
+        const msg = count
+          ? `${count} produto${count > 1 ? 's' : ''} ${count > 1 ? 'usam' : 'usa'} a categoria "${c}" — a remoção vai falhar até você mover ou remover ${count > 1 ? 'esses produtos' : 'esse produto'}. Tentar mesmo assim?`
+          : `Remover a categoria "${c}"?`;
+        if (!confirm(msg)) return;
         try {
           const data = await api('/api/categories', 'DELETE', { name: c });
           CATEGORIES = data.categories;
@@ -187,7 +201,11 @@
       const li = document.createElement('li');
       li.innerHTML = `<span>${c}</span><button type="button" aria-label="Remover">✕</button>`;
       li.querySelector('button').addEventListener('click', async () => {
-        if (!confirm(`Remover a coleção "${c}"?`)) return;
+        const count = PRODUCTS.filter((p) => p.collection === c).length;
+        const msg = count
+          ? `${count} produto${count > 1 ? 's' : ''} ${count > 1 ? 'estão' : 'está'} na coleção "${c}" e ${count > 1 ? 'perderão' : 'perderá'} essa marcação. Remover mesmo assim?`
+          : `Remover a coleção "${c}"?`;
+        if (!confirm(msg)) return;
         const data = await api('/api/collections', 'DELETE', { name: c });
         COLLECTIONS = data.collections;
         renderCollections();
@@ -233,9 +251,13 @@
 
   // ---------- product form ----------
   const productForm = document.getElementById('productForm');
+  const pEditId = document.getElementById('pEditId');
   const pImage = document.getElementById('pImage');
+  const pImageHint = document.getElementById('pImageHint');
   const pPreview = document.getElementById('pPreview');
   const pSubmit = document.getElementById('pSubmit');
+  const pCancelEdit = document.getElementById('pCancelEdit');
+  const productFormTitle = document.getElementById('productFormTitle');
   const productMsg = document.getElementById('productMsg');
 
   let imageDataUrl = '';
@@ -243,7 +265,7 @@
   pImage.addEventListener('change', () => {
     const file = pImage.files[0];
     if (!file) {
-      pPreview.hidden = true;
+      pPreview.hidden = !pEditId.value;
       imageDataUrl = '';
       return;
     }
@@ -262,6 +284,45 @@
     productMsg.hidden = !text;
   }
 
+  function startEditProduct(p) {
+    pEditId.value = p.id;
+    document.getElementById('pName').value = p.name;
+    document.getElementById('pBrand').value = p.brand;
+    renderCategorySelect();
+    pCategory.value = p.category;
+    renderCollectionSelect();
+    pCollection.value = p.collection || '';
+    document.getElementById('pTag').value = p.tag || '';
+    document.getElementById('pPrice').value = p.price == null ? '' : p.price;
+    document.getElementById('pDesc').value = p.desc;
+    imageDataUrl = '';
+    pImage.value = '';
+    pPreview.src = p.img;
+    pPreview.hidden = false;
+    pImageHint.textContent = '(opcional — deixe em branco para manter a foto atual)';
+    productFormTitle.textContent = `Editando "${p.name}"`;
+    pSubmit.textContent = 'Salvar alterações';
+    pCancelEdit.hidden = false;
+    setMsg('', '');
+    renderProductList();
+    productForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function endEditProduct() {
+    pEditId.value = '';
+    productForm.reset();
+    document.getElementById('pBrand').value = 'By NaNa';
+    pPreview.hidden = true;
+    imageDataUrl = '';
+    pImageHint.textContent = '';
+    productFormTitle.textContent = 'Adicionar produto';
+    pSubmit.textContent = 'Publicar no catálogo';
+    pCancelEdit.hidden = true;
+    renderProductList();
+  }
+
+  pCancelEdit.addEventListener('click', endEditProduct);
+
   productForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     setMsg('', '');
@@ -270,16 +331,17 @@
       setMsg('Cadastre ao menos uma categoria antes de adicionar um produto.', 'error');
       return;
     }
-    if (!imageDataUrl) {
+    const editing = !!pEditId.value;
+    if (!editing && !imageDataUrl) {
       setMsg('Selecione uma foto do produto.', 'error');
       return;
     }
 
     pSubmit.disabled = true;
-    pSubmit.textContent = 'Publicando...';
+    pSubmit.textContent = editing ? 'Salvando...' : 'Publicando...';
 
     try {
-      const data = await api('/api/products', 'POST', {
+      const payload = {
         name: document.getElementById('pName').value.trim(),
         brand: document.getElementById('pBrand').value.trim(),
         category: pCategory.value,
@@ -288,60 +350,77 @@
         price: document.getElementById('pPrice').value,
         desc: document.getElementById('pDesc').value.trim(),
         image: imageDataUrl,
-      });
+      };
 
-      PRODUCTS.unshift(data.product);
-      CATEGORIES = data.categories;
-      COLLECTIONS = data.collections;
-      renderCategories();
-      renderCollections();
+      if (editing) {
+        const data = await api('/api/products/update', 'POST', { ...payload, id: pEditId.value });
+        PRODUCTS = data.products;
+      } else {
+        const data = await api('/api/products', 'POST', payload);
+        PRODUCTS.unshift(data.product);
+        CATEGORIES = data.categories;
+        COLLECTIONS = data.collections;
+        renderCategories();
+        renderCollections();
+      }
       renderCategorySelect();
       renderCollectionSelect();
-      renderProductList();
       renderPromoTargetOptions();
       renderStoryProductSelect();
 
-      productForm.reset();
-      document.getElementById('pBrand').value = 'By NaNa';
-      pPreview.hidden = true;
-      imageDataUrl = '';
-      setMsg('Produto publicado no catálogo ✓', 'ok');
+      const wasEditing = editing;
+      endEditProduct();
+      setMsg(wasEditing ? 'Produto atualizado ✓' : 'Produto publicado no catálogo ✓', 'ok');
     } catch (err) {
       setMsg(err.message, 'error');
     } finally {
       pSubmit.disabled = false;
-      pSubmit.textContent = 'Publicar no catálogo';
     }
   });
 
   // ---------- product list ----------
   const productList = document.getElementById('productList');
   const productCount = document.getElementById('productCount');
+  const productSearch = document.getElementById('productSearch');
 
   function renderProductList() {
+    const term = (productSearch.value || '').trim().toLowerCase();
+    const list = term
+      ? PRODUCTS.filter((p) => `${p.name} ${p.brand} ${p.category} ${p.collection || ''}`.toLowerCase().includes(term))
+      : PRODUCTS;
+
     productCount.textContent = PRODUCTS.length;
     productList.innerHTML = '';
-    PRODUCTS.forEach((p) => {
+    if (!list.length) {
+      productList.innerHTML = '<p class="admin-empty-block">Nenhum produto encontrado.</p>';
+      return;
+    }
+    list.forEach((p) => {
       const promo = window.PromoEngine.bestPromoForProduct(p, PROMOTIONS);
       const priceHtml = promo
         ? `<span class="admin-product-item-price"><s>${money(p.price)}</s> ${money(promo.price)} <em>(-${promo.percent}%)</em></span>`
         : `<span class="admin-product-item-price">${money(p.price)}</span>`;
       const div = document.createElement('div');
-      div.className = 'admin-product-item';
+      div.className = `admin-product-item${pEditId.value === p.id ? ' is-editing' : ''}`;
       div.innerHTML = `
         <img src="${p.img}" alt="${p.name}" />
         <div class="admin-product-item-body">
           <span class="admin-product-item-name">${p.name}</span>
           <span class="admin-product-item-meta">${p.category}${p.collection ? ` · ${p.collection}` : ''}</span>
           ${priceHtml}
-          <button type="button" data-id="${p.id}">Remover do catálogo</button>
+          <div class="admin-product-item-actions">
+            <button type="button" class="admin-product-item-edit" data-id="${p.id}">Editar</button>
+            <button type="button" class="admin-product-item-remove" data-id="${p.id}">Remover</button>
+          </div>
         </div>
       `;
-      div.querySelector('button').addEventListener('click', async () => {
+      div.querySelector('.admin-product-item-edit').addEventListener('click', () => startEditProduct(p));
+      div.querySelector('.admin-product-item-remove').addEventListener('click', async () => {
         if (!confirm(`Remover "${p.name}" do catálogo?`)) return;
         try {
           const data = await api('/api/products', 'DELETE', { id: p.id });
           PRODUCTS = data.products;
+          if (pEditId.value === p.id) endEditProduct();
           renderProductList();
           renderPromoTargetOptions();
           renderStoryProductSelect();
@@ -353,8 +432,11 @@
     });
   }
 
+  productSearch.addEventListener('input', renderProductList);
+
   // ---------- promotions ----------
   const promoForm = document.getElementById('promoForm');
+  const promoEditId = document.getElementById('promoEditId');
   const promoScope = document.getElementById('promoScope');
   const promoTargetWrap = document.getElementById('promoTargetWrap');
   const promoTarget = document.getElementById('promoTarget');
@@ -364,6 +446,8 @@
   const promoEnd = document.getElementById('promoEnd');
   const promoLabel = document.getElementById('promoLabel');
   const promoSubmit = document.getElementById('promoSubmit');
+  const promoCancelEdit = document.getElementById('promoCancelEdit');
+  const promoFormTitle = document.getElementById('promoFormTitle');
   const promoMsg = document.getElementById('promoMsg');
   const promoList = document.getElementById('promoList');
 
@@ -425,14 +509,17 @@
         </div>
         <div class="admin-promo-actions">
           <span class="admin-promo-status is-${status}">${statusLabel}</span>
+          <button type="button" class="admin-promo-edit" aria-label="Editar promoção">✎</button>
           <button type="button" class="admin-promo-remove" aria-label="Remover promoção">✕</button>
         </div>
       `;
+      div.querySelector('.admin-promo-edit').addEventListener('click', () => startEditPromo(promo));
       div.querySelector('.admin-promo-remove').addEventListener('click', async () => {
         if (!confirm('Remover esta promoção?')) return;
         try {
           const data = await api('/api/promotions', 'DELETE', { id: promo.id });
           PROMOTIONS = data.promotions;
+          if (promoEditId.value === promo.id) endEditPromo();
           renderPromoList();
           renderProductList();
         } catch (err) {
@@ -443,12 +530,42 @@
     });
   }
 
+  function startEditPromo(promo) {
+    promoEditId.value = promo.id;
+    promoScope.value = promo.scope;
+    renderPromoTargetOptions();
+    if (promo.scope !== 'site') promoTarget.value = promo.target;
+    promoType.value = promo.type;
+    promoValue.value = promo.value;
+    promoStart.value = promo.startDate || '';
+    promoEnd.value = promo.endDate || '';
+    promoLabel.value = promo.label || '';
+    promoFormTitle.textContent = 'Editando promoção';
+    promoSubmit.textContent = 'Salvar alterações';
+    promoCancelEdit.hidden = false;
+    setPromoMsg('', '');
+    promoForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function endEditPromo() {
+    promoEditId.value = '';
+    promoForm.reset();
+    renderPromoTargetOptions();
+    promoFormTitle.textContent = 'Promoções';
+    promoSubmit.textContent = 'Aplicar promoção';
+    promoCancelEdit.hidden = true;
+    renderPromoList();
+  }
+
+  promoCancelEdit.addEventListener('click', endEditPromo);
+
   promoForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     setPromoMsg('', '');
     promoSubmit.disabled = true;
+    const editing = !!promoEditId.value;
     try {
-      const data = await api('/api/promotions', 'POST', {
+      const payload = {
         scope: promoScope.value,
         target: promoScope.value === 'site' ? '' : promoTarget.value,
         type: promoType.value,
@@ -456,13 +573,15 @@
         startDate: promoStart.value,
         endDate: promoEnd.value,
         label: promoLabel.value.trim(),
-      });
+      };
+      const data = editing
+        ? await api('/api/promotions/update', 'POST', { ...payload, id: promoEditId.value })
+        : await api('/api/promotions', 'POST', payload);
       PROMOTIONS = data.promotions;
-      renderPromoList();
       renderProductList();
-      promoForm.reset();
-      renderPromoTargetOptions();
-      setPromoMsg('Promoção aplicada ✓', 'ok');
+      const wasEditing = editing;
+      endEditPromo();
+      setPromoMsg(wasEditing ? 'Promoção atualizada ✓' : 'Promoção aplicada ✓', 'ok');
     } catch (err) {
       setPromoMsg(err.message, 'error');
     } finally {
@@ -472,11 +591,14 @@
 
   // ---------- coupons ----------
   const couponForm = document.getElementById('couponForm');
+  const couponEditCode = document.getElementById('couponEditCode');
   const couponCode = document.getElementById('couponCode');
   const couponType = document.getElementById('couponType');
   const couponValue = document.getElementById('couponValue');
   const couponEnd = document.getElementById('couponEnd');
   const couponSubmit = document.getElementById('couponSubmit');
+  const couponCancelEdit = document.getElementById('couponCancelEdit');
+  const couponFormTitle = document.getElementById('couponFormTitle');
   const couponMsg = document.getElementById('couponMsg');
   const couponList = document.getElementById('couponList');
 
@@ -496,32 +618,64 @@
       const discountText = c.type === 'percent' ? `${c.value}% OFF` : `${money(c.value)} OFF`;
       const validity = c.endDate ? ` · válido até ${formatDate(c.endDate)}` : '';
       const li = document.createElement('li');
-      li.innerHTML = `<span>${c.code} — ${discountText}${validity}</span><button type="button" aria-label="Remover">✕</button>`;
-      li.querySelector('button').addEventListener('click', async () => {
+      li.innerHTML = `<span>${c.code} — ${discountText}${validity}</span><button type="button" class="admin-coupon-edit" aria-label="Editar">✎</button><button type="button" aria-label="Remover">✕</button>`;
+      li.querySelector('.admin-coupon-edit').addEventListener('click', () => startEditCoupon(c));
+      li.querySelector('button:not(.admin-coupon-edit)').addEventListener('click', async () => {
         if (!confirm(`Remover o cupom "${c.code}"?`)) return;
         const data = await api('/api/coupons', 'DELETE', { code: c.code });
         COUPONS = data.coupons;
+        if (couponEditCode.value === c.code) endEditCoupon();
         renderCouponList();
       });
       couponList.appendChild(li);
     });
   }
 
+  function startEditCoupon(c) {
+    couponEditCode.value = c.code;
+    couponCode.value = c.code;
+    couponCode.readOnly = true;
+    couponType.value = c.type;
+    couponValue.value = c.value;
+    couponEnd.value = c.endDate || '';
+    couponFormTitle.textContent = `Editando cupom "${c.code}"`;
+    couponSubmit.textContent = 'Salvar alterações';
+    couponCancelEdit.hidden = false;
+    setCouponMsg('', '');
+    couponForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function endEditCoupon() {
+    couponEditCode.value = '';
+    couponForm.reset();
+    couponCode.readOnly = false;
+    couponFormTitle.textContent = 'Cupons de desconto';
+    couponSubmit.textContent = 'Criar cupom';
+    couponCancelEdit.hidden = true;
+    renderCouponList();
+  }
+
+  couponCancelEdit.addEventListener('click', endEditCoupon);
+
   couponForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     setCouponMsg('', '');
     couponSubmit.disabled = true;
+    const editing = !!couponEditCode.value;
     try {
-      const data = await api('/api/coupons', 'POST', {
+      const payload = {
         code: couponCode.value.trim(),
         type: couponType.value,
         value: couponValue.value,
         endDate: couponEnd.value,
-      });
+      };
+      const data = editing
+        ? await api('/api/coupons/update', 'POST', payload)
+        : await api('/api/coupons', 'POST', payload);
       COUPONS = data.coupons;
-      renderCouponList();
-      couponForm.reset();
-      setCouponMsg('Cupom criado ✓', 'ok');
+      const wasEditing = editing;
+      endEditCoupon();
+      setCouponMsg(wasEditing ? 'Cupom atualizado ✓' : 'Cupom criado ✓', 'ok');
     } catch (err) {
       setCouponMsg(err.message, 'error');
     } finally {
@@ -639,6 +793,95 @@
   }
 
   customerSearch.addEventListener('input', renderCustomerList);
+
+  document.getElementById('customerExport').addEventListener('click', () => {
+    if (!CUSTOMERS.length) {
+      alert('Não há clientes para exportar.');
+      return;
+    }
+    const header = ['Nome', 'Sobrenome', 'E-mail', 'Telefone', 'Recebe novidades', 'Cliente desde'];
+    const csvEscape = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+    const rows = CUSTOMERS.map((c) => [
+      c.firstName,
+      c.lastName,
+      c.email,
+      c.phone,
+      c.marketingOptIn ? 'Sim' : 'Não',
+      formatDate(c.createdAt.slice(0, 10)),
+    ]);
+    const csv = [header, ...rows].map((r) => r.map(csvEscape).join(';')).join('\r\n');
+    const blob = new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `clientes-bynana-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  // ---------- pedidos (fechados no checkout do site) ----------
+  const orderList = document.getElementById('orderList');
+  const orderCount = document.getElementById('orderCount');
+  const orderSearch = document.getElementById('orderSearch');
+
+  const ORDER_STATUS_LABELS = { novo: 'Novo', em_andamento: 'Em andamento', concluido: 'Concluído', cancelado: 'Cancelado' };
+
+  async function loadOrders() {
+    try {
+      const data = await api('/api/orders/list', 'POST', {});
+      ORDERS = data.orders || [];
+      renderOrderList();
+    } catch (err) {
+      orderList.innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+    }
+  }
+
+  function renderOrderList() {
+    const term = (orderSearch.value || '').trim().toLowerCase();
+    const list = term
+      ? ORDERS.filter((o) => `${o.customerName} ${o.customerPhone}`.toLowerCase().includes(term))
+      : ORDERS;
+
+    orderCount.textContent = ORDERS.length;
+    orderList.innerHTML = '';
+    if (!list.length) {
+      orderList.innerHTML = '<p class="admin-empty-block">Nenhum pedido encontrado.</p>';
+      return;
+    }
+    list.forEach((o) => {
+      const itemsText = (o.items || []).map((it) => `${it.qty}x ${it.name}`).join(', ');
+      const when = new Date(o.createdAt).toLocaleString('pt-BR');
+      const div = document.createElement('div');
+      div.className = 'admin-order-item';
+      div.innerHTML = `
+        <div class="admin-order-info">
+          <span class="admin-order-name">${o.customerName} · ${o.customerPhone}</span>
+          <span class="admin-order-meta">${when}${o.couponCode ? ` · cupom ${o.couponCode}` : ''} · ${o.paymentMethod} · ${o.deliveryMethod}</span>
+          <p class="admin-order-items">${itemsText}</p>
+          <span class="admin-order-total">${money(o.total)}</span>
+        </div>
+        <div class="admin-order-actions">
+          <select class="admin-order-status-select st-${o.status}" aria-label="Status do pedido">
+            ${Object.entries(ORDER_STATUS_LABELS).map(([value, label]) => `<option value="${value}" ${value === o.status ? 'selected' : ''}>${label}</option>`).join('')}
+          </select>
+        </div>
+      `;
+      div.querySelector('.admin-order-status-select').addEventListener('change', async (e) => {
+        const status = e.target.value;
+        e.target.className = `admin-order-status-select st-${status}`;
+        try {
+          const data = await api('/api/orders/status', 'POST', { id: o.id, status });
+          ORDERS = data.orders;
+        } catch (err) {
+          alert(err.message);
+          renderOrderList();
+        }
+      });
+      orderList.appendChild(div);
+    });
+  }
+
+  orderSearch.addEventListener('input', renderOrderList);
 
   // ---------- stories (carrossel de vídeo estilo Instagram) ----------
   const storyForm = document.getElementById('storyForm');

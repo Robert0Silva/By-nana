@@ -82,6 +82,27 @@ CREATE TABLE IF NOT EXISTS customers (
 CREATE UNIQUE INDEX IF NOT EXISTS customers_email_lower_idx ON customers (lower(email));
 CREATE UNIQUE INDEX IF NOT EXISTS customers_cpf_idx ON customers (cpf);
 
+-- pedidos fechados pelo checkout do site (persistidos antes de abrir o WhatsApp, para dar
+-- ao admin uma lista/histórico real em vez de depender só da mensagem enviada).
+CREATE TABLE IF NOT EXISTS orders (
+  id              TEXT PRIMARY KEY,
+  customer_id     UUID REFERENCES customers(id) ON DELETE SET NULL,
+  customer_name   TEXT NOT NULL,
+  customer_phone  TEXT NOT NULL,
+  items           JSONB NOT NULL,
+  subtotal        NUMERIC(10, 2) NOT NULL,
+  discount        NUMERIC(10, 2) NOT NULL DEFAULT 0,
+  total           NUMERIC(10, 2) NOT NULL,
+  coupon_code     TEXT,
+  payment_method  TEXT NOT NULL,
+  delivery_method TEXT NOT NULL,
+  address         JSONB,
+  status          TEXT NOT NULL DEFAULT 'novo' CHECK (status IN ('novo', 'em_andamento', 'concluido', 'cancelado')),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at DESC);
+
 CREATE TABLE IF NOT EXISTS stories (
   id          TEXT PRIMARY KEY,
   title       TEXT NOT NULL DEFAULT '',

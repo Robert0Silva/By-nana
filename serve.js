@@ -158,6 +158,19 @@ async function getCustomersForAdmin() {
   return rows.map((c) => ({ ...c, cpf: maskCpf(c.cpf) }));
 }
 
+async function getOrders() {
+  const { rows } = await pool.query(`
+    SELECT id, customer_name AS "customerName", customer_phone AS "customerPhone",
+           items, subtotal, discount, total, coupon_code AS "couponCode",
+           payment_method AS "paymentMethod", delivery_method AS "deliveryMethod",
+           address, status, created_at AS "createdAt"
+    FROM orders
+    ORDER BY created_at DESC
+    LIMIT 300
+  `);
+  return rows;
+}
+
 async function getStories(onlyActive) {
   const { rows } = await pool.query(`
     SELECT id, title, video, cover, link_url AS "linkUrl", link_label AS "linkLabel",
@@ -334,6 +347,63 @@ async function handleApi(req, res, pathname) {
       return sendJSON(res, 201, { product, categories, collections });
     }
 
+    if (pathname === '/api/products/update' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
+
+      const name = (body.name || '').trim();
+      const category = (body.category || '').trim();
+      const desc = (body.desc || '').trim();
+      if (!name || !category || !desc) {
+        return sendJSON(res, 400, { error: 'Nome, categoria e descrição são obrigatórios' });
+      }
+
+      let price = null;
+      if (body.price !== null && body.price !== undefined && body.price !== '') {
+        const n = Number(body.price);
+        if (!Number.isNaN(n)) price = n;
+      }
+      const collection = (body.collection || '').trim();
+      const brand = (body.brand || 'By NaNa').trim();
+      const tag = (body.tag || '').trim() || 'Novidade';
+
+      await pool.query('INSERT INTO categories(name) VALUES ($1) ON CONFLICT (lower(name)) DO NOTHING', [category]);
+      if (collection) {
+        await pool.query('INSERT INTO collections(name) VALUES ($1) ON CONFLICT (lower(name)) DO NOTHING', [collection]);
+      }
+
+      let img = null;
+      if (body.image && typeof body.image === 'string' && body.image.startsWith('data:image/')) {
+        const match = body.image.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/s);
+        if (!match) return sendJSON(res, 400, { error: 'Imagem inválida' });
+        const buffer = Buffer.from(match[1], 'base64');
+        const slug = slugify(name);
+        const fileName = `${slug}-${Date.now().toString(36)}.jpg`;
+        const outPath = path.join(uploadDir, fileName);
+        await sharp(buffer)
+          .rotate()
+          .normalize({ lower: 1, upper: 99 })
+          .modulate({ brightness: 1.03, saturation: 1.05 })
+          .sharpen({ sigma: 0.5 })
+          .resize({ width: 1000, withoutEnlargement: true })
+          .jpeg({ quality: 90, mozjpeg: true })
+          .toFile(outPath);
+        img = `assets/img/processed/${fileName}`;
+      }
+
+      const { rowCount } = await pool.query(
+        `UPDATE products SET name=$1, brand=$2,
+           category_id=(SELECT id FROM categories WHERE lower(name)=lower($3)),
+           collection_id=(SELECT id FROM collections WHERE lower(name)=lower($4)),
+           tag=$5, price=$6, description=$7, img=COALESCE($8, img)
+         WHERE id=$9`,
+        [name, brand, category, collection || null, tag, price, desc, img, body.id]
+      );
+      if (!rowCount) return sendJSON(res, 404, { error: 'Produto não encontrado' });
+      return sendJSON(res, 200, { products: await getProducts() });
+    }
+
     if (pathname === '/api/products' && req.method === 'DELETE') {
       const body = await readJSONBody(req);
       if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
@@ -452,6 +522,55 @@ async function handleApi(req, res, pathname) {
       return sendJSON(res, 201, { promotions: await getPromotions() });
     }
 
+    if (pathname === '/api/promotions/update' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
+
+      const scope = body.scope;
+      if (!['product', 'category', 'collection', 'site'].includes(scope)) {
+        return sendJSON(res, 400, { error: 'Escopo inválido' });
+      }
+      const target = scope === 'site' ? '' : (body.target || '').trim();
+      if (scope !== 'site' && !target) {
+        return sendJSON(res, 400, { error: 'Selecione o alvo da promoção' });
+      }
+      const discount = validateDiscount(body);
+      if (discount.error) return sendJSON(res, 400, { error: discount.error });
+
+      const startDate = (body.startDate || '').trim() || null;
+      const endDate = (body.endDate || '').trim() || null;
+      if (startDate && endDate && endDate < startDate) {
+        return sendJSON(res, 400, { error: 'A data final não pode ser antes da data inicial' });
+      }
+
+      let productId = null;
+      let categoryId = null;
+      let collectionId = null;
+      if (scope === 'product') {
+        const r = await pool.query('SELECT id FROM products WHERE id = $1', [target]);
+        if (!r.rowCount) return sendJSON(res, 400, { error: 'Produto não encontrado' });
+        productId = target;
+      } else if (scope === 'category') {
+        const r = await pool.query('SELECT id FROM categories WHERE lower(name) = lower($1)', [target]);
+        if (!r.rowCount) return sendJSON(res, 400, { error: 'Categoria não encontrada' });
+        categoryId = r.rows[0].id;
+      } else if (scope === 'collection') {
+        const r = await pool.query('SELECT id FROM collections WHERE lower(name) = lower($1)', [target]);
+        if (!r.rowCount) return sendJSON(res, 400, { error: 'Coleção não encontrada' });
+        collectionId = r.rows[0].id;
+      }
+
+      const { rowCount } = await pool.query(
+        `UPDATE promotions SET scope=$1, target_product_id=$2, target_category_id=$3, target_collection_id=$4,
+           discount_type=$5, discount_value=$6, label=$7, start_date=$8, end_date=$9
+         WHERE id=$10`,
+        [scope, productId, categoryId, collectionId, discount.type, discount.value, (body.label || '').trim(), startDate, endDate, body.id]
+      );
+      if (!rowCount) return sendJSON(res, 404, { error: 'Promoção não encontrada' });
+      return sendJSON(res, 200, { promotions: await getPromotions() });
+    }
+
     if (pathname === '/api/promotions' && req.method === 'DELETE') {
       const body = await readJSONBody(req);
       if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
@@ -480,12 +599,79 @@ async function handleApi(req, res, pathname) {
       return sendJSON(res, 201, { coupons: await getCoupons() });
     }
 
+    if (pathname === '/api/coupons/update' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const code = (body.code || '').trim().toUpperCase();
+      if (!code) return sendJSON(res, 400, { error: 'Cupom não encontrado' });
+      const discount = validateDiscount(body);
+      if (discount.error) return sendJSON(res, 400, { error: discount.error });
+      const endDate = (body.endDate || '').trim() || null;
+
+      const { rowCount } = await pool.query(
+        'UPDATE coupons SET discount_type=$1, discount_value=$2, end_date=$3 WHERE code=$4',
+        [discount.type, discount.value, endDate, code]
+      );
+      if (!rowCount) return sendJSON(res, 404, { error: 'Cupom não encontrado' });
+      return sendJSON(res, 200, { coupons: await getCoupons() });
+    }
+
     if (pathname === '/api/coupons' && req.method === 'DELETE') {
       const body = await readJSONBody(req);
       if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
       const code = (body.code || '').trim().toUpperCase();
       await pool.query('DELETE FROM coupons WHERE code = $1', [code]);
       return sendJSON(res, 200, { coupons: await getCoupons() });
+    }
+
+    // ------ orders (pedidos fechados no checkout do site, antes de abrir o WhatsApp) ------
+    if (pathname === '/api/orders' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const customerName = (body.customerName || '').trim();
+      const customerPhone = (body.customerPhone || '').trim();
+      const paymentMethod = (body.paymentMethod || '').trim();
+      const deliveryMethod = (body.deliveryMethod || '').trim();
+      const items = Array.isArray(body.items) ? body.items : [];
+      if (!customerName || !customerPhone || !paymentMethod || !deliveryMethod || !items.length) {
+        return sendJSON(res, 400, { error: 'Dados do pedido incompletos' });
+      }
+      const subtotal = Number(body.subtotal) || 0;
+      const discount = Number(body.discount) || 0;
+      const total = Number(body.total) || 0;
+      const couponCode = (body.couponCode || '').trim().toUpperCase() || null;
+      const address = body.address && typeof body.address === 'object' ? body.address : null;
+
+      let customerId = null;
+      if (body.customerToken) {
+        const payload = verifySessionToken(body.customerToken);
+        if (payload) customerId = payload.id;
+      }
+
+      const id = `pedido-${Date.now().toString(36)}`;
+      await pool.query(
+        `INSERT INTO orders (id, customer_id, customer_name, customer_phone, items, subtotal, discount, total, coupon_code, payment_method, delivery_method, address)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [id, customerId, customerName, customerPhone, JSON.stringify(items), subtotal, discount, total, couponCode, paymentMethod, deliveryMethod, address ? JSON.stringify(address) : null]
+      );
+      return sendJSON(res, 201, { orderId: id });
+    }
+
+    if (pathname === '/api/orders/list' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      return sendJSON(res, 200, { orders: await getOrders() });
+    }
+
+    if (pathname === '/api/orders/status' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const status = body.status;
+      if (!['novo', 'em_andamento', 'concluido', 'cancelado'].includes(status)) {
+        return sendJSON(res, 400, { error: 'Status inválido' });
+      }
+      if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
+      await pool.query('UPDATE orders SET status = $1 WHERE id = $2', [status, body.id]);
+      return sendJSON(res, 200, { orders: await getOrders() });
     }
 
     // ------ customers (cadastro/login público + CRM no admin) ------
@@ -729,29 +915,84 @@ async function handleApi(req, res, pathname) {
   }
 }
 
+// Nomes de arquivo fixos (sobrescritos no lugar pelo admin) não podem ter cache longo,
+// senão o navegador ignora a foto nova depois de trocada em "Imagens do site".
+const FIXED_IMAGE_FILES = new Set(Object.values(SITE_IMAGE_SLOTS).map((cfg) => path.basename(cfg.path)));
+
+function cacheControlFor(filePath, ext) {
+  if (ext === '.html') return 'no-cache';
+  const base = path.basename(filePath);
+  if (filePath.startsWith(`${path.sep}assets${path.sep}img${path.sep}processed${path.sep}`) || filePath.startsWith('/assets/img/processed/')) {
+    if (FIXED_IMAGE_FILES.has(base)) return 'no-cache';
+    return 'public, max-age=31536000, immutable'; // fotos de produto/story têm nome único (timestamp), nunca mudam de conteúdo
+  }
+  if (filePath.includes(`${path.sep}assets${path.sep}videos${path.sep}`) || filePath.includes('/assets/videos/')) {
+    return 'public, max-age=31536000, immutable';
+  }
+  if (ext === '.css' || ext === '.js') return 'no-cache'; // sem hash no nome do arquivo, então revalida a cada load em vez de arriscar servir versão antiga
+  return 'no-cache';
+}
+
 // ---------- static file serving ----------
+function serveNotFound(res) {
+  fs.readFile(path.join(root, '404.html'), (err, data) => {
+    if (err) {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Página não encontrada');
+      return;
+    }
+    res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
+    res.end(data);
+  });
+}
+
 function serveStatic(req, res, pathname) {
   let filePath = decodeURIComponent(pathname);
+
+  // formas canônicas: uma única URL "de verdade" por página, sem duplicar / vs /index.html
+  if (filePath === '/index.html') {
+    res.writeHead(301, { Location: '/' });
+    res.end();
+    return;
+  }
+  if (filePath === '/admin.html') {
+    res.writeHead(301, { Location: '/admin' });
+    res.end();
+    return;
+  }
+
   if (filePath === '/') filePath = '/index.html';
   if (filePath === '/admin') filePath = '/admin.html';
   const full = path.join(root, filePath);
   fs.readFile(full, (err, data) => {
     if (err) {
-      res.writeHead(404);
-      res.end('Not found');
+      serveNotFound(res);
       return;
     }
     const ext = path.extname(full);
-    res.writeHead(200, { 'Content-Type': types_[ext] || 'application/octet-stream', 'Cache-Control': 'no-store' });
+    res.writeHead(200, { 'Content-Type': types_[ext] || 'application/octet-stream', 'Cache-Control': cacheControlFor(filePath, ext) });
     res.end(data);
   });
 }
+
+const ROBOTS_TXT = `User-agent: *\nDisallow: /admin\nDisallow: /api/\nSitemap: /sitemap.xml\n`;
+const SITEMAP_XML = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  <url><loc>/</loc></url>\n</urlset>\n`;
 
 http
   .createServer((req, res) => {
     const pathname = req.url.split('?')[0];
     if (pathname.startsWith('/api/')) {
       handleApi(req, res, pathname);
+      return;
+    }
+    if (pathname === '/robots.txt') {
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' });
+      res.end(ROBOTS_TXT);
+      return;
+    }
+    if (pathname === '/sitemap.xml') {
+      res.writeHead(200, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'no-cache' });
+      res.end(SITEMAP_XML);
       return;
     }
     serveStatic(req, res, pathname);

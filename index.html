@@ -18,7 +18,12 @@
 </head>
 <body>
 
+<div class="load-bar" id="loadBar" aria-hidden="true"></div>
+<div class="sr-only" id="cartAnnouncer" aria-live="polite"></div>
 <div class="promo-banner" id="promoBanner" hidden></div>
+<p class="data-error-banner" id="dataError" hidden>
+  Não foi possível carregar o catálogo agora. <button type="button" id="dataErrorRetry" class="data-error-retry">Tentar de novo</button>
+</p>
 <div class="topbar">Peças exclusivas, atendimento por WhatsApp 💌 &nbsp;|&nbsp; Entrega combinada na hora do pedido</div>
 
 <header class="site-header" id="topo">
@@ -217,12 +222,12 @@
       <a href="#" id="footerWhats" target="_blank" rel="noopener">WhatsApp</a>
     </div>
     <p class="footer-note">© <span id="year"></span> By NaNa. Catálogo online — pedidos combinados via WhatsApp.</p>
-    <a href="admin.html" class="footer-admin-link">Área administrativa</a>
+    <a href="/admin" class="footer-admin-link">Área administrativa</a>
   </div>
 </footer>
 
 <div class="bag-overlay" id="bagOverlay"></div>
-<aside class="bag-drawer" id="bagDrawer">
+<aside class="bag-drawer" id="bagDrawer" role="dialog" aria-modal="true" aria-label="Sua sacola">
   <div class="bag-head">
     <h3>Sua sacola</h3>
     <button class="icon-btn" id="bagClose" aria-label="Fechar">

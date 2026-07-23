@@ -33,7 +33,12 @@
 .admin-sub{color:var(--ink-soft);margin-bottom:32px;}
 
 /* ---------- tabs ---------- */
-.admin-tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:26px;}
+.admin-tabs{display:flex;flex-wrap:wrap;gap:22px;margin-bottom:26px;}
+.admin-tabs-group{display:flex;flex-direction:column;gap:6px;}
+.admin-tabs-group-label{
+  font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);font-weight:600;
+}
+.admin-tabs-group-items{display:flex;flex-wrap:wrap;gap:8px;}
 .admin-tab{
   padding:10px 18px;border-radius:999px;border:1px solid var(--line);background:var(--white);
   font-family:var(--sans);font-size:.85rem;color:var(--ink);cursor:pointer;transition:background .2s,color .2s,border-color .2s;
@@ -123,6 +128,17 @@
 .admin-form-msg{font-size:.85rem;margin:0;}
 .admin-form-msg.is-error{color:var(--wine);}
 .admin-form-msg.is-ok{color:#2f7d4f;}
+.admin-form-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+.admin-product-item.is-editing{outline:2px solid var(--gold);outline-offset:2px;}
+.admin-product-item-actions{display:flex;gap:6px;margin-top:8px;}
+.admin-product-item-actions button{margin-top:0;flex:1;}
+.admin-product-item-edit{color:var(--ink) !important;}
+.admin-product-item-edit:hover{background:var(--ink) !important;color:#fff !important;border-color:var(--ink) !important;}
+.admin-promo-edit,.admin-coupon-edit{
+  width:28px;height:28px;border-radius:50%;border:none;background:var(--white);color:var(--ink);
+  cursor:pointer;font-size:.8rem;line-height:1;display:flex;align-items:center;justify-content:center;
+}
+.admin-promo-edit:hover,.admin-coupon-edit:hover{background:var(--ink);color:#fff;}
 
 /* ---------- product list ---------- */
 .admin-product-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;}
@@ -165,7 +181,30 @@
 .admin-promo-remove:hover{background:var(--wine);color:#fff;}
 .admin-empty-block{color:var(--ink-soft);font-size:.85rem;padding:4px 0;}
 
+/* ---------- pedidos ---------- */
+.admin-order-list{display:flex;flex-direction:column;gap:10px;}
+.admin-order-item{
+  display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap;
+  padding:14px 16px;border-radius:12px;border:1px solid var(--line);background:var(--cream);
+}
+.admin-order-info{display:flex;flex-direction:column;gap:4px;min-width:220px;flex:1;}
+.admin-order-name{font-size:.9rem;font-weight:600;}
+.admin-order-meta{font-size:.76rem;color:var(--ink-soft);}
+.admin-order-items{font-size:.78rem;color:var(--ink-soft);margin:2px 0 0;}
+.admin-order-total{font-size:.88rem;font-weight:700;color:var(--ink);}
+.admin-order-actions{display:flex;flex-direction:column;align-items:flex-end;gap:8px;}
+.admin-order-status-select{
+  padding:6px 10px;border-radius:8px;border:1px solid var(--line);background:var(--white);
+  font-family:var(--sans);font-size:.78rem;color:var(--ink);cursor:pointer;
+}
+.admin-order-status-select.st-novo{border-color:var(--camel);}
+.admin-order-status-select.st-em_andamento{border-color:var(--gold);}
+.admin-order-status-select.st-concluido{border-color:#2f7d4f;}
+.admin-order-status-select.st-cancelado{border-color:var(--wine);}
+
 /* ---------- clientes ---------- */
+.admin-toolbar-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;}
+.admin-toolbar-row .admin-search{margin-bottom:0;flex:1 1 260px;}
 .admin-search{
   width:100%;max-width:340px;padding:10px 14px;border-radius:999px;border:1px solid var(--line);
   font-family:var(--sans);font-size:.85rem;background:var(--cream);color:var(--ink);margin-bottom:16px;
