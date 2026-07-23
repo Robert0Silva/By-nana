@@ -525,9 +525,10 @@ p{margin:0 0 1em;color:var(--ink-soft);line-height:1.7;}
 .bag-cep-status.is-error{color:var(--wine);}
 .bag-cep-status.is-ok{color:#2f7d4f;}
 .bag-address-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
-.bag-address-fields label{display:flex;flex-direction:column;gap:4px;font-size:.74rem;color:var(--ink-soft);font-weight:500;}
+.bag-address-fields label{display:flex;flex-direction:column;gap:4px;font-size:.74rem;color:var(--ink-soft);font-weight:500;min-width:0;}
 .bag-address-fields label.bag-wide{grid-column:1/-1;}
 .bag-address-fields input{
+  width:100%;box-sizing:border-box;min-width:0;
   padding:9px 12px;border-radius:8px;border:1px solid var(--line);
   font-family:var(--sans);font-size:.85rem;background:var(--cream);color:var(--ink);
 }
