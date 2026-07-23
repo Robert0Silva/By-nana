@@ -403,8 +403,79 @@
 
   <div class="account-view" id="accountViewProfile" hidden>
     <h3>Olá, <span id="profileName"></span>!</h3>
-    <p class="account-sub">Sua conta By NaNa.</p>
-    <button type="button" class="btn btn-outline btn-block" id="logoutBtn">Sair da conta</button>
+
+    <nav class="profile-subnav" id="profileSubnav">
+      <button type="button" class="profile-subnav-btn is-active" data-ptab="dados">Meus dados</button>
+      <button type="button" class="profile-subnav-btn" data-ptab="pedidos">Pedidos</button>
+      <button type="button" class="profile-subnav-btn" data-ptab="enderecos">Endereços</button>
+      <button type="button" class="profile-subnav-btn" data-ptab="senha">Senha</button>
+      <button type="button" class="profile-subnav-btn" data-ptab="favoritos">Favoritos</button>
+    </nav>
+
+    <div class="profile-panel" id="profilePanel-dados">
+      <form class="account-form" id="profileDataForm">
+        <div class="account-form-row">
+          <label>Nome<input type="text" id="pdFirstName" required autocomplete="given-name" /></label>
+          <label>Sobrenome<input type="text" id="pdLastName" required autocomplete="family-name" /></label>
+        </div>
+        <label>E-mail<input type="email" id="pdEmail" disabled /></label>
+        <label>Telefone<input type="tel" id="pdPhone" required autocomplete="tel" placeholder="(31) 90000-0000" /></label>
+        <label class="account-check">
+          <input type="checkbox" id="pdMarketing" />
+          Quero receber novidades e promoções da By NaNa.
+        </label>
+        <p class="account-form-msg" id="profileDataMsg" hidden></p>
+        <button type="submit" class="btn btn-primary btn-block">Salvar dados</button>
+      </form>
+    </div>
+
+    <div class="profile-panel" id="profilePanel-pedidos" hidden>
+      <div class="profile-order-list" id="profileOrderList"></div>
+    </div>
+
+    <div class="profile-panel" id="profilePanel-enderecos" hidden>
+      <div class="profile-address-list" id="profileAddressList"></div>
+      <button type="button" class="btn btn-outline btn-block" id="profileAddAddressBtn">Adicionar endereço</button>
+      <form class="account-form" id="profileAddressForm" hidden>
+        <input type="hidden" id="paEditId" value="" />
+        <label class="bag-cep-label" for="paCep">CEP</label>
+        <div class="bag-cep-row">
+          <input type="text" id="paCep" placeholder="00000-000" inputmode="numeric" maxlength="9" autocomplete="postal-code" />
+          <span class="bag-cep-status" id="paCepStatus"></span>
+        </div>
+        <div class="bag-address-fields" id="paFields">
+          <label class="bag-wide">Rua<input type="text" id="paRua" required /></label>
+          <label>Número<input type="text" id="paNumero" placeholder="Nº" inputmode="numeric" required /></label>
+          <label>Complemento<input type="text" id="paComplemento" placeholder="Opcional" /></label>
+          <label>Bairro<input type="text" id="paBairro" required /></label>
+          <label>Cidade<input type="text" id="paCidade" required /></label>
+          <label>UF<input type="text" id="paEstado" maxlength="2" required /></label>
+        </div>
+        <label>Apelido (opcional)<input type="text" id="paLabel" placeholder="Ex: Casa, Trabalho" /></label>
+        <label class="account-check"><input type="checkbox" id="paDefault" /> Usar como endereço padrão</label>
+        <p class="account-form-msg" id="profileAddressMsg" hidden></p>
+        <div class="account-form-row">
+          <button type="submit" class="btn btn-primary">Salvar endereço</button>
+          <button type="button" class="btn btn-ghost" id="paCancelBtn">Cancelar</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="profile-panel" id="profilePanel-senha" hidden>
+      <form class="account-form" id="profilePasswordForm">
+        <label>Senha atual<input type="password" id="ppCurrent" required autocomplete="current-password" /></label>
+        <label>Nova senha<input type="password" id="ppNew" minlength="6" required autocomplete="new-password" /></label>
+        <p class="account-form-msg" id="profilePasswordMsg" hidden></p>
+        <button type="submit" class="btn btn-primary btn-block">Salvar nova senha</button>
+      </form>
+    </div>
+
+    <div class="profile-panel" id="profilePanel-favoritos" hidden>
+      <div class="product-grid profile-fav-grid" id="profileFavGrid"></div>
+      <p class="empty-state" id="profileFavEmpty" hidden>Você ainda não salvou nenhuma peça nos favoritos.</p>
+    </div>
+
+    <button type="button" class="btn btn-outline btn-block profile-logout" id="logoutBtn">Sair da conta</button>
   </div>
 </div>
 

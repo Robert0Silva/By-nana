@@ -114,6 +114,23 @@ CREATE TABLE IF NOT EXISTS customers (
 CREATE UNIQUE INDEX IF NOT EXISTS customers_email_lower_idx ON customers (lower(email));
 CREATE UNIQUE INDEX IF NOT EXISTS customers_cpf_idx ON customers (cpf);
 
+-- endereços salvos pelo cliente na área da conta, para reaproveitar no checkout sem redigitar.
+CREATE TABLE IF NOT EXISTS customer_addresses (
+  id          UUID PRIMARY KEY,
+  customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  label       TEXT NOT NULL DEFAULT '',
+  cep         TEXT NOT NULL,
+  rua         TEXT NOT NULL,
+  numero      TEXT NOT NULL,
+  complemento TEXT,
+  bairro      TEXT NOT NULL,
+  cidade      TEXT NOT NULL,
+  estado      TEXT NOT NULL,
+  is_default  BOOLEAN NOT NULL DEFAULT false,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_addresses_customer ON customer_addresses(customer_id);
+
 -- pedidos fechados pelo checkout do site (persistidos antes de abrir o WhatsApp, para dar
 -- ao admin uma lista/histórico real em vez de depender só da mensagem enviada).
 CREATE TABLE IF NOT EXISTS orders (

@@ -201,6 +201,39 @@ async function getOrders() {
   return rows;
 }
 
+async function getCustomerOrders(customerId) {
+  const { rows } = await pool.query(
+    `SELECT id, items, subtotal, discount, total, coupon_code AS "couponCode",
+            payment_method AS "paymentMethod", delivery_method AS "deliveryMethod",
+            status, created_at AS "createdAt"
+     FROM orders
+     WHERE customer_id = $1
+     ORDER BY created_at DESC
+     LIMIT 100`,
+    [customerId]
+  );
+  return rows;
+}
+
+async function getCustomerAddresses(customerId) {
+  const { rows } = await pool.query(
+    `SELECT id, label, cep, rua, numero, complemento, bairro, cidade, estado,
+            is_default AS "isDefault"
+     FROM customer_addresses
+     WHERE customer_id = $1
+     ORDER BY is_default DESC, created_at ASC`,
+    [customerId]
+  );
+  return rows;
+}
+
+// Resolve a identidade do cliente sempre a partir do token assinado — nunca de um id
+// enviado no corpo da requisição, para que ninguém possa ler/alterar dados de outra conta.
+function resolveCustomerId(body) {
+  const payload = verifySessionToken(body.token);
+  return payload ? payload.id : null;
+}
+
 async function getStories(onlyActive) {
   const { rows } = await pool.query(`
     SELECT id, title, video, cover, link_url AS "linkUrl", link_label AS "linkLabel",
@@ -1007,6 +1040,139 @@ async function handleApi(req, res, pathname) {
       const customer = await getCustomerById(payload.id);
       if (!customer) return sendJSON(res, 401, { error: 'Sessão inválida' });
       return sendJSON(res, 200, { customer });
+    }
+
+    if (pathname === '/api/customers/update' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const customerId = resolveCustomerId(body);
+      if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
+
+      const firstName = (body.firstName || '').trim();
+      const lastName = (body.lastName || '').trim();
+      const phone = (body.phone || '').trim();
+      if (!firstName || !lastName || !phone) {
+        return sendJSON(res, 400, { error: 'Nome, sobrenome e telefone são obrigatórios' });
+      }
+      const marketingOptIn = body.marketingOptIn === true;
+
+      await pool.query(
+        'UPDATE customers SET first_name = $1, last_name = $2, phone = $3, marketing_opt_in = $4 WHERE id = $5',
+        [firstName, lastName, phone, marketingOptIn, customerId]
+      );
+      return sendJSON(res, 200, { customer: await getCustomerById(customerId) });
+    }
+
+    if (pathname === '/api/customers/password' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const customerId = resolveCustomerId(body);
+      if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
+
+      const currentPassword = body.currentPassword || '';
+      const newPassword = body.newPassword || '';
+      if (newPassword.length < 6) return sendJSON(res, 400, { error: 'A nova senha deve ter ao menos 6 caracteres' });
+
+      const { rows } = await pool.query('SELECT password_hash AS "passwordHash" FROM customers WHERE id = $1', [customerId]);
+      if (!rows[0] || !verifyPassword(currentPassword, rows[0].passwordHash)) {
+        return sendJSON(res, 401, { error: 'Senha atual incorreta' });
+      }
+      await pool.query('UPDATE customers SET password_hash = $1 WHERE id = $2', [hashPassword(newPassword), customerId]);
+      return sendJSON(res, 200, { ok: true });
+    }
+
+    if (pathname === '/api/customers/orders' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const customerId = resolveCustomerId(body);
+      if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
+      return sendJSON(res, 200, { orders: await getCustomerOrders(customerId) });
+    }
+
+    // ------ endereços salvos do cliente ------
+    if (pathname === '/api/customers/addresses/list' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const customerId = resolveCustomerId(body);
+      if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
+      return sendJSON(res, 200, { addresses: await getCustomerAddresses(customerId) });
+    }
+
+    if (pathname === '/api/customers/addresses' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const customerId = resolveCustomerId(body);
+      if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
+
+      const label = (body.label || '').trim();
+      const cep = (body.cep || '').trim();
+      const rua = (body.rua || '').trim();
+      const numero = (body.numero || '').trim();
+      const complemento = (body.complemento || '').trim() || null;
+      const bairro = (body.bairro || '').trim();
+      const cidade = (body.cidade || '').trim();
+      const estado = (body.estado || '').trim();
+      if (!cep || !rua || !numero || !bairro || !cidade || !estado) {
+        return sendJSON(res, 400, { error: 'Preencha CEP, rua, número, bairro, cidade e UF' });
+      }
+
+      const id = crypto.randomUUID();
+      if (body.isDefault) {
+        await pool.query('UPDATE customer_addresses SET is_default = false WHERE customer_id = $1', [customerId]);
+      }
+      await pool.query(
+        `INSERT INTO customer_addresses (id, customer_id, label, cep, rua, numero, complemento, bairro, cidade, estado, is_default)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [id, customerId, label, cep, rua, numero, complemento, bairro, cidade, estado, !!body.isDefault]
+      );
+      return sendJSON(res, 201, { addresses: await getCustomerAddresses(customerId) });
+    }
+
+    if (pathname === '/api/customers/addresses/update' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const customerId = resolveCustomerId(body);
+      if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
+      if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
+
+      const label = (body.label || '').trim();
+      const cep = (body.cep || '').trim();
+      const rua = (body.rua || '').trim();
+      const numero = (body.numero || '').trim();
+      const complemento = (body.complemento || '').trim() || null;
+      const bairro = (body.bairro || '').trim();
+      const cidade = (body.cidade || '').trim();
+      const estado = (body.estado || '').trim();
+      if (!cep || !rua || !numero || !bairro || !cidade || !estado) {
+        return sendJSON(res, 400, { error: 'Preencha CEP, rua, número, bairro, cidade e UF' });
+      }
+
+      const { rowCount } = await pool.query(
+        `UPDATE customer_addresses SET label=$1, cep=$2, rua=$3, numero=$4, complemento=$5, bairro=$6, cidade=$7, estado=$8
+         WHERE id=$9 AND customer_id=$10`,
+        [label, cep, rua, numero, complemento, bairro, cidade, estado, body.id, customerId]
+      );
+      if (!rowCount) return sendJSON(res, 404, { error: 'Endereço não encontrado' });
+      return sendJSON(res, 200, { addresses: await getCustomerAddresses(customerId) });
+    }
+
+    if (pathname === '/api/customers/addresses/default' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const customerId = resolveCustomerId(body);
+      if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
+      if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
+
+      await pool.query('UPDATE customer_addresses SET is_default = false WHERE customer_id = $1', [customerId]);
+      const { rowCount } = await pool.query(
+        'UPDATE customer_addresses SET is_default = true WHERE id = $1 AND customer_id = $2',
+        [body.id, customerId]
+      );
+      if (!rowCount) return sendJSON(res, 404, { error: 'Endereço não encontrado' });
+      return sendJSON(res, 200, { addresses: await getCustomerAddresses(customerId) });
+    }
+
+    if (pathname === '/api/customers/addresses' && req.method === 'DELETE') {
+      const body = await readJSONBody(req);
+      const customerId = resolveCustomerId(body);
+      if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
+      if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
+
+      await pool.query('DELETE FROM customer_addresses WHERE id = $1 AND customer_id = $2', [body.id, customerId]);
+      return sendJSON(res, 200, { addresses: await getCustomerAddresses(customerId) });
     }
 
     if (pathname === '/api/customers/list' && req.method === 'POST') {

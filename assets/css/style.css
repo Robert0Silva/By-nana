@@ -44,6 +44,7 @@ p{margin:0 0 1em;color:var(--ink-soft);line-height:1.7;}
   white-space:nowrap;
 }
 .btn:active{transform:scale(.97);}
+.btn[hidden]{display:none;}
 .btn-primary{background:var(--ink);color:var(--white);}
 .btn-primary:hover{background:var(--wine);box-shadow:var(--shadow);}
 .btn-ghost{background:transparent;color:var(--ink);border-color:var(--line);}
@@ -579,10 +580,12 @@ p{margin:0 0 1em;color:var(--ink-soft);line-height:1.7;}
   opacity:0;pointer-events:none;transition:opacity .3s ease,transform .3s ease;box-shadow:var(--shadow);
 }
 .account-modal.is-open{opacity:1;pointer-events:auto;transform:translate(-50%,-50%) scale(1);}
+.account-modal.is-profile{width:min(640px,94vw);}
 .account-close{position:absolute;top:16px;right:16px;background:var(--white);}
 .account-view[hidden]{display:none;}
 .account-sub{font-size:.88rem;margin-bottom:22px;}
 .account-form{display:flex;flex-direction:column;gap:14px;}
+.account-form[hidden]{display:none;}
 .account-form-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
 .account-form label{display:flex;flex-direction:column;gap:6px;font-size:.78rem;color:var(--ink-soft);font-weight:500;}
 .account-form input,.account-form select{
@@ -599,8 +602,51 @@ p{margin:0 0 1em;color:var(--ink-soft);line-height:1.7;}
 .account-form-msg.is-error{color:var(--wine);}
 .account-switch{font-size:.82rem;text-align:center;margin:18px 0 0;}
 .account-link{background:none;border:none;color:var(--wine);text-decoration:underline;cursor:pointer;padding:0;font-size:.82rem;}
+
+/* ---------- área da conta (perfil completo: dados/pedidos/endereços/senha/favoritos) ---------- */
+.profile-subnav{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px;}
+.profile-subnav-btn{
+  padding:8px 16px;border-radius:999px;border:1px solid var(--line);background:var(--white);
+  font-family:var(--sans);font-size:.8rem;color:var(--ink);cursor:pointer;transition:background .2s,color .2s,border-color .2s;
+}
+.profile-subnav-btn:hover{border-color:var(--ink);}
+.profile-subnav-btn.is-active{background:var(--ink);color:#fff;border-color:var(--ink);}
+.profile-panel[hidden]{display:none;}
+.profile-order-list,.profile-address-list{display:flex;flex-direction:column;gap:10px;margin-bottom:14px;}
+.profile-order-item{
+  padding:14px 16px;border-radius:12px;border:1px solid var(--line);background:var(--cream);
+  display:flex;flex-direction:column;gap:4px;
+}
+.profile-order-header{display:flex;justify-content:space-between;gap:10px;font-size:.85rem;font-weight:600;}
+.profile-order-meta{font-size:.76rem;color:var(--ink-soft);}
+.profile-order-items{font-size:.8rem;color:var(--ink-soft);margin:2px 0 0;}
+.profile-order-status{
+  font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
+  padding:3px 10px;border-radius:999px;white-space:nowrap;background:#f1ece6;color:var(--ink-soft);align-self:flex-start;
+}
+.profile-order-status.st-novo{background:#fdf1dc;color:var(--camel);}
+.profile-order-status.st-em_andamento{background:#fdf1dc;color:var(--camel);}
+.profile-order-status.st-concluido{background:#e4f3e9;color:#2f7d4f;}
+.profile-order-status.st-cancelado{background:#f7e3d8;color:var(--wine);}
+.profile-address-item{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+  padding:12px 16px;border-radius:12px;border:1px solid var(--line);background:var(--cream);
+}
+.profile-address-info{display:flex;flex-direction:column;gap:2px;}
+.profile-address-label{font-size:.85rem;font-weight:600;}
+.profile-address-meta{font-size:.78rem;color:var(--ink-soft);}
+.profile-address-actions{display:flex;align-items:center;gap:8px;}
+.profile-address-default-badge{
+  font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
+  padding:3px 10px;border-radius:999px;white-space:nowrap;background:#e4f3e9;color:#2f7d4f;border:none;cursor:pointer;
+}
+.profile-address-default-badge.is-off{background:#f1ece6;color:var(--ink-soft);}
+.profile-address-remove{background:none;border:none;color:var(--ink-soft);text-decoration:underline;cursor:pointer;font-size:.75rem;padding:0;}
+.profile-fav-grid{grid-template-columns:repeat(2,1fr);gap:14px;}
+.profile-logout{margin-top:18px;}
 @media (max-width:520px){
   .account-form-row{grid-template-columns:1fr;}
+  .profile-fav-grid{grid-template-columns:1fr 1fr;}
 }
 
 /* ---------- mobile sticky bag bar ---------- */

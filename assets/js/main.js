@@ -71,6 +71,7 @@
     renderGrid(currentFilter, currentSearch);
     renderNovidades();
     syncQuickviewFav();
+    if (!document.getElementById('profilePanel-favoritos').hidden) renderProfileFavorites();
   }
 
   // ---------- catalog render ----------
@@ -998,6 +999,11 @@
     accountViewLogin.hidden = view !== 'login';
     accountViewSignup.hidden = view !== 'signup';
     accountViewProfile.hidden = view !== 'profile';
+    accountModal.classList.toggle('is-profile', view === 'profile');
+  }
+
+  function getCustomerToken() {
+    return localStorage.getItem(CUSTOMER_TOKEN_KEY);
   }
 
   function prefillBagContact() {
@@ -1033,7 +1039,12 @@
   }
 
   function openAccountModal() {
-    showAccountView(currentCustomer ? 'profile' : 'login');
+    const view = currentCustomer ? 'profile' : 'login';
+    showAccountView(view);
+    if (view === 'profile') {
+      fillProfileDataForm();
+      showProfileTab('dados');
+    }
     accountOverlay.classList.add('is-open');
     accountModal.classList.add('is-open');
     openModalFocus(accountModal);
@@ -1071,6 +1082,8 @@
       setCustomer(data.customer, data.token);
       loginForm.reset();
       showAccountView('profile');
+      fillProfileDataForm();
+      showProfileTab('dados');
     } catch (err) {
       setFormMsg(loginMsg, err.message, 'error');
     }
@@ -1112,6 +1125,8 @@
       setCustomer(data.customer, data.token);
       signupForm.reset();
       showAccountView('profile');
+      fillProfileDataForm();
+      showProfileTab('dados');
     } catch (err) {
       setFormMsg(signupMsg, err.message, 'error');
     }
@@ -1134,12 +1149,330 @@
     }
   }
 
+  // ---------- área da conta: meus dados ----------
+  const profileSubnav = document.getElementById('profileSubnav');
+  const profilePanels = {
+    dados: document.getElementById('profilePanel-dados'),
+    pedidos: document.getElementById('profilePanel-pedidos'),
+    enderecos: document.getElementById('profilePanel-enderecos'),
+    senha: document.getElementById('profilePanel-senha'),
+    favoritos: document.getElementById('profilePanel-favoritos'),
+  };
+
+  function showProfileTab(tab) {
+    profileSubnav.querySelectorAll('.profile-subnav-btn').forEach((b) => b.classList.toggle('is-active', b.dataset.ptab === tab));
+    Object.entries(profilePanels).forEach(([key, el]) => {
+      el.hidden = key !== tab;
+    });
+    if (tab === 'pedidos') loadProfileOrders();
+    else if (tab === 'enderecos') loadProfileAddresses();
+    else if (tab === 'favoritos') renderProfileFavorites();
+  }
+
+  profileSubnav.addEventListener('click', (e) => {
+    const btn = e.target.closest('.profile-subnav-btn');
+    if (btn) showProfileTab(btn.dataset.ptab);
+  });
+
+  const profileDataForm = document.getElementById('profileDataForm');
+  const profileDataMsg = document.getElementById('profileDataMsg');
+
+  function fillProfileDataForm() {
+    if (!currentCustomer) return;
+    document.getElementById('pdFirstName').value = currentCustomer.firstName || '';
+    document.getElementById('pdLastName').value = currentCustomer.lastName || '';
+    document.getElementById('pdEmail').value = currentCustomer.email || '';
+    document.getElementById('pdPhone').value = currentCustomer.phone || '';
+    document.getElementById('pdMarketing').checked = !!currentCustomer.marketingOptIn;
+  }
+
+  profileDataForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    setFormMsg(profileDataMsg, '', '');
+    try {
+      const res = await fetch('/api/customers/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: getCustomerToken(),
+          firstName: document.getElementById('pdFirstName').value.trim(),
+          lastName: document.getElementById('pdLastName').value.trim(),
+          phone: document.getElementById('pdPhone').value.trim(),
+          marketingOptIn: document.getElementById('pdMarketing').checked,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Não foi possível salvar');
+      setCustomer(data.customer, null);
+      setFormMsg(profileDataMsg, 'Dados atualizados ✓', 'ok');
+    } catch (err) {
+      setFormMsg(profileDataMsg, err.message, 'error');
+    }
+  });
+
+  // ---------- área da conta: meus pedidos ----------
+  const profileOrderList = document.getElementById('profileOrderList');
+  const PROFILE_ORDER_STATUS_LABELS = { novo: 'Novo', em_andamento: 'Em andamento', concluido: 'Concluído', cancelado: 'Cancelado' };
+
+  async function loadProfileOrders() {
+    profileOrderList.innerHTML = '<p class="bag-empty">Carregando...</p>';
+    try {
+      const res = await fetch('/api/customers/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: getCustomerToken() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Não foi possível carregar seus pedidos');
+      renderProfileOrders(data.orders || []);
+    } catch (err) {
+      profileOrderList.innerHTML = `<p class="bag-empty">${err.message}</p>`;
+    }
+  }
+
+  function renderProfileOrders(orders) {
+    if (!orders.length) {
+      profileOrderList.innerHTML = '<p class="bag-empty">Você ainda não fez nenhum pedido.</p>';
+      return;
+    }
+    profileOrderList.innerHTML = orders
+      .map((o) => {
+        const when = new Date(o.createdAt).toLocaleString('pt-BR');
+        const itemsText = (o.items || []).map((it) => `${it.qty}x ${it.name}`).join(', ');
+        const statusLabel = PROFILE_ORDER_STATUS_LABELS[o.status] || o.status;
+        return `
+          <div class="profile-order-item">
+            <div class="profile-order-header"><span>${when}</span><span>${money(o.total)}</span></div>
+            <p class="profile-order-items">${itemsText}</p>
+            <span class="profile-order-meta">${o.paymentMethod} · ${o.deliveryMethod}${o.couponCode ? ` · cupom ${o.couponCode}` : ''}</span>
+            <span class="profile-order-status st-${o.status}">${statusLabel}</span>
+          </div>
+        `;
+      })
+      .join('');
+  }
+
+  // ---------- área da conta: endereços salvos ----------
+  const profileAddressList = document.getElementById('profileAddressList');
+  const profileAddAddressBtn = document.getElementById('profileAddAddressBtn');
+  const profileAddressForm = document.getElementById('profileAddressForm');
+  const profileAddressMsg = document.getElementById('profileAddressMsg');
+  const paEditId = document.getElementById('paEditId');
+  const paCep = document.getElementById('paCep');
+  const paCepStatus = document.getElementById('paCepStatus');
+  const paFields = document.getElementById('paFields');
+  const paCancelBtn = document.getElementById('paCancelBtn');
+
+  let PROFILE_ADDRESSES = [];
+
+  async function loadProfileAddresses() {
+    profileAddressList.innerHTML = '<p class="bag-empty">Carregando...</p>';
+    try {
+      const res = await fetch('/api/customers/addresses/list', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: getCustomerToken() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Não foi possível carregar seus endereços');
+      PROFILE_ADDRESSES = data.addresses || [];
+      renderProfileAddresses();
+    } catch (err) {
+      profileAddressList.innerHTML = `<p class="bag-empty">${err.message}</p>`;
+    }
+  }
+
+  function renderProfileAddresses() {
+    if (!PROFILE_ADDRESSES.length) {
+      profileAddressList.innerHTML = '<p class="bag-empty">Nenhum endereço salvo ainda.</p>';
+      return;
+    }
+    profileAddressList.innerHTML = '';
+    PROFILE_ADDRESSES.forEach((a) => {
+      const div = document.createElement('div');
+      div.className = 'profile-address-item';
+      div.innerHTML = `
+        <div class="profile-address-info">
+          <span class="profile-address-label">${a.label || 'Endereço'}</span>
+          <span class="profile-address-meta">${a.rua}, ${a.numero}${a.complemento ? ` - ${a.complemento}` : ''} - ${a.bairro}, ${a.cidade}/${a.estado} - CEP ${a.cep}</span>
+        </div>
+        <div class="profile-address-actions">
+          <button type="button" class="profile-address-default-badge ${a.isDefault ? '' : 'is-off'}">${a.isDefault ? 'Padrão' : 'Usar como padrão'}</button>
+          <button type="button" class="account-link profile-address-edit">editar</button>
+          <button type="button" class="profile-address-remove">remover</button>
+        </div>
+      `;
+      div.querySelector('.profile-address-default-badge').addEventListener('click', async () => {
+        if (a.isDefault) return;
+        const res = await fetch('/api/customers/addresses/default', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: getCustomerToken(), id: a.id }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          PROFILE_ADDRESSES = data.addresses;
+          renderProfileAddresses();
+        }
+      });
+      div.querySelector('.profile-address-edit').addEventListener('click', () => startEditAddress(a));
+      div.querySelector('.profile-address-remove').addEventListener('click', async () => {
+        if (!confirm('Remover este endereço?')) return;
+        const res = await fetch('/api/customers/addresses', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: getCustomerToken(), id: a.id }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          PROFILE_ADDRESSES = data.addresses;
+          renderProfileAddresses();
+        }
+      });
+      profileAddressList.appendChild(div);
+    });
+  }
+
+  function openAddressForm() {
+    profileAddressForm.hidden = false;
+    profileAddAddressBtn.hidden = true;
+  }
+  function closeAddressForm() {
+    profileAddressForm.hidden = true;
+    profileAddAddressBtn.hidden = false;
+    profileAddressForm.reset();
+    paEditId.value = '';
+    paFields.hidden = false;
+    setFormMsg(profileAddressMsg, '', '');
+  }
+  profileAddAddressBtn.addEventListener('click', openAddressForm);
+  paCancelBtn.addEventListener('click', closeAddressForm);
+
+  function startEditAddress(a) {
+    openAddressForm();
+    paEditId.value = a.id;
+    paCep.value = a.cep;
+    document.getElementById('paRua').value = a.rua;
+    document.getElementById('paNumero').value = a.numero;
+    document.getElementById('paComplemento').value = a.complemento || '';
+    document.getElementById('paBairro').value = a.bairro;
+    document.getElementById('paCidade').value = a.cidade;
+    document.getElementById('paEstado').value = a.estado;
+    document.getElementById('paLabel').value = a.label || '';
+    document.getElementById('paDefault').checked = !!a.isDefault;
+  }
+
+  async function lookupCepInto(digits, statusEl, fields) {
+    statusEl.textContent = 'Buscando endereço...';
+    statusEl.className = 'bag-cep-status';
+    try {
+      const res = await fetch(`https://viacep.com.br/ws/${digits}/json/`);
+      const data = await res.json();
+      if (data.erro) {
+        statusEl.textContent = 'CEP não encontrado. Confira o número.';
+        statusEl.className = 'bag-cep-status is-error';
+        return;
+      }
+      fields.rua.value = data.logradouro || '';
+      fields.bairro.value = data.bairro || '';
+      fields.cidade.value = data.localidade || '';
+      fields.estado.value = data.uf || '';
+      statusEl.textContent = 'Endereço encontrado ✓';
+      statusEl.className = 'bag-cep-status is-ok';
+    } catch {
+      statusEl.textContent = 'Não foi possível buscar o CEP agora. Preencha manualmente.';
+      statusEl.className = 'bag-cep-status is-error';
+    }
+  }
+
+  paCep.addEventListener('input', () => {
+    paCep.value = formatCep(paCep.value);
+    const digits = paCep.value.replace(/\D/g, '');
+    if (digits.length === 8) {
+      lookupCepInto(digits, paCepStatus, {
+        rua: document.getElementById('paRua'),
+        bairro: document.getElementById('paBairro'),
+        cidade: document.getElementById('paCidade'),
+        estado: document.getElementById('paEstado'),
+      });
+    }
+  });
+
+  profileAddressForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    setFormMsg(profileAddressMsg, '', '');
+    const payload = {
+      token: getCustomerToken(),
+      label: document.getElementById('paLabel').value.trim(),
+      cep: paCep.value.trim(),
+      rua: document.getElementById('paRua').value.trim(),
+      numero: document.getElementById('paNumero').value.trim(),
+      complemento: document.getElementById('paComplemento').value.trim(),
+      bairro: document.getElementById('paBairro').value.trim(),
+      cidade: document.getElementById('paCidade').value.trim(),
+      estado: document.getElementById('paEstado').value.trim(),
+      isDefault: document.getElementById('paDefault').checked,
+    };
+    const editing = !!paEditId.value;
+    try {
+      const res = await fetch(editing ? '/api/customers/addresses/update' : '/api/customers/addresses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editing ? { ...payload, id: paEditId.value } : payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Não foi possível salvar o endereço');
+      PROFILE_ADDRESSES = data.addresses;
+      renderProfileAddresses();
+      closeAddressForm();
+    } catch (err) {
+      setFormMsg(profileAddressMsg, err.message, 'error');
+    }
+  });
+
+  // ---------- área da conta: trocar senha ----------
+  const profilePasswordForm = document.getElementById('profilePasswordForm');
+  const profilePasswordMsg = document.getElementById('profilePasswordMsg');
+
+  profilePasswordForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    setFormMsg(profilePasswordMsg, '', '');
+    try {
+      const res = await fetch('/api/customers/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: getCustomerToken(),
+          currentPassword: document.getElementById('ppCurrent').value,
+          newPassword: document.getElementById('ppNew').value,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Não foi possível trocar a senha');
+      profilePasswordForm.reset();
+      setFormMsg(profilePasswordMsg, 'Senha atualizada ✓', 'ok');
+    } catch (err) {
+      setFormMsg(profilePasswordMsg, err.message, 'error');
+    }
+  });
+
+  // ---------- área da conta: favoritos ----------
+  const profileFavGrid = document.getElementById('profileFavGrid');
+  const profileFavEmpty = document.getElementById('profileFavEmpty');
+
+  function renderProfileFavorites() {
+    const favProducts = PRODUCTS.filter((p) => favs.has(p.id));
+    profileFavGrid.innerHTML = '';
+    profileFavEmpty.hidden = favProducts.length !== 0;
+    favProducts.forEach((p) => profileFavGrid.appendChild(productCard(p)));
+  }
+
   function formatPhone(v) {
     const digits = v.replace(/\D/g, '').slice(0, 11);
     const pattern = digits.length > 10 ? /(\d{2})(\d{5})(\d{0,4})/ : /(\d{2})(\d{4})(\d{0,4})/;
     return digits.replace(pattern, (_, a, b, c) => (c ? `(${a}) ${b}-${c}` : b ? `(${a}) ${b}` : `(${a}`));
   }
-  ['suPhone', 'bagPhone'].forEach((id) => {
+  ['suPhone', 'bagPhone', 'pdPhone'].forEach((id) => {
     const el = document.getElementById(id);
     el.addEventListener('input', () => {
       el.value = formatPhone(el.value);
