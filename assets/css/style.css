@@ -418,6 +418,27 @@ p{margin:0 0 1em;color:var(--ink-soft);line-height:1.7;}
 }
 .ask-btn:hover{border-color:var(--ink);}
 
+/* ---------- seletor de tamanho/cor (só aparece em produtos com variação cadastrada) ---------- */
+.variant-picker{display:flex;flex-wrap:wrap;gap:8px;margin:4px 0;}
+.variant-picker[hidden]{display:none;}
+.variant-chip{
+  padding:6px 14px;border-radius:999px;border:1px solid var(--line);background:var(--white);
+  font-family:var(--sans);font-size:.8rem;cursor:pointer;transition:background .2s,color .2s,border-color .2s;
+}
+.variant-chip:hover:not(:disabled){border-color:var(--ink);}
+.variant-chip.is-active{background:var(--ink);color:#fff;border-color:var(--ink);}
+.variant-chip.is-soldout,.variant-chip:disabled{
+  opacity:.4;text-decoration:line-through;cursor:not-allowed;background:var(--card);
+}
+.soldout-badge{
+  background:rgba(30,28,26,.85);color:#fff;font-size:.68rem;letter-spacing:.05em;text-transform:uppercase;
+  font-weight:700;padding:5px 10px;border-radius:999px;
+}
+.add-btn.is-soldout,.add-btn:disabled{
+  background:var(--card) !important;color:var(--ink-soft) !important;border-color:var(--line) !important;cursor:not-allowed;
+}
+.bag-item-variant{font-size:.76rem;color:var(--ink-soft);font-weight:400;}
+
 /* ---------- novidades ---------- */
 .novidades{padding:90px 0;}
 

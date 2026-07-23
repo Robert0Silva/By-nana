@@ -32,17 +32,29 @@
     return appliedCouponCode ? window.PromoEngine.findCoupon(COUPONS, appliedCouponCode) : null;
   }
 
-  function cartSubtotal(ids) {
-    return ids.reduce((sum, id) => {
-      const p = PRODUCTS.find((x) => x.id === id);
+  // ---------- carrinho: chave por produto+variação (produto sem variação usa variantId nulo) ----------
+  function cartKey(productId, variantId) {
+    return `${productId}::${variantId || '_'}`;
+  }
+
+  function variantLabel(v) {
+    if (v.size && v.color) return `${v.size} - ${v.color}`;
+    return v.size || v.color || 'Único';
+  }
+
+  function cartSubtotal(keys) {
+    return keys.reduce((sum, key) => {
+      const entry = cart[key];
+      if (!entry) return sum;
+      const p = PRODUCTS.find((x) => x.id === entry.productId);
       if (!p) return sum;
       const { price } = getEffective(p);
-      return price ? sum + price * cart[id] : sum;
+      return price ? sum + price * entry.qty : sum;
     }, 0);
   }
 
-  function cartFinalTotal(ids) {
-    const subtotal = cartSubtotal(ids);
+  function cartFinalTotal(keys) {
+    const subtotal = cartSubtotal(keys);
     const coupon = activeCoupon();
     return coupon ? window.PromoEngine.applyCoupon(subtotal, coupon) : subtotal;
   }
@@ -57,6 +69,23 @@
   // ---------- cart (sacola) ----------
   const CART_KEY = 'bynana_cart';
   let cart = JSON.parse(localStorage.getItem(CART_KEY) || '{}');
+
+  // migra o formato antigo ({ [productId]: quantidade }) para o novo ({ [chave]: {productId,variantId,qty} })
+  // — sem isso, quem já tinha itens na sacola antes desta atualização veria a sacola "sumir".
+  (function migrateCartFormat() {
+    let changed = false;
+    const next = {};
+    Object.entries(cart).forEach(([k, v]) => {
+      if (typeof v === 'number') {
+        next[cartKey(k, null)] = { productId: k, variantId: null, qty: v };
+        changed = true;
+      } else if (v && typeof v === 'object' && v.productId) {
+        next[k] = v;
+      }
+    });
+    cart = next;
+    if (changed) localStorage.setItem(CART_KEY, JSON.stringify(cart));
+  })();
 
   // ---------- favorites ----------
   const FAV_KEY = 'bynana_favs';
@@ -92,12 +121,30 @@
         : promo
         ? `<span class="product-price-old">${money(p.price)}</span><span class="product-price is-promo">${money(price)}</span>`
         : `<span class="product-price">${money(price)}</span>`;
+
+    // produto sem nenhuma variação cadastrada se comporta exatamente como antes: sem seletor,
+    // sempre disponível para adicionar.
+    const variants = p.variants || [];
+    const inStock = variants.filter((v) => v.stock > 0);
+    const soldOut = p.hasVariants && inStock.length === 0;
+    const defaultVariant = inStock[0] || null;
+    const variantHtml = p.hasVariants
+      ? `<div class="variant-picker">
+          ${variants
+            .map(
+              (v) => `<button type="button" class="variant-chip${v.stock <= 0 ? ' is-soldout' : ''}${defaultVariant && v.id === defaultVariant.id ? ' is-active' : ''}" data-variant-id="${v.id}" ${v.stock <= 0 ? 'disabled' : ''}>${variantLabel(v)}</button>`
+            )
+            .join('')}
+        </div>`
+      : '';
+
     div.innerHTML = `
       <div class="product-media" data-id="${p.id}">
         <img src="${p.img}" alt="${p.name}" loading="lazy" />
         <div class="product-badges">
           <span class="product-tag">${p.tag}</span>
           ${promo ? `<span class="discount-badge">-${promo.percent}%</span>` : ''}
+          ${soldOut ? `<span class="soldout-badge">Esgotado</span>` : ''}
         </div>
         <button class="fav-btn ${isFav ? 'is-fav' : ''}" data-id="${p.id}" aria-label="Favoritar">${isFav ? '♥' : '♡'}</button>
       </div>
@@ -105,8 +152,9 @@
         <span class="product-cat">${p.brand}${p.collection ? ` · ${p.collection}` : ''}</span>
         <h3 class="product-name">${p.name}</h3>
         <div class="product-price-row">${priceHtml}</div>
+        ${variantHtml}
         <div class="product-actions">
-          <button class="add-btn" data-id="${p.id}">Adicionar à sacola</button>
+          <button class="add-btn${soldOut ? ' is-soldout' : ''}" data-id="${p.id}" ${defaultVariant ? `data-variant-id="${defaultVariant.id}"` : ''} ${soldOut ? 'disabled' : ''}>${soldOut ? 'Esgotado' : 'Adicionar à sacola'}</button>
           <a class="ask-btn" target="_blank" rel="noopener" href="${waLink(
             `Olá! Tenho interesse na peça "${p.name}" que vi no catálogo By NaNa. Pode me passar mais detalhes?`
           )}" aria-label="Perguntar no WhatsApp">${WA_ICON}</a>
@@ -430,23 +478,27 @@
     return '';
   }
 
-  function buildOrderMessage(ids) {
+  function buildOrderMessage(keys) {
     let msg = 'Olá! Vim pelo site da By NaNa e quero fazer um pedido:\n\n';
     msg += `Nome: ${bagNameInput.value.trim()}\nTelefone: ${bagPhoneInput.value.trim()}\n\n`;
-    ids.forEach((id) => {
-      const p = PRODUCTS.find((x) => x.id === id);
+    keys.forEach((key) => {
+      const entry = cart[key];
+      if (!entry) return;
+      const p = PRODUCTS.find((x) => x.id === entry.productId);
       if (!p) return;
+      const variant = entry.variantId ? (p.variants || []).find((v) => v.id === entry.variantId) : null;
       const { price, promo } = getEffective(p);
       const priceText = promo ? `${money(price)} (de ${money(p.price)})` : money(price);
-      msg += `• ${cart[id]}x ${p.name} — ${priceText}\n`;
+      const variantText = variant ? ` (${variantLabel(variant)})` : '';
+      msg += `• ${entry.qty}x ${p.name}${variantText} — ${priceText}\n`;
     });
-    const subtotal = cartSubtotal(ids);
+    const subtotal = cartSubtotal(keys);
     const coupon = activeCoupon();
     if (coupon) {
       msg += `\nSubtotal (itens com preço): ${money(subtotal)}`;
       const discountText = coupon.type === 'percent' ? `${coupon.value}%` : money(coupon.value);
       msg += `\n🏷️ Cupom ${coupon.code} (-${discountText})`;
-      msg += `\nTotal: ${money(cartFinalTotal(ids))}`;
+      msg += `\nTotal: ${money(cartFinalTotal(keys))}`;
     } else {
       msg += `\nTotal (itens com preço): ${money(subtotal)}`;
     }
@@ -459,17 +511,19 @@
     return msg;
   }
 
-  async function persistOrder(ids) {
-    const items = ids.map((id) => {
-      const p = PRODUCTS.find((x) => x.id === id);
+  async function persistOrder(keys) {
+    const items = keys.map((key) => {
+      const entry = cart[key];
+      const p = entry ? PRODUCTS.find((x) => x.id === entry.productId) : null;
       const { price, promo } = p ? getEffective(p) : { price: null, promo: null };
       return {
-        id,
-        name: p ? p.name : id,
-        qty: cart[id],
+        id: entry ? entry.productId : key,
+        name: p ? p.name : key,
+        qty: entry ? entry.qty : 0,
         price,
         listPrice: p ? p.price : null,
         promoId: promo ? promo.promo.id : null,
+        variantId: entry ? entry.variantId : null,
       };
     });
     const coupon = activeCoupon();
@@ -477,9 +531,9 @@
       customerName: bagNameInput.value.trim(),
       customerPhone: bagPhoneInput.value.trim(),
       items,
-      subtotal: cartSubtotal(ids),
-      discount: coupon ? cartSubtotal(ids) - cartFinalTotal(ids) : 0,
-      total: cartFinalTotal(ids),
+      subtotal: cartSubtotal(keys),
+      discount: coupon ? cartSubtotal(keys) - cartFinalTotal(keys) : 0,
+      total: cartFinalTotal(keys),
       couponCode: coupon ? coupon.code : null,
       paymentMethod: selectedPayment,
       deliveryMethod: selectedDelivery,
@@ -556,17 +610,21 @@
     renderCart();
   });
 
+  function syncAddButton(btn) {
+    if (btn.classList.contains('is-soldout')) return;
+    const key = cartKey(btn.dataset.id, btn.dataset.variantId || null);
+    const has = !!cart[key];
+    btn.textContent = has ? 'Adicionado ✓' : 'Adicionar à sacola';
+    btn.classList.toggle('is-added', has);
+  }
+
   function syncAddButtons() {
-    document.querySelectorAll('.add-btn').forEach((btn) => {
-      const has = !!cart[btn.dataset.id];
-      btn.textContent = has ? 'Adicionado ✓' : 'Adicionar à sacola';
-      btn.classList.toggle('is-added', has);
-    });
+    document.querySelectorAll('.add-btn').forEach(syncAddButton);
   }
 
   function renderCart() {
-    const ids = Object.keys(cart);
-    const totalQty = ids.reduce((sum, id) => sum + cart[id], 0);
+    const keys = Object.keys(cart);
+    const totalQty = keys.reduce((sum, key) => sum + cart[key].qty, 0);
     bagCount.textContent = totalQty;
 
     if (totalQty === 0) {
@@ -576,14 +634,16 @@
       mobileBar.classList.add('is-visible');
     }
 
-    if (ids.length === 0) {
+    if (keys.length === 0) {
       bagItemsEl.innerHTML = '<p class="bag-empty">Sua sacola está vazia. Adicione uma peça do catálogo 🤍</p>';
     } else {
       bagItemsEl.innerHTML = '';
-      ids.forEach((id) => {
-        const p = PRODUCTS.find((x) => x.id === id);
+      keys.forEach((key) => {
+        const entry = cart[key];
+        const p = PRODUCTS.find((x) => x.id === entry.productId);
         if (!p) return;
-        const qty = cart[id];
+        const variant = entry.variantId ? (p.variants || []).find((v) => v.id === entry.variantId) : null;
+        const qty = entry.qty;
         const { price, promo } = getEffective(p);
         const priceHtml = promo
           ? `<span class="bag-item-price-old">${money(p.price)}</span><span class="bag-item-price is-promo">${money(price)}</span>`
@@ -593,23 +653,23 @@
         row.innerHTML = `
           <img src="${p.img}" alt="${p.name}" />
           <div class="bag-item-info">
-            <div class="bag-item-name">${p.name}</div>
+            <div class="bag-item-name">${p.name}${variant ? ` <span class="bag-item-variant">(${variantLabel(variant)})</span>` : ''}</div>
             ${priceHtml}
             <div class="bag-item-qty">
-              <button class="qty-btn" data-id="${id}" data-op="dec">−</button>
+              <button class="qty-btn" data-key="${key}" data-op="dec">−</button>
               <span>${qty}</span>
-              <button class="qty-btn" data-id="${id}" data-op="inc">+</button>
+              <button class="qty-btn" data-key="${key}" data-op="inc">+</button>
             </div>
-            <button class="bag-item-remove" data-id="${id}">remover</button>
+            <button class="bag-item-remove" data-key="${key}">remover</button>
           </div>
         `;
         bagItemsEl.appendChild(row);
       });
     }
 
-    const subtotal = cartSubtotal(ids);
+    const subtotal = cartSubtotal(keys);
     const coupon = activeCoupon();
-    const final = cartFinalTotal(ids);
+    const final = cartFinalTotal(keys);
     const hasCouponDiscount = coupon && final < subtotal;
 
     bagSubtotalRow.hidden = !hasCouponDiscount;
@@ -621,8 +681,8 @@
     }
     bagTotalEl.textContent = money(final) === 'Sob consulta' ? 'R$ 0,00' : money(final);
 
-    bagDetails.hidden = ids.length === 0;
-    if (ids.length === 0) {
+    bagDetails.hidden = keys.length === 0;
+    if (keys.length === 0) {
       checkoutBtn.href = waLink('Olá! Vim pelo site da By NaNa 💛');
       bagFormError.hidden = true;
     }
@@ -636,10 +696,12 @@
     if (cartAnnouncer) cartAnnouncer.textContent = text;
   }
 
-  function addToCart(id) {
-    cart[id] = (cart[id] || 0) + 1;
+  function addToCart(productId, variantId) {
+    const key = cartKey(productId, variantId);
+    if (cart[key]) cart[key].qty += 1;
+    else cart[key] = { productId, variantId: variantId || null, qty: 1 };
     saveCart();
-    const p = PRODUCTS.find((x) => x.id === id);
+    const p = PRODUCTS.find((x) => x.id === productId);
     announce(p ? `${p.name} adicionada à sacola.` : 'Peça adicionada à sacola.');
   }
 
@@ -655,24 +717,39 @@
       openQuickview(media.dataset.id);
       return;
     }
+    const chip = e.target.closest('.variant-chip');
+    if (chip) {
+      if (chip.disabled) return;
+      const picker = chip.closest('.variant-picker');
+      picker.querySelectorAll('.variant-chip').forEach((c) => c.classList.toggle('is-active', c === chip));
+      const addBtnForChip =
+        picker.id === 'qvVariantPicker' ? qvAdd : picker.closest('.product-card, .rel-card')?.querySelector('.add-btn');
+      if (addBtnForChip) {
+        addBtnForChip.dataset.variantId = chip.dataset.variantId;
+        syncAddButton(addBtnForChip);
+      }
+      return;
+    }
     const addBtn = e.target.closest('.add-btn');
     if (addBtn) {
-      addToCart(addBtn.dataset.id);
+      if (addBtn.disabled) return;
+      addToCart(addBtn.dataset.id, addBtn.dataset.variantId || null);
       openBag();
       return;
     }
     const qtyBtn = e.target.closest('.qty-btn');
     if (qtyBtn) {
-      const id = qtyBtn.dataset.id;
+      const key = qtyBtn.dataset.key;
       const op = qtyBtn.dataset.op;
-      cart[id] = (cart[id] || 0) + (op === 'inc' ? 1 : -1);
-      if (cart[id] <= 0) delete cart[id];
+      if (!cart[key]) return;
+      cart[key].qty += op === 'inc' ? 1 : -1;
+      if (cart[key].qty <= 0) delete cart[key];
       saveCart();
       return;
     }
     const rmBtn = e.target.closest('.bag-item-remove');
     if (rmBtn) {
-      delete cart[rmBtn.dataset.id];
+      delete cart[rmBtn.dataset.key];
       saveCart();
       return;
     }
@@ -750,6 +827,7 @@
   const qvPriceOld = document.getElementById('qvPriceOld');
   const qvDiscountBadge = document.getElementById('qvDiscountBadge');
   const qvDesc = document.getElementById('qvDesc');
+  const qvVariantPicker = document.getElementById('qvVariantPicker');
   const qvAdd = document.getElementById('qvAdd');
   const qvAsk = document.getElementById('qvAsk');
   const qvFav = document.getElementById('qvFav');
@@ -780,9 +858,30 @@
     qvDiscountBadge.textContent = promo ? `-${promo.percent}%` : '';
     qvDiscountBadge.hidden = !promo;
     qvDesc.textContent = p.desc;
+
+    const variants = p.variants || [];
+    const inStock = variants.filter((v) => v.stock > 0);
+    const soldOut = p.hasVariants && inStock.length === 0;
+    const defaultVariant = inStock[0] || null;
+    if (p.hasVariants) {
+      qvVariantPicker.hidden = false;
+      qvVariantPicker.innerHTML = variants
+        .map(
+          (v) => `<button type="button" class="variant-chip${v.stock <= 0 ? ' is-soldout' : ''}${defaultVariant && v.id === defaultVariant.id ? ' is-active' : ''}" data-variant-id="${v.id}" ${v.stock <= 0 ? 'disabled' : ''}>${variantLabel(v)}</button>`
+        )
+        .join('');
+    } else {
+      qvVariantPicker.hidden = true;
+      qvVariantPicker.innerHTML = '';
+    }
+
     qvAdd.dataset.id = p.id;
-    qvAdd.textContent = cart[p.id] ? 'Adicionado ✓' : 'Adicionar à sacola';
-    qvAdd.classList.toggle('is-added', !!cart[p.id]);
+    if (defaultVariant) qvAdd.dataset.variantId = defaultVariant.id;
+    else delete qvAdd.dataset.variantId;
+    qvAdd.classList.toggle('is-soldout', soldOut);
+    qvAdd.disabled = soldOut;
+    if (soldOut) qvAdd.textContent = 'Esgotado';
+    else syncAddButton(qvAdd);
     qvAsk.href = waLink(`Olá! Tenho interesse na peça "${p.name}" que vi no catálogo By NaNa. Pode me passar mais detalhes?`);
     syncQuickviewFav();
 
@@ -812,11 +911,8 @@
 
   qvOverlay.addEventListener('click', closeQuickview);
   document.getElementById('qvClose').addEventListener('click', closeQuickview);
-  qvAdd.addEventListener('click', () => {
-    addToCart(qvAdd.dataset.id);
-    qvAdd.textContent = 'Adicionado ✓';
-    qvAdd.classList.add('is-added');
-  });
+  // adicionar à sacola é tratado pelo delegate global de ".add-btn" (qvAdd tem essa classe) —
+  // um listener dedicado aqui duplicava addToCart() a cada clique (bug corrigido nesta revisão).
   qvFav.addEventListener('click', () => qvCurrentId && toggleFav(qvCurrentId));
   qvRelatedGrid.addEventListener('click', (e) => {
     const rel = e.target.closest('.rel-card');

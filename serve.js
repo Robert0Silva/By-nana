@@ -92,6 +92,32 @@ async function getCollections() {
   return rows.map((r) => r.name);
 }
 
+// Produto sem nenhuma linha em product_variants não ganha variants/hasVariants=false — se comporta
+// exatamente como antes (sem seletor, sem bloqueio por estoque no site).
+async function attachVariants(products) {
+  if (!products.length) return products;
+  const { rows: variants } = await pool.query(
+    `SELECT id, product_id AS "productId", size, color, sku, stock FROM product_variants ORDER BY position ASC`
+  );
+  const byProduct = new Map();
+  variants.forEach((v) => {
+    if (!byProduct.has(v.productId)) byProduct.set(v.productId, []);
+    byProduct.get(v.productId).push(v);
+  });
+  return products.map((p) => {
+    const vs = byProduct.get(p.id) || [];
+    return { ...p, variants: vs, hasVariants: vs.length > 0, totalStock: vs.reduce((sum, v) => sum + v.stock, 0) };
+  });
+}
+
+async function getProductVariants(productId) {
+  const { rows } = await pool.query(
+    'SELECT id, size, color, sku, stock, position FROM product_variants WHERE product_id = $1 ORDER BY position ASC',
+    [productId]
+  );
+  return rows;
+}
+
 async function getProducts() {
   const { rows } = await pool.query(`
     SELECT p.id, p.name, p.brand, c.name AS category, COALESCE(col.name, '') AS collection,
@@ -102,7 +128,7 @@ async function getProducts() {
     LEFT JOIN collections col ON col.id = p.collection_id
     ORDER BY p.created_at DESC
   `);
-  return rows;
+  return attachVariants(rows);
 }
 
 // "Novidades" da home: curadoria manual (is_featured) se existir alguma; senão, cai automaticamente
@@ -117,7 +143,7 @@ async function getNovidades() {
     WHERE p.is_featured = true
     ORDER BY p.featured_position ASC
   `);
-  if (featured.rowCount) return featured.rows;
+  if (featured.rowCount) return attachVariants(featured.rows);
 
   const fallback = await pool.query(`
     SELECT p.id, p.name, p.brand, c.name AS category, COALESCE(col.name, '') AS collection,
@@ -128,7 +154,7 @@ async function getNovidades() {
     ORDER BY p.created_at DESC
     LIMIT 8
   `);
-  return fallback.rows;
+  return attachVariants(fallback.rows);
 }
 
 async function getPromotions() {
@@ -836,6 +862,87 @@ async function handleApi(req, res, pathname) {
       return sendJSON(res, 200, { products: await getProducts(), novidades: await getNovidades() });
     }
 
+    // ------ estoque/variação (tamanho, cor) — isolado do contrato de /api/products ------
+    if (pathname === '/api/products/variants/list' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      if (!body.productId) return sendJSON(res, 400, { error: 'productId é obrigatório' });
+      return sendJSON(res, 200, { variants: await getProductVariants(body.productId) });
+    }
+
+    if (pathname === '/api/products/variants' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      const productId = body.productId;
+      if (!productId) return sendJSON(res, 400, { error: 'productId é obrigatório' });
+
+      const size = (body.size || '').trim() || null;
+      const color = (body.color || '').trim() || null;
+      const sku = (body.sku || '').trim() || null;
+      const stockNum = Number(body.stock);
+      const stock = Number.isFinite(stockNum) ? Math.max(0, Math.floor(stockNum)) : 0;
+
+      const { rows: maxRows } = await pool.query(
+        'SELECT COALESCE(MAX(position), -1) AS max FROM product_variants WHERE product_id = $1',
+        [productId]
+      );
+      const id = `variant-${Date.now().toString(36)}`;
+      try {
+        await pool.query(
+          'INSERT INTO product_variants (id, product_id, size, color, sku, stock, position) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+          [id, productId, size, color, sku, stock, maxRows[0].max + 1]
+        );
+      } catch (err) {
+        if (err.code === '23505') return sendJSON(res, 409, { error: 'Já existe uma variação com esse SKU' });
+        throw err;
+      }
+      logActivity(admin, 'variant.create', 'product_variant', id, { productId, size, color });
+      return sendJSON(res, 201, { variants: await getProductVariants(productId), products: await getProducts() });
+    }
+
+    if (pathname === '/api/products/variants/update' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
+
+      const size = (body.size || '').trim() || null;
+      const color = (body.color || '').trim() || null;
+      const sku = (body.sku || '').trim() || null;
+      const stockNum = Number(body.stock);
+      const stock = Number.isFinite(stockNum) ? Math.max(0, Math.floor(stockNum)) : 0;
+
+      try {
+        const result = await pool.query(
+          'UPDATE product_variants SET size=$1, color=$2, sku=$3, stock=$4 WHERE id=$5 RETURNING product_id AS "productId"',
+          [size, color, sku, stock, body.id]
+        );
+        if (!result.rowCount) return sendJSON(res, 404, { error: 'Variação não encontrada' });
+        logActivity(admin, 'variant.update', 'product_variant', body.id, { size, color, stock });
+        return sendJSON(res, 200, {
+          variants: await getProductVariants(result.rows[0].productId),
+          products: await getProducts(),
+        });
+      } catch (err) {
+        if (err.code === '23505') return sendJSON(res, 409, { error: 'Já existe uma variação com esse SKU' });
+        throw err;
+      }
+    }
+
+    if (pathname === '/api/products/variants' && req.method === 'DELETE') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
+
+      const { rows } = await pool.query('DELETE FROM product_variants WHERE id = $1 RETURNING product_id AS "productId"', [body.id]);
+      if (!rows.length) return sendJSON(res, 404, { error: 'Variação não encontrada' });
+      logActivity(admin, 'variant.delete', 'product_variant', body.id, null);
+      return sendJSON(res, 200, { variants: await getProductVariants(rows[0].productId), products: await getProducts() });
+    }
+
     if (pathname === '/api/products' && req.method === 'DELETE') {
       const body = await readJSONBody(req);
       const admin = await requireAdmin(body);
@@ -1104,6 +1211,21 @@ async function handleApi(req, res, pathname) {
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [id, customerId, customerName, customerPhone, JSON.stringify(items), subtotal, discount, total, couponCode, paymentMethod, deliveryMethod, address ? JSON.stringify(address) : null]
       );
+
+      // decremento de estoque "best-effort": o negócio sempre confirma manualmente pelo WhatsApp,
+      // então isso é um controle de bookkeeping — nunca deve derrubar o pedido se falhar.
+      for (const item of items) {
+        if (!item.variantId) continue;
+        try {
+          await pool.query('UPDATE product_variants SET stock = GREATEST(stock - $1, 0) WHERE id = $2', [
+            Number(item.qty) || 0,
+            item.variantId,
+          ]);
+        } catch (err) {
+          console.error('Falha ao decrementar estoque da variação', item.variantId, err);
+        }
+      }
+
       return sendJSON(res, 201, { orderId: id });
     }
 

@@ -35,6 +35,22 @@ ALTER TABLE products ADD COLUMN IF NOT EXISTS is_featured BOOLEAN NOT NULL DEFAU
 ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_position INTEGER;
 CREATE INDEX IF NOT EXISTS idx_products_featured ON products(featured_position) WHERE is_featured = true;
 
+-- variação de tamanho/cor + estoque. Produto sem nenhuma linha aqui continua se comportando
+-- exatamente como antes (sem seletor, sem bloqueio por estoque) — só produtos com pelo menos
+-- uma variação cadastrada ganham o seletor no site.
+CREATE TABLE IF NOT EXISTS product_variants (
+  id         TEXT PRIMARY KEY,
+  product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  size       TEXT,
+  color      TEXT,
+  sku        TEXT,
+  stock      INTEGER NOT NULL DEFAULT 0 CHECK (stock >= 0),
+  position   INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_variants_product ON product_variants(product_id);
+CREATE UNIQUE INDEX IF NOT EXISTS variants_sku_idx ON product_variants(sku) WHERE sku IS NOT NULL;
+
 -- scope decides which single target_* column is set; the others stay null.
 CREATE TABLE IF NOT EXISTS promotions (
   id                TEXT PRIMARY KEY,

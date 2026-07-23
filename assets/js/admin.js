@@ -494,11 +494,16 @@
           ${priceHtml}
           <div class="admin-product-item-actions">
             <button type="button" class="admin-product-item-edit" data-id="${p.id}">Editar</button>
+            <button type="button" class="admin-product-item-stock" data-id="${p.id}">${p.hasVariants ? `Estoque (${p.totalStock})` : 'Estoque'}</button>
             <button type="button" class="admin-product-item-remove" data-id="${p.id}">Remover</button>
           </div>
+          <div class="admin-variant-editor" hidden></div>
         </div>
       `;
       div.querySelector('.admin-product-item-edit').addEventListener('click', () => startEditProduct(p));
+      div.querySelector('.admin-product-item-stock').addEventListener('click', () => {
+        toggleVariantEditor(p.id, div.querySelector('.admin-variant-editor'));
+      });
       div.querySelector('.admin-product-item-remove').addEventListener('click', async () => {
         if (!confirm(`Remover "${p.name}" do catálogo?`)) return;
         try {
@@ -518,6 +523,112 @@
   }
 
   productSearch.addEventListener('input', renderProductList);
+
+  // ---------- estoque / variação (tamanho, cor) por produto ----------
+  async function toggleVariantEditor(productId, container) {
+    if (!container.hidden) {
+      container.hidden = true;
+      return;
+    }
+    container.hidden = false;
+    container.innerHTML = '<p class="admin-empty-block">Carregando...</p>';
+    try {
+      const data = await api('/api/products/variants/list', 'POST', { productId });
+      renderVariantEditor(productId, container, data.variants || []);
+    } catch (err) {
+      container.innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+    }
+  }
+
+  function updateStockButton(productId) {
+    const p = PRODUCTS.find((x) => x.id === productId);
+    const btn = document.querySelector(`.admin-product-item-stock[data-id="${productId}"]`);
+    if (btn && p) btn.textContent = p.hasVariants ? `Estoque (${p.totalStock})` : 'Estoque';
+  }
+
+  function renderVariantEditor(productId, container, variants) {
+    container.innerHTML = `
+      <div class="admin-variant-list">
+        ${variants
+          .map(
+            (v) => `
+          <div class="admin-variant-row" data-id="${v.id}">
+            <input type="text" class="v-size" placeholder="Tamanho" value="${v.size || ''}" />
+            <input type="text" class="v-color" placeholder="Cor" value="${v.color || ''}" />
+            <input type="text" class="v-sku" placeholder="SKU (opcional)" value="${v.sku || ''}" />
+            <input type="number" class="v-stock" min="0" step="1" value="${v.stock}" />
+            <button type="button" class="btn btn-outline v-save">Salvar</button>
+            <button type="button" class="admin-variant-remove" aria-label="Remover">✕</button>
+          </div>`
+          )
+          .join('')}
+      </div>
+      <div class="admin-variant-row admin-variant-row-new">
+        <input type="text" class="v-size" placeholder="Tamanho" />
+        <input type="text" class="v-color" placeholder="Cor" />
+        <input type="text" class="v-sku" placeholder="SKU (opcional)" />
+        <input type="number" class="v-stock" min="0" step="1" value="0" />
+        <button type="button" class="btn btn-primary v-add">Adicionar</button>
+      </div>
+      <p class="admin-form-msg" hidden></p>
+    `;
+
+    const msgEl = container.querySelector('.admin-form-msg');
+    function setVariantMsg(text, kind) {
+      msgEl.textContent = text;
+      msgEl.className = `admin-form-msg ${kind ? `is-${kind}` : ''}`;
+      msgEl.hidden = !text;
+    }
+
+    container.querySelectorAll('.admin-variant-row[data-id]').forEach((row) => {
+      const id = row.dataset.id;
+      row.querySelector('.v-save').addEventListener('click', async () => {
+        try {
+          const data = await api('/api/products/variants/update', 'POST', {
+            id,
+            size: row.querySelector('.v-size').value,
+            color: row.querySelector('.v-color').value,
+            sku: row.querySelector('.v-sku').value,
+            stock: row.querySelector('.v-stock').value,
+          });
+          PRODUCTS = data.products;
+          renderVariantEditor(productId, container, data.variants);
+          updateStockButton(productId);
+        } catch (err) {
+          setVariantMsg(err.message, 'error');
+        }
+      });
+      row.querySelector('.admin-variant-remove').addEventListener('click', async () => {
+        if (!confirm('Remover esta variação?')) return;
+        try {
+          const data = await api('/api/products/variants', 'DELETE', { id });
+          PRODUCTS = data.products;
+          renderVariantEditor(productId, container, data.variants);
+          updateStockButton(productId);
+        } catch (err) {
+          setVariantMsg(err.message, 'error');
+        }
+      });
+    });
+
+    const newRow = container.querySelector('.admin-variant-row-new');
+    newRow.querySelector('.v-add').addEventListener('click', async () => {
+      try {
+        const data = await api('/api/products/variants', 'POST', {
+          productId,
+          size: newRow.querySelector('.v-size').value,
+          color: newRow.querySelector('.v-color').value,
+          sku: newRow.querySelector('.v-sku').value,
+          stock: newRow.querySelector('.v-stock').value,
+        });
+        PRODUCTS = data.products;
+        renderVariantEditor(productId, container, data.variants);
+        updateStockButton(productId);
+      } catch (err) {
+        setVariantMsg(err.message, 'error');
+      }
+    });
+  }
 
   // ---------- novidades (curadoria manual da home) ----------
   const featuredList = document.getElementById('featuredList');

@@ -165,10 +165,31 @@
 .admin-form-msg.is-ok{color:#2f7d4f;}
 .admin-form-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
 .admin-product-item.is-editing{outline:2px solid var(--gold);outline-offset:2px;}
-.admin-product-item-actions{display:flex;gap:6px;margin-top:8px;}
-.admin-product-item-actions button{margin-top:0;flex:1;}
+.admin-product-item-actions{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;}
+.admin-product-item-actions button{margin-top:0;flex:1 1 auto;min-width:64px;font-size:.72rem;padding:7px 6px;}
 .admin-product-item-edit{color:var(--ink) !important;}
 .admin-product-item-edit:hover{background:var(--ink) !important;color:#fff !important;border-color:var(--ink) !important;}
+.admin-product-item-stock{color:var(--camel) !important;}
+.admin-product-item-stock:hover{background:var(--camel) !important;color:#fff !important;border-color:var(--camel) !important;}
+
+/* ---------- editor de estoque/variação (dentro do card do produto) ---------- */
+.admin-variant-editor{margin-top:10px;padding-top:10px;border-top:1px dashed var(--line);display:flex;flex-direction:column;gap:8px;}
+.admin-variant-list{display:flex;flex-direction:column;gap:6px;}
+.admin-variant-row{display:grid;grid-template-columns:1fr 1fr 1fr 70px auto auto;gap:6px;align-items:center;}
+.admin-variant-row input{
+  padding:6px 8px;border-radius:6px;border:1px solid var(--line);font-family:var(--sans);
+  font-size:.76rem;background:var(--white);color:var(--ink);width:100%;
+}
+.admin-variant-row button{
+  padding:6px 8px;border-radius:6px;border:1px solid var(--line);background:var(--white);
+  font-size:.72rem;cursor:pointer;white-space:nowrap;
+}
+.admin-variant-remove{color:var(--ink-soft);}
+.admin-variant-remove:hover{background:var(--wine);color:#fff;border-color:var(--wine);}
+.admin-variant-row-new{border-top:1px solid var(--line);padding-top:8px;margin-top:2px;}
+@media (max-width:720px){
+  .admin-variant-row{grid-template-columns:1fr 1fr;}
+}
 .admin-promo-edit,.admin-coupon-edit{
   width:28px;height:28px;border-radius:50%;border:none;background:var(--white);color:var(--ink);
   cursor:pointer;font-size:.8rem;line-height:1;display:flex;align-items:center;justify-content:center;
