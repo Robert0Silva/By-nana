@@ -81,6 +81,9 @@ CREATE TABLE IF NOT EXISTS admin_users (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS admin_users_email_lower_idx ON admin_users (lower(email));
+-- guardado por usuário (não no navegador) para que a marcação de "já vi" acompanhe a pessoa
+-- entre aparelhos/navegadores.
+ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS notifications_seen_at TIMESTAMPTZ NOT NULL DEFAULT now();
 
 -- "quem fez o quê" nas ações mais relevantes do admin; admin_user_id fica nulo se o usuário
 -- for removido no futuro, mas admin_name preserva o nome de quem fez a ação na época.

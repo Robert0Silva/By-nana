@@ -306,7 +306,10 @@ function verifyAdminSessionToken(token) {
 async function requireAdmin(body) {
   const payload = verifyAdminSessionToken(body.adminToken);
   if (!payload) return null;
-  const { rows } = await pool.query('SELECT id, name, email, role, active FROM admin_users WHERE id = $1', [payload.id]);
+  const { rows } = await pool.query(
+    'SELECT id, name, email, role, active, notifications_seen_at AS "notificationsSeenAt" FROM admin_users WHERE id = $1',
+    [payload.id]
+  );
   const user = rows[0];
   if (!user || !user.active) return null;
   return user;
@@ -649,6 +652,27 @@ async function handleApi(req, res, pathname) {
       if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       const { from, to } = normalizeDateRange(body);
       return sendJSON(res, 200, { summary: await getNewCustomers(from, to), from, to });
+    }
+
+    // ------ notificações internas (pedidos/clientes novos desde a última visita) ------
+    if (pathname === '/api/admin/notifications' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+
+      const [{ rows: orderRows }, { rows: customerRows }] = await Promise.all([
+        pool.query("SELECT COUNT(*)::int AS count FROM orders WHERE created_at > $1", [admin.notificationsSeenAt]),
+        pool.query('SELECT COUNT(*)::int AS count FROM customers WHERE created_at > $1', [admin.notificationsSeenAt]),
+      ]);
+      return sendJSON(res, 200, { newOrders: orderRows[0].count, newCustomers: customerRows[0].count });
+    }
+
+    if (pathname === '/api/admin/notifications/seen' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      await pool.query('UPDATE admin_users SET notifications_seen_at = now() WHERE id = $1', [admin.id]);
+      return sendJSON(res, 200, { ok: true });
     }
 
     // ------ products ------

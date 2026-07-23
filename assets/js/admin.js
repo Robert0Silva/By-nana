@@ -161,6 +161,7 @@
     updateCurrentUserDisplay();
     applyRoleVisibility();
     await loadData();
+    startNotificationPolling();
   }
 
   loginForm.addEventListener('submit', async (e) => {
@@ -191,6 +192,7 @@
     adminApp.hidden = true;
     loginScreen.hidden = false;
     loginPassword.value = '';
+    if (notifPollTimer) clearInterval(notifPollTimer);
   });
 
   // ---------- categories ----------
@@ -1556,6 +1558,73 @@
     } catch (err) {
       document.getElementById('relClientesStats').innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
     }
+  }
+
+  // ---------- notificações internas (pedidos/clientes novos desde a última visita) ----------
+  const notifBell = document.getElementById('notifBell');
+  const notifBadge = document.getElementById('notifBadge');
+  const notifPanel = document.getElementById('notifPanel');
+  const notifEmpty = document.getElementById('notifEmpty');
+  const notifOrdersItem = document.getElementById('notifOrdersItem');
+  const notifCustomersItem = document.getElementById('notifCustomersItem');
+  let notifPollTimer = null;
+
+  async function loadNotifications() {
+    try {
+      const data = await api('/api/admin/notifications', 'POST', {});
+      const total = data.newOrders + data.newCustomers;
+      notifBadge.hidden = total === 0;
+      notifBadge.textContent = total > 99 ? '99+' : String(total);
+
+      notifOrdersItem.hidden = data.newOrders === 0;
+      if (data.newOrders > 0) {
+        notifOrdersItem.textContent = `${data.newOrders} pedido${data.newOrders > 1 ? 's' : ''} novo${data.newOrders > 1 ? 's' : ''}`;
+      }
+      notifCustomersItem.hidden = data.newCustomers === 0;
+      if (data.newCustomers > 0) {
+        notifCustomersItem.textContent = `${data.newCustomers} cliente${data.newCustomers > 1 ? 's' : ''} novo${data.newCustomers > 1 ? 's' : ''}`;
+      }
+      notifEmpty.hidden = total > 0;
+    } catch {
+      // notificação é um extra — uma falha aqui não deve incomodar o admin com um alert()
+    }
+  }
+
+  function closeNotifPanel() {
+    notifPanel.hidden = true;
+  }
+
+  notifBell.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const willOpen = notifPanel.hidden;
+    closeAllTabGroups();
+    notifPanel.hidden = !willOpen;
+    if (willOpen) {
+      try {
+        await api('/api/admin/notifications/seen', 'POST', {});
+        notifBadge.hidden = true;
+      } catch {
+        // idem — falha silenciosa
+      }
+    }
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.admin-notif-wrap')) closeNotifPanel();
+  });
+
+  [notifOrdersItem, notifCustomersItem].forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const target = document.querySelector(`.admin-tab[data-target="${btn.dataset.jump}"]`);
+      if (target) target.click();
+      closeNotifPanel();
+    });
+  });
+
+  function startNotificationPolling() {
+    loadNotifications();
+    if (notifPollTimer) clearInterval(notifPollTimer);
+    notifPollTimer = setInterval(loadNotifications, 30000);
   }
 
   // ---------- boot ----------

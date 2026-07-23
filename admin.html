@@ -31,6 +31,17 @@
   <header class="admin-header">
     <a href="/" class="brand"><span class="brand-mark">By NaNa</span></a>
     <div class="admin-header-actions">
+      <div class="admin-notif-wrap">
+        <button type="button" class="icon-btn admin-notif-bell" id="notifBell" aria-label="Notificações">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          <span class="admin-notif-badge" id="notifBadge" hidden>0</span>
+        </button>
+        <div class="admin-notif-panel" id="notifPanel" hidden>
+          <p id="notifEmpty" class="admin-empty-block">Nenhuma novidade por aqui.</p>
+          <button type="button" class="admin-notif-item" id="notifOrdersItem" data-jump="pedidos" hidden></button>
+          <button type="button" class="admin-notif-item" id="notifCustomersItem" data-jump="clientes" hidden></button>
+        </div>
+      </div>
       <span class="admin-current-user" id="adminCurrentUser"></span>
       <a href="/" target="_blank" class="btn btn-ghost">Ver site</a>
       <button id="logoutBtn" class="btn btn-outline">Sair</button>
