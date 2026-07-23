@@ -343,6 +343,94 @@ async function getActivityLog(limit = 200) {
   return rows;
 }
 
+// ---------- relatórios / dashboard (Dashboard e Relatórios compartilham estas mesmas funções) ----------
+function normalizeDateRange(body) {
+  const to = (body.to || '').trim() || new Date().toISOString().slice(0, 10);
+  const from = (body.from || '').trim() || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  return { from, to };
+}
+
+async function getSalesSummary(from, to) {
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS "orderCount", COALESCE(SUM(total), 0) AS revenue
+     FROM orders
+     WHERE status != 'cancelado' AND created_at >= $1::date AND created_at < ($2::date + interval '1 day')`,
+    [from, to]
+  );
+  const { orderCount, revenue } = rows[0];
+  return { orderCount, revenue, avgTicket: orderCount > 0 ? revenue / orderCount : 0 };
+}
+
+async function getSalesByDay(from, to) {
+  const { rows } = await pool.query(
+    `SELECT to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS date,
+            COUNT(*)::int AS orders, COALESCE(SUM(total), 0) AS revenue
+     FROM orders
+     WHERE status != 'cancelado' AND created_at >= $1::date AND created_at < ($2::date + interval '1 day')
+     GROUP BY 1 ORDER BY 1 ASC`,
+    [from, to]
+  );
+  return rows;
+}
+
+async function getTopProducts(from, to, limit = 10) {
+  const { rows } = await pool.query(
+    `SELECT item->>'id' AS "productId", item->>'name' AS name,
+            SUM((item->>'qty')::int)::int AS qty,
+            SUM((item->>'qty')::int * (item->>'price')::numeric) AS revenue
+     FROM orders, jsonb_array_elements(items) AS item
+     WHERE status != 'cancelado' AND created_at >= $1::date AND created_at < ($2::date + interval '1 day')
+     GROUP BY item->>'id', item->>'name'
+     ORDER BY qty DESC
+     LIMIT $3`,
+    [from, to, limit]
+  );
+  return rows;
+}
+
+async function getCouponUsage(from, to) {
+  const { rows } = await pool.query(
+    `SELECT coupon_code AS code, COUNT(*)::int AS uses, COALESCE(SUM(discount), 0) AS "totalDiscount"
+     FROM orders
+     WHERE coupon_code IS NOT NULL AND status != 'cancelado'
+       AND created_at >= $1::date AND created_at < ($2::date + interval '1 day')
+     GROUP BY coupon_code
+     ORDER BY uses DESC`,
+    [from, to]
+  );
+  return rows;
+}
+
+// item->>'promoId' só existe em pedidos feitos depois que o checkout passou a gravar essa
+// atribuição — pedidos antigos simplesmente não entram nesta soma.
+async function getPromotionUsage(from, to) {
+  const { rows } = await pool.query(
+    `SELECT o.promo_id AS "promoId", o.uses, o.qty, o.total_discount AS "totalDiscount", p.label, p.scope
+     FROM (
+       SELECT item->>'promoId' AS promo_id, COUNT(*)::int AS uses, SUM((item->>'qty')::int)::int AS qty,
+              SUM(((item->>'listPrice')::numeric - (item->>'price')::numeric) * (item->>'qty')::int) AS total_discount
+       FROM orders, jsonb_array_elements(items) AS item
+       WHERE item->>'promoId' IS NOT NULL AND status != 'cancelado'
+         AND created_at >= $1::date AND created_at < ($2::date + interval '1 day')
+       GROUP BY item->>'promoId'
+     ) o
+     LEFT JOIN promotions p ON p.id = o.promo_id
+     ORDER BY o.total_discount DESC`,
+    [from, to]
+  );
+  return rows;
+}
+
+async function getNewCustomers(from, to) {
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS "newCustomers", COUNT(*) FILTER (WHERE marketing_opt_in)::int AS "optInCount"
+     FROM customers
+     WHERE created_at >= $1::date AND created_at < ($2::date + interval '1 day')`,
+    [from, to]
+  );
+  return rows[0];
+}
+
 // ---------- customer auth (hash + sessão assinada, sem dependências novas) ----------
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
@@ -509,6 +597,58 @@ async function handleApi(req, res, pathname) {
       const admin = await requireAdmin(body);
       if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       return sendJSON(res, 200, { activity: await getActivityLog() });
+    }
+
+    // ------ dashboard / relatórios ------
+    if (pathname === '/api/admin/dashboard' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+
+      const to = new Date().toISOString().slice(0, 10);
+      const from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const [summary, topProducts, newCustomers, allOrders] = await Promise.all([
+        getSalesSummary(from, to),
+        getTopProducts(from, to, 5),
+        getNewCustomers(from, to),
+        getOrders(),
+      ]);
+      return sendJSON(res, 200, { summary, topProducts, newCustomers, recentOrders: allOrders.slice(0, 5), from, to });
+    }
+
+    if (pathname === '/api/admin/reports/sales' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      const { from, to } = normalizeDateRange(body);
+      const [summary, byDay] = await Promise.all([getSalesSummary(from, to), getSalesByDay(from, to)]);
+      return sendJSON(res, 200, { summary, byDay, from, to });
+    }
+
+    if (pathname === '/api/admin/reports/products' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      const { from, to } = normalizeDateRange(body);
+      const products = await getTopProducts(from, to, 50);
+      return sendJSON(res, 200, { products, from, to });
+    }
+
+    if (pathname === '/api/admin/reports/promotions' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      const { from, to } = normalizeDateRange(body);
+      const [coupons, promotions] = await Promise.all([getCouponUsage(from, to), getPromotionUsage(from, to)]);
+      return sendJSON(res, 200, { coupons, promotions, from, to });
+    }
+
+    if (pathname === '/api/admin/reports/customers' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      const { from, to } = normalizeDateRange(body);
+      return sendJSON(res, 200, { summary: await getNewCustomers(from, to), from, to });
     }
 
     // ------ products ------

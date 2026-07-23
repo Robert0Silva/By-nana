@@ -462,8 +462,15 @@
   async function persistOrder(ids) {
     const items = ids.map((id) => {
       const p = PRODUCTS.find((x) => x.id === id);
-      const { price } = p ? getEffective(p) : { price: null };
-      return { id, name: p ? p.name : id, qty: cart[id], price };
+      const { price, promo } = p ? getEffective(p) : { price: null, promo: null };
+      return {
+        id,
+        name: p ? p.name : id,
+        qty: cart[id],
+        price,
+        listPrice: p ? p.price : null,
+        promoId: promo ? promo.promo.id : null,
+      };
     });
     const coupon = activeCoupon();
     const payload = {

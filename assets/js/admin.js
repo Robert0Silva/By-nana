@@ -82,6 +82,7 @@
     loadOrders();
     loadAdminUsers();
     loadActivity();
+    loadDashboard();
   }
 
   // ---------- tabs (menu "Catálogo/Marketing/Conteúdo/Vendas" com submenus em dropdown) ----------
@@ -121,6 +122,14 @@
     if (e.key === 'Escape') closeAllTabGroups();
   });
 
+  const TAB_LOAD_HANDLERS = {
+    dashboard: () => loadDashboard(),
+    'rel-vendas': () => loadSalesReport(),
+    'rel-produtos': () => loadProductsReport(),
+    'rel-promocoes': () => loadPromotionsReport(),
+    'rel-clientes': () => loadCustomersReport(),
+  };
+
   document.querySelectorAll('.admin-tab').forEach((btn) => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.admin-tab').forEach((b) => b.classList.toggle('is-active', b === btn));
@@ -129,10 +138,11 @@
       });
       setActiveTabGroupFor(btn.dataset.target);
       closeAllTabGroups();
+      if (TAB_LOAD_HANDLERS[btn.dataset.target]) TAB_LOAD_HANDLERS[btn.dataset.target]();
     });
   });
 
-  setActiveTabGroupFor('categorias');
+  setActiveTabGroupFor('dashboard');
 
   // ---------- login (admin multiusuário: e-mail + senha, token de sessão) ----------
   async function fetchSession(token) {
@@ -1361,6 +1371,191 @@
       `;
       activityList.appendChild(div);
     });
+  }
+
+  // ---------- dashboard + relatórios ----------
+  function todayISO() {
+    return new Date().toISOString().slice(0, 10);
+  }
+  function daysAgoISO(n) {
+    return new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  }
+
+  function renderBarList(container, items, valueFormatter) {
+    if (!items.length) {
+      container.innerHTML = '<p class="admin-empty-block">Sem dados no período.</p>';
+      return;
+    }
+    const max = Math.max(...items.map((i) => i.value));
+    container.innerHTML = items
+      .map(
+        (i) => `
+      <div class="admin-bar-row">
+        <div class="admin-bar-row-label"><span>${i.label}</span><span>${valueFormatter(i.value)}</span></div>
+        <div class="admin-bar-track"><div class="admin-bar-fill" style="width:${max > 0 ? (i.value / max) * 100 : 0}%"></div></div>
+      </div>`
+      )
+      .join('');
+  }
+
+  function renderTable(container, columns, rows) {
+    if (!rows.length) {
+      container.innerHTML = '<p class="admin-empty-block">Sem dados no período.</p>';
+      return;
+    }
+    container.innerHTML = `
+      <table>
+        <thead><tr>${columns.map((c) => `<th>${c.label}</th>`).join('')}</tr></thead>
+        <tbody>${rows.map((r) => `<tr>${columns.map((c) => `<td>${c.render(r)}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table>
+    `;
+  }
+
+  async function loadDashboard() {
+    try {
+      const data = await api('/api/admin/dashboard', 'POST', {});
+      document.getElementById('dashRevenue').textContent = money(data.summary.revenue);
+      document.getElementById('dashOrders').textContent = data.summary.orderCount;
+      document.getElementById('dashTicket').textContent = money(data.summary.avgTicket);
+      document.getElementById('dashNewCustomers').textContent = data.newCustomers.newCustomers;
+
+      renderBarList(
+        document.getElementById('dashTopProducts'),
+        data.topProducts.map((p) => ({ label: p.name, value: p.qty })),
+        (v) => `${v} un.`
+      );
+
+      const recentEl = document.getElementById('dashRecentOrders');
+      if (!data.recentOrders.length) {
+        recentEl.innerHTML = '<p class="admin-empty-block">Nenhum pedido ainda.</p>';
+      } else {
+        recentEl.innerHTML = data.recentOrders
+          .map(
+            (o) => `
+          <div class="admin-order-item">
+            <div class="admin-order-info">
+              <span class="admin-order-name">${o.customerName}</span>
+              <span class="admin-order-meta">${new Date(o.createdAt).toLocaleString('pt-BR')} · ${money(o.total)}</span>
+            </div>
+          </div>`
+          )
+          .join('');
+      }
+    } catch (err) {
+      document.getElementById('dashTopProducts').innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+    }
+  }
+
+  // ---------- relatório de vendas ----------
+  const relVendasFrom = document.getElementById('relVendasFrom');
+  const relVendasTo = document.getElementById('relVendasTo');
+  relVendasFrom.value = daysAgoISO(30);
+  relVendasTo.value = todayISO();
+  document.getElementById('relVendasApply').addEventListener('click', loadSalesReport);
+
+  async function loadSalesReport() {
+    try {
+      const data = await api('/api/admin/reports/sales', 'POST', { from: relVendasFrom.value, to: relVendasTo.value });
+      relVendasFrom.value = data.from;
+      relVendasTo.value = data.to;
+      document.getElementById('relVendasStats').innerHTML = `
+        <div class="admin-stat-card"><span class="admin-stat-label">Receita</span><span class="admin-stat-value">${money(data.summary.revenue)}</span></div>
+        <div class="admin-stat-card"><span class="admin-stat-label">Pedidos</span><span class="admin-stat-value">${data.summary.orderCount}</span></div>
+        <div class="admin-stat-card"><span class="admin-stat-label">Ticket médio</span><span class="admin-stat-value">${money(data.summary.avgTicket)}</span></div>
+      `;
+      renderBarList(
+        document.getElementById('relVendasByDay'),
+        data.byDay.map((d) => ({ label: formatDate(d.date), value: Number(d.revenue) })),
+        (v) => money(v)
+      );
+    } catch (err) {
+      document.getElementById('relVendasStats').innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+    }
+  }
+
+  // ---------- relatório de produtos mais vendidos ----------
+  const relProdutosFrom = document.getElementById('relProdutosFrom');
+  const relProdutosTo = document.getElementById('relProdutosTo');
+  relProdutosFrom.value = daysAgoISO(30);
+  relProdutosTo.value = todayISO();
+  document.getElementById('relProdutosApply').addEventListener('click', loadProductsReport);
+
+  async function loadProductsReport() {
+    try {
+      const data = await api('/api/admin/reports/products', 'POST', { from: relProdutosFrom.value, to: relProdutosTo.value });
+      relProdutosFrom.value = data.from;
+      relProdutosTo.value = data.to;
+      renderTable(
+        document.getElementById('relProdutosTable'),
+        [
+          { label: 'Produto', render: (r) => r.name },
+          { label: 'Quantidade', render: (r) => r.qty },
+          { label: 'Receita', render: (r) => money(Number(r.revenue)) },
+        ],
+        data.products
+      );
+    } catch (err) {
+      document.getElementById('relProdutosTable').innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+    }
+  }
+
+  // ---------- relatório de cupons e promoções ----------
+  const relPromoFrom = document.getElementById('relPromoFrom');
+  const relPromoTo = document.getElementById('relPromoTo');
+  relPromoFrom.value = daysAgoISO(30);
+  relPromoTo.value = todayISO();
+  document.getElementById('relPromoApply').addEventListener('click', loadPromotionsReport);
+
+  async function loadPromotionsReport() {
+    try {
+      const data = await api('/api/admin/reports/promotions', 'POST', { from: relPromoFrom.value, to: relPromoTo.value });
+      relPromoFrom.value = data.from;
+      relPromoTo.value = data.to;
+      renderTable(
+        document.getElementById('relCouponsTable'),
+        [
+          { label: 'Código', render: (r) => r.code },
+          { label: 'Usos', render: (r) => r.uses },
+          { label: 'Desconto total', render: (r) => money(Number(r.totalDiscount)) },
+        ],
+        data.coupons
+      );
+      renderTable(
+        document.getElementById('relPromotionsTable'),
+        [
+          { label: 'Promoção', render: (r) => r.label || r.promoId },
+          { label: 'Usos', render: (r) => r.uses },
+          { label: 'Quantidade', render: (r) => r.qty },
+          { label: 'Desconto total', render: (r) => money(Number(r.totalDiscount)) },
+        ],
+        data.promotions
+      );
+    } catch (err) {
+      document.getElementById('relCouponsTable').innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+    }
+  }
+
+  // ---------- relatório de clientes ----------
+  const relClientesFrom = document.getElementById('relClientesFrom');
+  const relClientesTo = document.getElementById('relClientesTo');
+  relClientesFrom.value = daysAgoISO(30);
+  relClientesTo.value = todayISO();
+  document.getElementById('relClientesApply').addEventListener('click', loadCustomersReport);
+
+  async function loadCustomersReport() {
+    try {
+      const data = await api('/api/admin/reports/customers', 'POST', { from: relClientesFrom.value, to: relClientesTo.value });
+      relClientesFrom.value = data.from;
+      relClientesTo.value = data.to;
+      const rate = data.summary.newCustomers > 0 ? Math.round((data.summary.optInCount / data.summary.newCustomers) * 100) : 0;
+      document.getElementById('relClientesStats').innerHTML = `
+        <div class="admin-stat-card"><span class="admin-stat-label">Novos clientes</span><span class="admin-stat-value">${data.summary.newCustomers}</span></div>
+        <div class="admin-stat-card"><span class="admin-stat-label">Aceitam novidades</span><span class="admin-stat-value">${data.summary.optInCount}</span></div>
+        <div class="admin-stat-card"><span class="admin-stat-label">Taxa de opt-in</span><span class="admin-stat-value">${rate}%</span></div>
+      `;
+    } catch (err) {
+      document.getElementById('relClientesStats').innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+    }
   }
 
   // ---------- boot ----------
