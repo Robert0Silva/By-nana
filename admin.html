@@ -47,6 +47,7 @@
       <button type="button" class="admin-tab" data-target="cupons">Cupons</button>
       <button type="button" class="admin-tab" data-target="imagens">Imagens do site</button>
       <button type="button" class="admin-tab" data-target="clientes">Clientes</button>
+      <button type="button" class="admin-tab" data-target="stories">Stories</button>
     </nav>
 
     <section class="admin-panel admin-panel-narrow" id="panel-categorias">
@@ -236,6 +237,51 @@
         <p class="admin-card-hint">Cadastros feitos pelos próprios clientes no site — use como base para ações de CRM (aniversário, novidades, campanhas). O CPF é exibido parcialmente por privacidade.</p>
         <input type="search" id="customerSearch" class="admin-search" placeholder="Buscar por nome ou e-mail..." />
         <div class="admin-customer-list" id="customerList"></div>
+      </section>
+    </section>
+
+    <section class="admin-panel" id="panel-stories" hidden>
+      <section class="admin-card admin-card-wide">
+        <h2>Stories (carrossel de vídeo)</h2>
+        <p class="admin-card-hint">
+          Vídeos curtos que aparecem como bolhas no topo do site, no estilo dos Stories do Instagram.
+          Grave/exporte clipes curtos e já comprimidos (tipo os que você já sobe pro Instagram) — o limite é de 40&nbsp;MB por vídeo.
+        </p>
+        <form id="storyForm" class="admin-product-form">
+          <label>
+            Título (opcional)
+            <input type="text" id="stTitle" placeholder="Ex: Novidades da semana" />
+          </label>
+
+          <div class="admin-form-row">
+            <label>
+              Vídeo
+              <input type="file" id="stVideo" accept="video/*" required />
+            </label>
+            <label>
+              Capa (opcional — sem ela, mostramos o 1º frame do vídeo)
+              <input type="file" id="stCover" accept="image/*" />
+            </label>
+          </div>
+          <video id="stVideoPreview" class="admin-preview admin-story-preview" hidden muted controls></video>
+          <img id="stCoverPreview" class="admin-preview" hidden alt="Pré-visualização da capa" />
+
+          <div class="admin-form-row">
+            <label>
+              Link do botão (opcional — produto, WhatsApp, etc.)
+              <input type="url" id="stLinkUrl" placeholder="https://..." />
+            </label>
+            <label>
+              Texto do botão
+              <input type="text" id="stLinkLabel" placeholder="Ver mais" value="Ver mais" />
+            </label>
+          </div>
+
+          <button type="submit" class="btn btn-primary btn-lg" id="stSubmit">Publicar story</button>
+          <p class="admin-form-msg" id="storyMsg" hidden></p>
+        </form>
+
+        <div class="admin-story-list" id="storyList"></div>
       </section>
     </section>
   </main>

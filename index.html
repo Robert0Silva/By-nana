@@ -70,6 +70,12 @@
   </div>
 </header>
 
+<section class="stories-rail-wrap" id="storiesSection" hidden>
+  <div class="wrap">
+    <div class="stories-rail" id="storiesRail"><!-- gerado via JS a partir dos stories cadastrados --></div>
+  </div>
+</section>
+
 <main>
 
   <section class="hero">
@@ -395,6 +401,24 @@
     <p class="account-sub">Sua conta By NaNa.</p>
     <button type="button" class="btn btn-outline btn-block" id="logoutBtn">Sair da conta</button>
   </div>
+</div>
+
+<div class="story-viewer-overlay" id="storyOverlay"></div>
+<div class="story-viewer" id="storyViewer" role="dialog" aria-modal="true">
+  <div class="story-progress" id="storyProgress"><!-- gerado via JS, uma barra por story --></div>
+  <div class="story-top-actions">
+    <span class="story-title" id="storyTitle"></span>
+    <button class="icon-btn story-mute" id="storyMute" aria-label="Ativar som">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 9v6h4l5 4V5L7 9H3Z"/><path d="M16 8a5 5 0 0 1 0 8" id="storyMuteWave" /></svg>
+    </button>
+    <button class="icon-btn story-close" id="storyClose" aria-label="Fechar">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 5l14 14M19 5 5 19"/></svg>
+    </button>
+  </div>
+  <video id="storyVideo" playsinline muted></video>
+  <button class="story-nav story-nav-prev" id="storyPrev" aria-label="Story anterior"></button>
+  <button class="story-nav story-nav-next" id="storyNext" aria-label="Próximo story"></button>
+  <a class="btn btn-primary story-cta" id="storyCta" hidden target="_blank" rel="noopener"></a>
 </div>
 
 <div class="mobile-bar" id="mobileBar">

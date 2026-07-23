@@ -15,6 +15,8 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const root = __dirname;
 const port = 8787;
 const uploadDir = path.join(root, 'assets/img/processed');
+const videosDir = path.join(root, 'assets/videos');
+fs.mkdirSync(videosDir, { recursive: true });
 
 // Change this to control who can use the admin panel (/admin.html).
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
@@ -59,6 +61,8 @@ const types_ = {
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.svg': 'image/svg+xml',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
 };
 
 function slugify(str) {
@@ -154,6 +158,16 @@ async function getCustomersForAdmin() {
   return rows.map((c) => ({ ...c, cpf: maskCpf(c.cpf) }));
 }
 
+async function getStories(onlyActive) {
+  const { rows } = await pool.query(`
+    SELECT id, title, video, cover, link_url AS "linkUrl", link_label AS "linkLabel", active
+    FROM stories
+    ${onlyActive ? 'WHERE active = true' : ''}
+    ORDER BY position ASC, created_at ASC
+  `);
+  return rows;
+}
+
 // ---------- request helpers ----------
 function sendJSON(res, status, obj) {
   const body = JSON.stringify(obj);
@@ -241,15 +255,16 @@ async function handleApi(req, res, pathname) {
   try {
     // ------ catalog ------
     if (pathname === '/api/data' && req.method === 'GET') {
-      const [products, categories, collections, promotions, coupons, categoryGroups] = await Promise.all([
+      const [products, categories, collections, promotions, coupons, categoryGroups, stories] = await Promise.all([
         getProducts(),
         getCategories(),
         getCollections(),
         getPromotions(),
         getCoupons(),
         getCategoryGroups(),
+        getStories(true),
       ]);
-      return sendJSON(res, 200, { products, categories, collections, promotions, coupons, categoryGroups });
+      return sendJSON(res, 200, { products, categories, collections, promotions, coupons, categoryGroups, stories });
     }
 
     if (pathname === '/api/login' && req.method === 'POST') {
@@ -552,6 +567,107 @@ async function handleApi(req, res, pathname) {
       const body = await readJSONBody(req);
       if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
       return sendJSON(res, 200, { customers: await getCustomersForAdmin() });
+    }
+
+    // ------ stories (carrossel de vídeo estilo Instagram) ------
+    if (pathname === '/api/stories' && req.method === 'POST') {
+      const body = await readJSONBody(req, 40 * 1024 * 1024);
+      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+
+      if (!body.video || typeof body.video !== 'string' || !body.video.startsWith('data:video/')) {
+        return sendJSON(res, 400, { error: 'Envie um vídeo' });
+      }
+      const videoMatch = body.video.match(/^data:video\/([a-zA-Z0-9.+-]+);base64,(.+)$/s);
+      if (!videoMatch) return sendJSON(res, 400, { error: 'Vídeo inválido' });
+      const videoExt = videoMatch[1] === 'webm' ? '.webm' : '.mp4';
+      const videoBuffer = Buffer.from(videoMatch[2], 'base64');
+
+      const id = `story-${Date.now().toString(36)}`;
+      const videoFileName = `${id}${videoExt}`;
+      await fs.promises.writeFile(path.join(videosDir, videoFileName), videoBuffer);
+      const video = `assets/videos/${videoFileName}`;
+
+      let cover = null;
+      if (body.cover && typeof body.cover === 'string' && body.cover.startsWith('data:image/')) {
+        const coverMatch = body.cover.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/s);
+        if (coverMatch) {
+          const coverBuffer = Buffer.from(coverMatch[1], 'base64');
+          const coverFileName = `${id}-cover.jpg`;
+          await sharp(coverBuffer)
+            .rotate()
+            .resize({ width: 500, height: 900, fit: 'cover' })
+            .jpeg({ quality: 88, mozjpeg: true })
+            .toFile(path.join(uploadDir, coverFileName));
+          cover = `assets/img/processed/${coverFileName}`;
+        }
+      }
+
+      const title = (body.title || '').trim();
+      const linkUrl = (body.linkUrl || '').trim() || null;
+      const linkLabel = (body.linkLabel || '').trim() || 'Ver mais';
+
+      const { rows } = await pool.query('SELECT COALESCE(MAX(position), -1) AS max FROM stories');
+      const position = rows[0].max + 1;
+
+      await pool.query(
+        `INSERT INTO stories (id, title, video, cover, link_url, link_label, position)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [id, title, video, cover, linkUrl, linkLabel, position]
+      );
+      return sendJSON(res, 201, { stories: await getStories(false) });
+    }
+
+    if (pathname === '/api/stories' && req.method === 'DELETE') {
+      const body = await readJSONBody(req);
+      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
+
+      const { rows } = await pool.query('SELECT video, cover FROM stories WHERE id = $1', [body.id]);
+      await pool.query('DELETE FROM stories WHERE id = $1', [body.id]);
+      if (rows[0]) {
+        for (const rel of [rows[0].video, rows[0].cover]) {
+          if (!rel) continue;
+          fs.promises.unlink(path.join(root, rel)).catch(() => {});
+        }
+      }
+      return sendJSON(res, 200, { stories: await getStories(false) });
+    }
+
+    if (pathname === '/api/stories/reorder' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const direction = body.direction === 'up' ? 'up' : body.direction === 'down' ? 'down' : null;
+      if (!body.id || !direction) return sendJSON(res, 400, { error: 'id e direção são obrigatórios' });
+
+      const all = await getStories(false);
+      const idx = all.findIndex((s) => s.id === body.id);
+      if (idx === -1) return sendJSON(res, 404, { error: 'Story não encontrado' });
+      const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+      if (swapIdx < 0 || swapIdx >= all.length) return sendJSON(res, 200, { stories: all });
+
+      const a = all[idx];
+      const b = all[swapIdx];
+      const [{ position: posA }, { position: posB }] = await Promise.all([
+        pool.query('SELECT position FROM stories WHERE id = $1', [a.id]).then((r) => r.rows[0]),
+        pool.query('SELECT position FROM stories WHERE id = $1', [b.id]).then((r) => r.rows[0]),
+      ]);
+      await pool.query('UPDATE stories SET position = $1 WHERE id = $2', [posB, a.id]);
+      await pool.query('UPDATE stories SET position = $1 WHERE id = $2', [posA, b.id]);
+      return sendJSON(res, 200, { stories: await getStories(false) });
+    }
+
+    if (pathname === '/api/stories/active' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
+      await pool.query('UPDATE stories SET active = $1 WHERE id = $2', [body.active === true, body.id]);
+      return sendJSON(res, 200, { stories: await getStories(false) });
+    }
+
+    if (pathname === '/api/stories/list' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      return sendJSON(res, 200, { stories: await getStories(false) });
     }
 
     // ------ site images (fixed-location landing page photos) ------

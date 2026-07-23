@@ -11,6 +11,7 @@
   let PROMOTIONS = [];
   let COUPONS = [];
   let CATEGORY_GROUPS = [];
+  let STORIES = [];
 
   const money = (v) =>
     v == null ? 'Sob consulta' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -690,6 +691,140 @@
     if (rel) openQuickview(rel.dataset.id);
   });
 
+  // ---------- stories (carrossel de vídeo estilo Instagram) ----------
+  const storiesSection = document.getElementById('storiesSection');
+  const storiesRail = document.getElementById('storiesRail');
+  const storyOverlay = document.getElementById('storyOverlay');
+  const storyViewer = document.getElementById('storyViewer');
+  const storyProgress = document.getElementById('storyProgress');
+  const storyVideo = document.getElementById('storyVideo');
+  const storyTitle = document.getElementById('storyTitle');
+  const storyCta = document.getElementById('storyCta');
+  const storyMuteBtn = document.getElementById('storyMute');
+
+  let currentStoryIndex = -1;
+  let storyMuted = true;
+
+  function renderStoriesRail() {
+    if (!storiesRail || !storiesSection) return;
+    storiesSection.hidden = !STORIES.length;
+    storiesRail.innerHTML = '';
+    STORIES.forEach((s, i) => {
+      const btn = document.createElement('button');
+      btn.className = 'story-bubble';
+      btn.innerHTML = `
+        <span class="story-ring">
+          ${
+            s.cover
+              ? `<img src="${s.cover}" alt="${s.title || 'Story'}" />`
+              : `<video src="${s.video}" preload="metadata" muted playsinline></video>`
+          }
+        </span>
+        ${s.title ? `<span class="story-bubble-label">${s.title}</span>` : ''}
+      `;
+      btn.addEventListener('click', () => openStoryViewer(i));
+      storiesRail.appendChild(btn);
+    });
+  }
+
+  function buildStoryProgress() {
+    storyProgress.innerHTML = STORIES.map(() => '<div class="story-progress-bar"><span></span></div>').join('');
+  }
+
+  function setStoryProgressState(index, state) {
+    const bar = storyProgress.children[index];
+    if (!bar) return;
+    const fill = bar.querySelector('span');
+    bar.classList.toggle('is-active', state === 'active');
+    fill.style.transition = 'none';
+    fill.style.width = state === 'done' ? '100%' : '0%';
+  }
+
+  function playStoryAt(index) {
+    STORIES.forEach((_, i) => setStoryProgressState(i, i < index ? 'done' : 'pending'));
+
+    const story = STORIES[index];
+    storyTitle.textContent = story.title || '';
+    if (story.linkUrl) {
+      storyCta.href = story.linkUrl;
+      storyCta.textContent = story.linkLabel || 'Ver mais';
+      storyCta.hidden = false;
+    } else {
+      storyCta.hidden = true;
+    }
+    storyVideo.muted = storyMuted;
+    storyMuteBtn.classList.toggle('is-unmuted', !storyMuted);
+    storyVideo.src = story.video;
+    storyVideo.currentTime = 0;
+    storyVideo.play().catch(() => {});
+  }
+
+  function openStoryViewer(index) {
+    if (!STORIES.length) return;
+    buildStoryProgress();
+    currentStoryIndex = index;
+    storyOverlay.classList.add('is-open');
+    storyViewer.classList.add('is-open');
+    playStoryAt(index);
+  }
+
+  function nextStory() {
+    if (currentStoryIndex >= STORIES.length - 1) {
+      closeStoryViewer();
+      return;
+    }
+    currentStoryIndex += 1;
+    playStoryAt(currentStoryIndex);
+  }
+
+  function prevStory() {
+    currentStoryIndex = Math.max(0, currentStoryIndex - 1);
+    playStoryAt(currentStoryIndex);
+  }
+
+  function closeStoryViewer() {
+    storyOverlay.classList.remove('is-open');
+    storyViewer.classList.remove('is-open');
+    storyVideo.pause();
+    storyVideo.removeAttribute('src');
+    storyVideo.load();
+    currentStoryIndex = -1;
+  }
+
+  storyVideo.addEventListener('loadedmetadata', () => {
+    const bar = storyProgress.children[currentStoryIndex];
+    if (!bar) return;
+    const fill = bar.querySelector('span');
+    fill.style.transition = 'none';
+    fill.style.width = '0%';
+    void fill.offsetWidth; // força reflow antes de animar a transição
+    bar.classList.add('is-active');
+    fill.style.transition = `width ${storyVideo.duration}s linear`;
+    fill.style.width = '100%';
+  });
+  storyVideo.addEventListener('ended', nextStory);
+
+  document.getElementById('storyNext').addEventListener('click', nextStory);
+  document.getElementById('storyPrev').addEventListener('click', prevStory);
+  document.getElementById('storyClose').addEventListener('click', closeStoryViewer);
+  storyOverlay.addEventListener('click', closeStoryViewer);
+  storyMuteBtn.addEventListener('click', () => {
+    storyMuted = !storyMuted;
+    storyVideo.muted = storyMuted;
+    storyMuteBtn.classList.toggle('is-unmuted', !storyMuted);
+  });
+
+  let storyTouchStartX = 0;
+  storyViewer.addEventListener('touchstart', (e) => {
+    storyTouchStartX = e.touches[0].clientX;
+  });
+  storyViewer.addEventListener('touchend', (e) => {
+    const dx = e.changedTouches[0].clientX - storyTouchStartX;
+    if (Math.abs(dx) < 40) return;
+    if (dx < 0) nextStory();
+    else prevStory();
+  });
+
   // ---------- conta do cliente (cadastro/login — base do CRM) ----------
   const CUSTOMER_TOKEN_KEY = 'bynana_customer_token';
   const CUSTOMER_KEY = 'bynana_customer';
@@ -896,6 +1031,7 @@
     if (e.key === 'Escape') {
       closeMegaMenu();
       closeAccountModal();
+      closeStoryViewer();
     }
   });
 
@@ -921,6 +1057,7 @@
       PROMOTIONS = data.promotions || [];
       COUPONS = data.coupons || [];
       CATEGORY_GROUPS = data.categoryGroups || [];
+      STORIES = data.stories || [];
     } catch (e) {
       PRODUCTS = [];
       CATEGORIES = [];
@@ -928,6 +1065,7 @@
       PROMOTIONS = [];
       COUPONS = [];
       CATEGORY_GROUPS = [];
+      STORIES = [];
     }
     buildFilters();
     buildCatCards();
@@ -936,6 +1074,7 @@
     renderPromoBanner();
     renderGrid('Todos', '');
     renderNovidades();
+    renderStoriesRail();
     renderCart();
     restoreSession();
   }

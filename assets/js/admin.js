@@ -16,6 +16,7 @@
   let PROMOTIONS = [];
   let COUPONS = [];
   let CUSTOMERS = [];
+  let STORIES = [];
 
   const money = (v) =>
     v == null ? 'Sob consulta' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -56,6 +57,7 @@
     renderCouponList();
     loadSiteImages();
     loadCustomers();
+    loadStories();
   }
 
   // ---------- tabs ----------
@@ -634,6 +636,163 @@
   }
 
   customerSearch.addEventListener('input', renderCustomerList);
+
+  // ---------- stories (carrossel de vídeo estilo Instagram) ----------
+  const storyForm = document.getElementById('storyForm');
+  const stVideo = document.getElementById('stVideo');
+  const stCover = document.getElementById('stCover');
+  const stVideoPreview = document.getElementById('stVideoPreview');
+  const stCoverPreview = document.getElementById('stCoverPreview');
+  const stSubmit = document.getElementById('stSubmit');
+  const storyMsg = document.getElementById('storyMsg');
+  const storyList = document.getElementById('storyList');
+
+  let storyVideoDataUrl = '';
+  let storyCoverDataUrl = '';
+
+  stVideo.addEventListener('change', () => {
+    const file = stVideo.files[0];
+    if (!file) {
+      stVideoPreview.hidden = true;
+      storyVideoDataUrl = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      storyVideoDataUrl = reader.result;
+      stVideoPreview.src = storyVideoDataUrl;
+      stVideoPreview.hidden = false;
+    };
+    reader.readAsDataURL(file);
+  });
+
+  stCover.addEventListener('change', () => {
+    const file = stCover.files[0];
+    if (!file) {
+      stCoverPreview.hidden = true;
+      storyCoverDataUrl = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      storyCoverDataUrl = reader.result;
+      stCoverPreview.src = storyCoverDataUrl;
+      stCoverPreview.hidden = false;
+    };
+    reader.readAsDataURL(file);
+  });
+
+  function setStoryMsg(text, kind) {
+    storyMsg.textContent = text;
+    storyMsg.className = `admin-form-msg ${kind ? `is-${kind}` : ''}`;
+    storyMsg.hidden = !text;
+  }
+
+  async function loadStories() {
+    try {
+      const data = await api('/api/stories/list', 'POST', {});
+      STORIES = data.stories || [];
+      renderStoryList();
+    } catch (err) {
+      storyList.innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+    }
+  }
+
+  storyForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    setStoryMsg('', '');
+
+    if (!storyVideoDataUrl) {
+      setStoryMsg('Selecione um vídeo para o story.', 'error');
+      return;
+    }
+
+    stSubmit.disabled = true;
+    stSubmit.textContent = 'Publicando...';
+    try {
+      const data = await api('/api/stories', 'POST', {
+        title: document.getElementById('stTitle').value.trim(),
+        video: storyVideoDataUrl,
+        cover: storyCoverDataUrl,
+        linkUrl: document.getElementById('stLinkUrl').value.trim(),
+        linkLabel: document.getElementById('stLinkLabel').value.trim(),
+      });
+      STORIES = data.stories;
+      renderStoryList();
+
+      storyForm.reset();
+      document.getElementById('stLinkLabel').value = 'Ver mais';
+      stVideoPreview.hidden = true;
+      stCoverPreview.hidden = true;
+      storyVideoDataUrl = '';
+      storyCoverDataUrl = '';
+      setStoryMsg('Story publicado ✓', 'ok');
+    } catch (err) {
+      setStoryMsg(err.message, 'error');
+    } finally {
+      stSubmit.disabled = false;
+      stSubmit.textContent = 'Publicar story';
+    }
+  });
+
+  function renderStoryList() {
+    storyList.innerHTML = '';
+    if (!STORIES.length) {
+      storyList.innerHTML = '<p class="admin-empty-block">Nenhum story publicado ainda.</p>';
+      return;
+    }
+    STORIES.forEach((s, i) => {
+      const div = document.createElement('div');
+      div.className = 'admin-story-item';
+      const thumb = s.cover
+        ? `<img src="${s.cover}" alt="${s.title || 'Story'}" />`
+        : `<video src="${s.video}" muted preload="metadata"></video>`;
+      div.innerHTML = `
+        <div class="admin-story-thumb">${thumb}</div>
+        <div class="admin-story-info">
+          <span class="admin-story-title">${s.title || '(sem título)'}</span>
+          <span class="admin-story-meta">${s.linkUrl ? `Botão: "${s.linkLabel}" → ${s.linkUrl}` : 'Sem botão de ação'}</span>
+        </div>
+        <div class="admin-story-actions">
+          <button type="button" class="admin-story-move" data-dir="up" aria-label="Mover para cima" ${i === 0 ? 'disabled' : ''}>↑</button>
+          <button type="button" class="admin-story-move" data-dir="down" aria-label="Mover para baixo" ${i === STORIES.length - 1 ? 'disabled' : ''}>↓</button>
+          <span class="admin-story-badge ${s.active ? '' : 'is-off'}">${s.active ? 'Ativo' : 'Inativo'}</span>
+          <button type="button" class="admin-story-remove" aria-label="Remover story">✕</button>
+        </div>
+      `;
+      div.querySelectorAll('.admin-story-move').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          try {
+            const data = await api('/api/stories/reorder', 'POST', { id: s.id, direction: btn.dataset.dir });
+            STORIES = data.stories;
+            renderStoryList();
+          } catch (err) {
+            alert(err.message);
+          }
+        });
+      });
+      div.querySelector('.admin-story-badge').addEventListener('click', async () => {
+        try {
+          const data = await api('/api/stories/active', 'POST', { id: s.id, active: !s.active });
+          STORIES = data.stories;
+          renderStoryList();
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+      div.querySelector('.admin-story-remove').addEventListener('click', async () => {
+        if (!confirm('Remover este story?')) return;
+        try {
+          const data = await api('/api/stories', 'DELETE', { id: s.id });
+          STORIES = data.stories;
+          renderStoryList();
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+      storyList.appendChild(div);
+    });
+  }
 
   // ---------- boot ----------
   (async () => {

@@ -81,3 +81,16 @@ CREATE TABLE IF NOT EXISTS customers (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS customers_email_lower_idx ON customers (lower(email));
 CREATE UNIQUE INDEX IF NOT EXISTS customers_cpf_idx ON customers (cpf);
+
+CREATE TABLE IF NOT EXISTS stories (
+  id          TEXT PRIMARY KEY,
+  title       TEXT NOT NULL DEFAULT '',
+  video       TEXT NOT NULL,
+  cover       TEXT,
+  link_url    TEXT,
+  link_label  TEXT NOT NULL DEFAULT 'Ver mais',
+  position    INTEGER NOT NULL DEFAULT 0,
+  active      BOOLEAN NOT NULL DEFAULT true,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_stories_position ON stories(position);
