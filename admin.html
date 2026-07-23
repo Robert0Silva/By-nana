@@ -40,31 +40,43 @@
     <p class="admin-sub">Gerencie categorias, coleções, produtos, promoções e as fotos fixas do site.</p>
 
     <nav class="admin-tabs" id="adminTabs">
-      <div class="admin-tabs-group">
-        <span class="admin-tabs-group-label">Catálogo</span>
-        <div class="admin-tabs-group-items">
+      <div class="admin-tab-group" data-group="catalogo">
+        <button type="button" class="admin-tab-group-btn" aria-expanded="false" aria-controls="submenu-catalogo">
+          Catálogo
+          <svg class="chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <div class="admin-tab-submenu" id="submenu-catalogo">
           <button type="button" class="admin-tab is-active" data-target="categorias">Categorias</button>
           <button type="button" class="admin-tab" data-target="colecoes">Coleções</button>
           <button type="button" class="admin-tab" data-target="produtos">Produtos</button>
         </div>
       </div>
-      <div class="admin-tabs-group">
-        <span class="admin-tabs-group-label">Marketing</span>
-        <div class="admin-tabs-group-items">
+      <div class="admin-tab-group" data-group="marketing">
+        <button type="button" class="admin-tab-group-btn" aria-expanded="false" aria-controls="submenu-marketing">
+          Marketing
+          <svg class="chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <div class="admin-tab-submenu" id="submenu-marketing">
           <button type="button" class="admin-tab" data-target="promocoes">Promoções</button>
           <button type="button" class="admin-tab" data-target="cupons">Cupons</button>
         </div>
       </div>
-      <div class="admin-tabs-group">
-        <span class="admin-tabs-group-label">Conteúdo</span>
-        <div class="admin-tabs-group-items">
+      <div class="admin-tab-group" data-group="conteudo">
+        <button type="button" class="admin-tab-group-btn" aria-expanded="false" aria-controls="submenu-conteudo">
+          Conteúdo
+          <svg class="chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <div class="admin-tab-submenu" id="submenu-conteudo">
           <button type="button" class="admin-tab" data-target="imagens">Imagens do site</button>
           <button type="button" class="admin-tab" data-target="stories">Stories</button>
         </div>
       </div>
-      <div class="admin-tabs-group">
-        <span class="admin-tabs-group-label">Vendas</span>
-        <div class="admin-tabs-group-items">
+      <div class="admin-tab-group" data-group="vendas">
+        <button type="button" class="admin-tab-group-btn" aria-expanded="false" aria-controls="submenu-vendas">
+          Vendas
+          <svg class="chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <div class="admin-tab-submenu" id="submenu-vendas">
           <button type="button" class="admin-tab" data-target="pedidos">Pedidos</button>
           <button type="button" class="admin-tab" data-target="clientes">Clientes</button>
         </div>

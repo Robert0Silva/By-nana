@@ -63,15 +63,55 @@
     loadOrders();
   }
 
-  // ---------- tabs ----------
+  // ---------- tabs (menu "Catálogo/Marketing/Conteúdo/Vendas" com submenus em dropdown) ----------
+  const tabGroups = document.querySelectorAll('.admin-tab-group');
+
+  function closeAllTabGroups() {
+    tabGroups.forEach((g) => {
+      g.classList.remove('is-open');
+      g.querySelector('.admin-tab-group-btn').setAttribute('aria-expanded', 'false');
+    });
+  }
+
+  function setActiveTabGroupFor(target) {
+    tabGroups.forEach((g) => {
+      const hasTarget = !!g.querySelector(`.admin-tab[data-target="${target}"]`);
+      g.querySelector('.admin-tab-group-btn').classList.toggle('is-active', hasTarget);
+    });
+  }
+
+  tabGroups.forEach((group) => {
+    const groupBtn = group.querySelector('.admin-tab-group-btn');
+    groupBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const willOpen = !group.classList.contains('is-open');
+      closeAllTabGroups();
+      if (willOpen) {
+        group.classList.add('is-open');
+        groupBtn.setAttribute('aria-expanded', 'true');
+      }
+    });
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.admin-tab-group')) closeAllTabGroups();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeAllTabGroups();
+  });
+
   document.querySelectorAll('.admin-tab').forEach((btn) => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.admin-tab').forEach((b) => b.classList.toggle('is-active', b === btn));
       document.querySelectorAll('.admin-panel').forEach((p) => {
         p.hidden = p.id !== `panel-${btn.dataset.target}`;
       });
+      setActiveTabGroupFor(btn.dataset.target);
+      closeAllTabGroups();
     });
   });
+
+  setActiveTabGroupFor('categorias');
 
   // ---------- login ----------
   async function tryLogin(password) {
