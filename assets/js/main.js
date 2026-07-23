@@ -745,11 +745,19 @@
 
     const story = STORIES[index];
     storyTitle.textContent = story.title || '';
-    if (story.linkUrl) {
+    const product = story.productId ? PRODUCTS.find((p) => p.id === story.productId) : null;
+    if (product) {
+      storyCta.removeAttribute('href');
+      storyCta.dataset.productId = product.id;
+      storyCta.textContent = story.linkLabel && story.linkLabel !== 'Ver mais' ? story.linkLabel : 'Ver produto';
+      storyCta.hidden = false;
+    } else if (story.linkUrl) {
+      delete storyCta.dataset.productId;
       storyCta.href = story.linkUrl;
       storyCta.textContent = story.linkLabel || 'Ver mais';
       storyCta.hidden = false;
     } else {
+      delete storyCta.dataset.productId;
       storyCta.hidden = true;
     }
     storyVideo.muted = storyMuted;
@@ -808,6 +816,14 @@
   document.getElementById('storyPrev').addEventListener('click', prevStory);
   document.getElementById('storyClose').addEventListener('click', closeStoryViewer);
   storyOverlay.addEventListener('click', closeStoryViewer);
+  storyCta.addEventListener('click', (e) => {
+    if (storyCta.dataset.productId) {
+      e.preventDefault();
+      const id = storyCta.dataset.productId;
+      closeStoryViewer();
+      openQuickview(id);
+    }
+  });
   storyMuteBtn.addEventListener('click', () => {
     storyMuted = !storyMuted;
     storyVideo.muted = storyMuted;

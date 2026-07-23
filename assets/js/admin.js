@@ -53,6 +53,7 @@
     renderCollectionSelect();
     renderProductList();
     renderPromoTargetOptions();
+    renderStoryProductSelect();
     renderPromoList();
     renderCouponList();
     loadSiteImages();
@@ -298,6 +299,7 @@
       renderCollectionSelect();
       renderProductList();
       renderPromoTargetOptions();
+      renderStoryProductSelect();
 
       productForm.reset();
       document.getElementById('pBrand').value = 'By NaNa';
@@ -342,6 +344,7 @@
           PRODUCTS = data.products;
           renderProductList();
           renderPromoTargetOptions();
+          renderStoryProductSelect();
         } catch (err) {
           alert(err.message);
         }
@@ -643,12 +646,21 @@
   const stCover = document.getElementById('stCover');
   const stVideoPreview = document.getElementById('stVideoPreview');
   const stCoverPreview = document.getElementById('stCoverPreview');
+  const stProduct = document.getElementById('stProduct');
   const stSubmit = document.getElementById('stSubmit');
   const storyMsg = document.getElementById('storyMsg');
   const storyList = document.getElementById('storyList');
 
   let storyVideoDataUrl = '';
   let storyCoverDataUrl = '';
+
+  function renderStoryProductSelect() {
+    const current = stProduct.value;
+    stProduct.innerHTML =
+      '<option value="">Nenhum (usar link abaixo)</option>' +
+      PRODUCTS.map((p) => `<option value="${p.id}">${p.name}</option>`).join('');
+    if (PRODUCTS.some((p) => p.id === current)) stProduct.value = current;
+  }
 
   stVideo.addEventListener('change', () => {
     const file = stVideo.files[0];
@@ -714,6 +726,7 @@
         title: document.getElementById('stTitle').value.trim(),
         video: storyVideoDataUrl,
         cover: storyCoverDataUrl,
+        productId: stProduct.value,
         linkUrl: document.getElementById('stLinkUrl').value.trim(),
         linkLabel: document.getElementById('stLinkLabel').value.trim(),
       });
@@ -747,11 +760,24 @@
       const thumb = s.cover
         ? `<img src="${s.cover}" alt="${s.title || 'Story'}" />`
         : `<video src="${s.video}" muted preload="metadata"></video>`;
+      const linkedProduct = s.productId ? PRODUCTS.find((p) => p.id === s.productId) : null;
+      const metaText = linkedProduct
+        ? `Produto: ${linkedProduct.name}`
+        : s.linkUrl
+        ? `Botão: "${s.linkLabel}" → ${s.linkUrl}`
+        : 'Sem botão de ação';
       div.innerHTML = `
         <div class="admin-story-thumb">${thumb}</div>
         <div class="admin-story-info">
           <span class="admin-story-title">${s.title || '(sem título)'}</span>
-          <span class="admin-story-meta">${s.linkUrl ? `Botão: "${s.linkLabel}" → ${s.linkUrl}` : 'Sem botão de ação'}</span>
+          <span class="admin-story-meta">${metaText}</span>
+          <div class="admin-story-product-edit">
+            <select class="admin-story-product-select">
+              <option value="">Nenhum produto</option>
+              ${PRODUCTS.map((p) => `<option value="${p.id}" ${p.id === s.productId ? 'selected' : ''}>${p.name}</option>`).join('')}
+            </select>
+            <button type="button" class="admin-story-product-save">Salvar</button>
+          </div>
         </div>
         <div class="admin-story-actions">
           <button type="button" class="admin-story-move" data-dir="up" aria-label="Mover para cima" ${i === 0 ? 'disabled' : ''}>↑</button>
@@ -760,6 +786,16 @@
           <button type="button" class="admin-story-remove" aria-label="Remover story">✕</button>
         </div>
       `;
+      div.querySelector('.admin-story-product-save').addEventListener('click', async () => {
+        const productId = div.querySelector('.admin-story-product-select').value;
+        try {
+          const data = await api('/api/stories/product', 'POST', { id: s.id, productId });
+          STORIES = data.stories;
+          renderStoryList();
+        } catch (err) {
+          alert(err.message);
+        }
+      });
       div.querySelectorAll('.admin-story-move').forEach((btn) => {
         btn.addEventListener('click', async () => {
           try {

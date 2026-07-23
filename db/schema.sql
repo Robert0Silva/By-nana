@@ -94,3 +94,6 @@ CREATE TABLE IF NOT EXISTS stories (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_stories_position ON stories(position);
+-- vincula o story a um produto real do catálogo; o botão do story vira "Ver produto" quando preenchido.
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS product_id TEXT REFERENCES products(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_stories_product ON stories(product_id);

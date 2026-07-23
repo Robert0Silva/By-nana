@@ -266,9 +266,15 @@
           <video id="stVideoPreview" class="admin-preview admin-story-preview" hidden muted controls></video>
           <img id="stCoverPreview" class="admin-preview" hidden alt="Pré-visualização da capa" />
 
+          <label>
+            Vincular a um produto do catálogo (opcional)
+            <select id="stProduct"><option value="">Nenhum (usar link abaixo)</option></select>
+          </label>
+          <p class="admin-card-hint">Se escolher um produto, o botão do story abre esse produto direto (com opção de adicionar à sacola) — e tem prioridade sobre o link abaixo.</p>
+
           <div class="admin-form-row">
             <label>
-              Link do botão (opcional — produto, WhatsApp, etc.)
+              Link do botão (opcional — usado só se nenhum produto for escolhido acima)
               <input type="url" id="stLinkUrl" placeholder="https://..." />
             </label>
             <label>

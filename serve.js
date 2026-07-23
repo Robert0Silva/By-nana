@@ -160,7 +160,8 @@ async function getCustomersForAdmin() {
 
 async function getStories(onlyActive) {
   const { rows } = await pool.query(`
-    SELECT id, title, video, cover, link_url AS "linkUrl", link_label AS "linkLabel", active
+    SELECT id, title, video, cover, link_url AS "linkUrl", link_label AS "linkLabel",
+           product_id AS "productId", active
     FROM stories
     ${onlyActive ? 'WHERE active = true' : ''}
     ORDER BY position ASC, created_at ASC
@@ -606,15 +607,37 @@ async function handleApi(req, res, pathname) {
       const linkUrl = (body.linkUrl || '').trim() || null;
       const linkLabel = (body.linkLabel || '').trim() || 'Ver mais';
 
+      let productId = null;
+      if (body.productId) {
+        const p = await pool.query('SELECT id FROM products WHERE id = $1', [body.productId]);
+        if (!p.rowCount) return sendJSON(res, 400, { error: 'Produto não encontrado' });
+        productId = body.productId;
+      }
+
       const { rows } = await pool.query('SELECT COALESCE(MAX(position), -1) AS max FROM stories');
       const position = rows[0].max + 1;
 
       await pool.query(
-        `INSERT INTO stories (id, title, video, cover, link_url, link_label, position)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [id, title, video, cover, linkUrl, linkLabel, position]
+        `INSERT INTO stories (id, title, video, cover, link_url, link_label, product_id, position)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [id, title, video, cover, linkUrl, linkLabel, productId, position]
       );
       return sendJSON(res, 201, { stories: await getStories(false) });
+    }
+
+    if (pathname === '/api/stories/product' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
+
+      let productId = null;
+      if (body.productId) {
+        const p = await pool.query('SELECT id FROM products WHERE id = $1', [body.productId]);
+        if (!p.rowCount) return sendJSON(res, 400, { error: 'Produto não encontrado' });
+        productId = body.productId;
+      }
+      await pool.query('UPDATE stories SET product_id = $1 WHERE id = $2', [productId, body.id]);
+      return sendJSON(res, 200, { stories: await getStories(false) });
     }
 
     if (pathname === '/api/stories' && req.method === 'DELETE') {

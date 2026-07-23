@@ -17,13 +17,14 @@
 }
 
 *{box-sizing:border-box;}
-html{scroll-behavior:smooth;}
+html{scroll-behavior:smooth;overflow-x:hidden;}
 body{
   margin:0;
   font-family:var(--sans);
   color:var(--ink);
   background:var(--cream);
   -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
 }
 img{max-width:100%;display:block;}
 a{color:inherit;text-decoration:none;}
@@ -584,20 +585,32 @@ p{margin:0 0 1em;color:var(--ink-soft);line-height:1.7;}
   .sobre-img img{aspect-ratio:16/10;}
 }
 @media (max-width:720px){
+  .header-row-top{gap:10px;}
+  .brand .brand-mark{font-size:1.6rem;}
   .header-search{display:none;}
   .main-nav{
-    position:fixed;top:76px;left:0;right:0;background:var(--cream);
-    flex-direction:column;padding:20px 24px;gap:18px;border-bottom:1px solid var(--line);
-    transform:translateY(-130%);transition:transform .3s ease;z-index:39;align-items:stretch;
+    /* position:absolute (não fixed) ancorado no .site-header (que é position:sticky, então
+       vira o "containing block") — assim o painel sempre nasce colado embaixo do cabeçalho de
+       verdade, mesmo antes de rolar a página (quando o .topbar ainda empurra o header pra baixo
+       da posição 0). Um "top:76px" fixo ignorava essa folga do topbar e vazava por cima.
+       Fechado = max-height:0 + overflow:hidden (em vez de empurrar com transform): garante
+       altura visível zero sempre, sem depender de calcular a altura real do conteúdo. */
+    position:absolute;top:100%;left:0;right:0;background:var(--cream);
+    flex-direction:column;gap:18px;border-bottom:1px solid var(--line);
+    max-height:0;overflow:hidden;padding:0 24px;
+    transition:max-height .3s ease,padding .3s ease;z-index:39;align-items:stretch;
   }
-  .main-nav.is-open{transform:translateY(0);max-height:calc(100vh - 76px);overflow-y:auto;}
+  .main-nav.is-open{max-height:80vh;overflow-y:auto;padding:20px 24px;}
   .menu-toggle{display:inline-flex;}
   .main-nav .nav-item{width:100%;}
   .nav-trigger{width:100%;text-align:left;}
   /* no overlay móvel o painel tem fundo claro — os links precisam voltar a ser escuros
-     (na versão desktop, dentro da barra escura .header-row-nav, eles ficam claros) */
-  .main-nav a,.nav-trigger{color:var(--ink);}
-  .main-nav a::after,.nav-trigger::after{background:var(--ink);}
+     (na versão desktop, dentro da barra escura .header-row-nav, eles ficam claros). Repete o
+     prefixo ".header-row-nav" pra empatar a especificidade da regra de tema escuro e vencer por
+     ordem — só "color:var(--ink)" sem esse prefixo perdia silenciosamente pra regra mais específica. */
+  .header-row-nav .main-nav a,.header-row-nav .nav-trigger{color:var(--ink);}
+  .header-row-nav .main-nav a::after,.header-row-nav .nav-trigger::after{background:var(--ink);}
+  .header-row-nav .main-nav a svg,.header-row-nav .nav-trigger svg{color:var(--gold);}
   .mega-menu{
     position:static;transform:none;width:100%;min-width:0;box-shadow:none;border:none;
     padding:14px 0 0;max-height:0;overflow:hidden;opacity:1;pointer-events:auto;transition:max-height .25s ease;
@@ -606,6 +619,11 @@ p{margin:0 0 1em;color:var(--ink-soft);line-height:1.7;}
   .mega-menu-columns{grid-template-columns:1fr;gap:16px;}
 }
 @media (max-width:520px){
+  /* rótulos das legendas da "Peça da vez" quebram em 2 linhas em vez de vazar da tela
+     (eram de largura fixa/nowrap, o que empurrava o texto pra fora em telas bem estreitas) */
+  .callout{gap:5px;}
+  .callout-line{width:14px;}
+  .callout-label{white-space:normal;max-width:104px;line-height:1.3;text-align:left;}
   .cat-grid{grid-template-columns:repeat(2,1fr);}
   .product-grid{grid-template-columns:repeat(2,1fr);}
   .product-body{padding:12px 12px 14px;}
