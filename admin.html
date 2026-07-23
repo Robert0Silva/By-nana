@@ -49,6 +49,7 @@
           <button type="button" class="admin-tab is-active" data-target="categorias">Categorias</button>
           <button type="button" class="admin-tab" data-target="colecoes">Coleções</button>
           <button type="button" class="admin-tab" data-target="produtos">Produtos</button>
+          <button type="button" class="admin-tab" data-target="novidades">Novidades</button>
         </div>
       </div>
       <div class="admin-tab-group" data-group="marketing">
@@ -170,6 +171,15 @@
         <h2>Produtos no catálogo (<span id="productCount">0</span>)</h2>
         <input type="search" id="productSearch" class="admin-search" placeholder="Buscar por nome, categoria ou coleção..." />
         <div class="admin-product-list" id="productList"></div>
+      </section>
+    </section>
+
+    <section class="admin-panel" id="panel-novidades" hidden>
+      <section class="admin-card admin-card-wide">
+        <h2>Novidades da home</h2>
+        <p class="admin-card-hint">Escolha quais peças aparecem na seção "Novidades" da página inicial e em que ordem. Sem nenhuma peça destacada aqui, a seção mostra automaticamente as últimas cadastradas.</p>
+        <input type="search" id="featuredSearch" class="admin-search" placeholder="Buscar produto para destacar..." />
+        <div class="admin-featured-list" id="featuredList"></div>
       </section>
     </section>
 

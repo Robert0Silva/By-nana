@@ -418,7 +418,7 @@ p{margin:0 0 1em;color:var(--ink-soft);line-height:1.7;}
 .ask-btn:hover{border-color:var(--ink);}
 
 /* ---------- novidades ---------- */
-.novidades{padding:0 0 90px;}
+.novidades{padding:90px 0;}
 
 /* ---------- sobre ---------- */
 .sobre{padding:40px 0 100px;}

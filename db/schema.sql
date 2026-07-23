@@ -29,6 +29,12 @@ CREATE TABLE IF NOT EXISTS products (
 CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_id);
 CREATE INDEX IF NOT EXISTS idx_products_collection ON products(collection_id);
 
+-- curadoria manual da seção "Novidades" da home; sem nenhum produto destacado, o site cai
+-- automaticamente nos últimos cadastrados (ver getNovidades() em serve.js).
+ALTER TABLE products ADD COLUMN IF NOT EXISTS is_featured BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_position INTEGER;
+CREATE INDEX IF NOT EXISTS idx_products_featured ON products(featured_position) WHERE is_featured = true;
+
 -- scope decides which single target_* column is set; the others stay null.
 CREATE TABLE IF NOT EXISTS promotions (
   id                TEXT PRIMARY KEY,

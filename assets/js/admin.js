@@ -53,6 +53,7 @@
     renderCategorySelect();
     renderCollectionSelect();
     renderProductList();
+    renderFeaturedList();
     renderPromoTargetOptions();
     renderStoryProductSelect();
     renderPromoList();
@@ -407,6 +408,7 @@
       renderCollectionSelect();
       renderPromoTargetOptions();
       renderStoryProductSelect();
+      renderFeaturedList();
 
       const wasEditing = editing;
       endEditProduct();
@@ -464,6 +466,7 @@
           renderProductList();
           renderPromoTargetOptions();
           renderStoryProductSelect();
+          renderFeaturedList();
         } catch (err) {
           alert(err.message);
         }
@@ -473,6 +476,65 @@
   }
 
   productSearch.addEventListener('input', renderProductList);
+
+  // ---------- novidades (curadoria manual da home) ----------
+  const featuredList = document.getElementById('featuredList');
+  const featuredSearch = document.getElementById('featuredSearch');
+
+  function renderFeaturedList() {
+    const term = (featuredSearch.value || '').trim().toLowerCase();
+    const list = term ? PRODUCTS.filter((p) => p.name.toLowerCase().includes(term)) : PRODUCTS;
+
+    const featured = list.filter((p) => p.isFeatured).sort((a, b) => a.featuredPosition - b.featuredPosition);
+    const rest = list.filter((p) => !p.isFeatured);
+    const ordered = [...featured, ...rest];
+
+    featuredList.innerHTML = '';
+    if (!ordered.length) {
+      featuredList.innerHTML = '<p class="admin-empty-block">Nenhum produto encontrado.</p>';
+      return;
+    }
+    ordered.forEach((p) => {
+      const div = document.createElement('div');
+      div.className = `admin-featured-item${p.isFeatured ? ' is-featured' : ''}`;
+      const idx = featured.findIndex((f) => f.id === p.id);
+      div.innerHTML = `
+        <div class="admin-featured-thumb"><img src="${p.img}" alt="${p.name}" /></div>
+        <div class="admin-featured-info">
+          <span class="admin-featured-name">${p.name}</span>
+          <span class="admin-featured-meta">${p.category}${p.collection ? ` · ${p.collection}` : ''}</span>
+        </div>
+        <div class="admin-featured-actions">
+          <button type="button" class="admin-featured-move" data-dir="up" aria-label="Mover para cima" ${!p.isFeatured || idx === 0 ? 'disabled' : ''}>↑</button>
+          <button type="button" class="admin-featured-move" data-dir="down" aria-label="Mover para baixo" ${!p.isFeatured || idx === featured.length - 1 ? 'disabled' : ''}>↓</button>
+          <button type="button" class="admin-featured-badge ${p.isFeatured ? 'is-on' : ''}">${p.isFeatured ? 'Destacado' : 'Destacar'}</button>
+        </div>
+      `;
+      div.querySelector('.admin-featured-badge').addEventListener('click', async () => {
+        try {
+          const data = await api('/api/products/featured', 'POST', { id: p.id, featured: !p.isFeatured });
+          PRODUCTS = data.products;
+          renderFeaturedList();
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+      div.querySelectorAll('.admin-featured-move').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          try {
+            const data = await api('/api/products/featured/reorder', 'POST', { id: p.id, direction: btn.dataset.dir });
+            PRODUCTS = data.products;
+            renderFeaturedList();
+          } catch (err) {
+            alert(err.message);
+          }
+        });
+      });
+      featuredList.appendChild(div);
+    });
+  }
+
+  featuredSearch.addEventListener('input', renderFeaturedList);
 
   // ---------- promotions ----------
   const promoForm = document.getElementById('promoForm');

@@ -12,6 +12,7 @@
   let COUPONS = [];
   let CATEGORY_GROUPS = [];
   let STORIES = [];
+  let NOVIDADES = [];
 
   const money = (v) =>
     v == null ? 'Sob consulta' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -272,7 +273,7 @@
   function renderNovidades() {
     if (!novidadesGrid) return;
     novidadesGrid.innerHTML = '';
-    PRODUCTS.slice(0, 8).forEach((p) => novidadesGrid.appendChild(productCard(p)));
+    NOVIDADES.forEach((p) => novidadesGrid.appendChild(productCard(p)));
   }
 
   function debounce(fn, wait) {
@@ -1219,6 +1220,7 @@
       COUPONS = data.coupons || [];
       CATEGORY_GROUPS = data.categoryGroups || [];
       STORIES = data.stories || [];
+      NOVIDADES = data.novidades || [];
     } catch (e) {
       loadBar.classList.remove('is-active');
       grid.innerHTML = '';

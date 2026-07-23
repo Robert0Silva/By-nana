@@ -92,13 +92,40 @@ async function getCollections() {
 async function getProducts() {
   const { rows } = await pool.query(`
     SELECT p.id, p.name, p.brand, c.name AS category, COALESCE(col.name, '') AS collection,
-           p.tag, p.price, p.img, p.description AS desc
+           p.tag, p.price, p.img, p.description AS desc,
+           p.is_featured AS "isFeatured", p.featured_position AS "featuredPosition"
     FROM products p
     JOIN categories c ON c.id = p.category_id
     LEFT JOIN collections col ON col.id = p.collection_id
     ORDER BY p.created_at DESC
   `);
   return rows;
+}
+
+// "Novidades" da home: curadoria manual (is_featured) se existir alguma; senão, cai automaticamente
+// nos últimos produtos cadastrados — a seção nunca fica vazia por falta de curadoria.
+async function getNovidades() {
+  const featured = await pool.query(`
+    SELECT p.id, p.name, p.brand, c.name AS category, COALESCE(col.name, '') AS collection,
+           p.tag, p.price, p.img, p.description AS desc
+    FROM products p
+    JOIN categories c ON c.id = p.category_id
+    LEFT JOIN collections col ON col.id = p.collection_id
+    WHERE p.is_featured = true
+    ORDER BY p.featured_position ASC
+  `);
+  if (featured.rowCount) return featured.rows;
+
+  const fallback = await pool.query(`
+    SELECT p.id, p.name, p.brand, c.name AS category, COALESCE(col.name, '') AS collection,
+           p.tag, p.price, p.img, p.description AS desc
+    FROM products p
+    JOIN categories c ON c.id = p.category_id
+    LEFT JOIN collections col ON col.id = p.collection_id
+    ORDER BY p.created_at DESC
+    LIMIT 8
+  `);
+  return fallback.rows;
 }
 
 async function getPromotions() {
@@ -269,7 +296,7 @@ async function handleApi(req, res, pathname) {
   try {
     // ------ catalog ------
     if (pathname === '/api/data' && req.method === 'GET') {
-      const [products, categories, collections, promotions, coupons, categoryGroups, stories] = await Promise.all([
+      const [products, categories, collections, promotions, coupons, categoryGroups, stories, novidades] = await Promise.all([
         getProducts(),
         getCategories(),
         getCollections(),
@@ -277,8 +304,9 @@ async function handleApi(req, res, pathname) {
         getCoupons(),
         getCategoryGroups(),
         getStories(true),
+        getNovidades(),
       ]);
-      return sendJSON(res, 200, { products, categories, collections, promotions, coupons, categoryGroups, stories });
+      return sendJSON(res, 200, { products, categories, collections, promotions, coupons, categoryGroups, stories, novidades });
     }
 
     if (pathname === '/api/login' && req.method === 'POST') {
@@ -402,6 +430,43 @@ async function handleApi(req, res, pathname) {
       );
       if (!rowCount) return sendJSON(res, 404, { error: 'Produto não encontrado' });
       return sendJSON(res, 200, { products: await getProducts() });
+    }
+
+    if (pathname === '/api/products/featured' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
+
+      if (body.featured) {
+        const { rows } = await pool.query('SELECT COALESCE(MAX(featured_position), -1) AS max FROM products WHERE is_featured = true');
+        await pool.query('UPDATE products SET is_featured = true, featured_position = $1 WHERE id = $2', [rows[0].max + 1, body.id]);
+      } else {
+        await pool.query('UPDATE products SET is_featured = false, featured_position = NULL WHERE id = $1', [body.id]);
+      }
+      return sendJSON(res, 200, { products: await getProducts(), novidades: await getNovidades() });
+    }
+
+    if (pathname === '/api/products/featured/reorder' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      if (!checkAuth(body)) return sendJSON(res, 401, { error: 'Senha inválida' });
+      const direction = body.direction === 'up' ? 'up' : body.direction === 'down' ? 'down' : null;
+      if (!body.id || !direction) return sendJSON(res, 400, { error: 'id e direção são obrigatórios' });
+
+      const { rows: featured } = await pool.query(
+        'SELECT id, featured_position AS "featuredPosition" FROM products WHERE is_featured = true ORDER BY featured_position ASC'
+      );
+      const idx = featured.findIndex((p) => p.id === body.id);
+      if (idx === -1) return sendJSON(res, 404, { error: 'Produto não está em Novidades' });
+      const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+      if (swapIdx < 0 || swapIdx >= featured.length) {
+        return sendJSON(res, 200, { products: await getProducts(), novidades: await getNovidades() });
+      }
+
+      const a = featured[idx];
+      const b = featured[swapIdx];
+      await pool.query('UPDATE products SET featured_position = $1 WHERE id = $2', [b.featuredPosition, a.id]);
+      await pool.query('UPDATE products SET featured_position = $1 WHERE id = $2', [a.featuredPosition, b.id]);
+      return sendJSON(res, 200, { products: await getProducts(), novidades: await getNovidades() });
     }
 
     if (pathname === '/api/products' && req.method === 'DELETE') {
