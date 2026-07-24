@@ -17,6 +17,7 @@ const port = 8787;
 const uploadDir = path.join(root, 'assets/img/processed');
 const videosDir = path.join(root, 'assets/videos');
 fs.mkdirSync(videosDir, { recursive: true });
+const MAX_STORY_VIDEO_BYTES = 25 * 1024 * 1024; // 25MB — mantém a duração dos stories curta (~30s)
 
 // Secret used to sign customer session tokens (HMAC). Set in .env, never commit it.
 const SESSION_SECRET = process.env.SESSION_SECRET;
@@ -1481,6 +1482,9 @@ async function handleApi(req, res, pathname) {
       if (!videoMatch) return sendJSON(res, 400, { error: 'Vídeo inválido' });
       const videoExt = videoMatch[1] === 'webm' ? '.webm' : '.mp4';
       const videoBuffer = Buffer.from(videoMatch[2], 'base64');
+      if (videoBuffer.length > MAX_STORY_VIDEO_BYTES) {
+        return sendJSON(res, 413, { error: 'Arquivo muito grande' });
+      }
 
       const id = `story-${Date.now().toString(36)}`;
       const videoFileName = `${id}${videoExt}`;

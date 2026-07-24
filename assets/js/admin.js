@@ -1151,6 +1151,8 @@
 
   let storyVideoDataUrl = '';
   let storyCoverDataUrl = '';
+  const MAX_STORY_VIDEO_BYTES = 25 * 1024 * 1024;
+  const MAX_STORY_VIDEO_SECONDS = 30;
 
   function renderStoryProductSelect() {
     const current = stProduct.value;
@@ -1162,15 +1164,31 @@
 
   stVideo.addEventListener('change', () => {
     const file = stVideo.files[0];
-    if (!file) {
-      stVideoPreview.hidden = true;
-      storyVideoDataUrl = '';
+    storyVideoDataUrl = '';
+    stVideoPreview.hidden = true;
+    if (!file) return;
+
+    if (file.size > MAX_STORY_VIDEO_BYTES) {
+      setStoryMsg('Arquivo muito grande. O vídeo deve ter no máximo 25MB.', 'error');
+      stVideo.value = '';
       return;
     }
+
     const reader = new FileReader();
     reader.onload = () => {
-      storyVideoDataUrl = reader.result;
-      stVideoPreview.src = storyVideoDataUrl;
+      const dataUrl = reader.result;
+      stVideoPreview.onloadedmetadata = () => {
+        if (stVideoPreview.duration > MAX_STORY_VIDEO_SECONDS) {
+          setStoryMsg(`O vídeo deve ter no máximo ${MAX_STORY_VIDEO_SECONDS} segundos.`, 'error');
+          stVideo.value = '';
+          stVideoPreview.hidden = true;
+          storyVideoDataUrl = '';
+          return;
+        }
+        setStoryMsg('', '');
+        storyVideoDataUrl = dataUrl;
+      };
+      stVideoPreview.src = dataUrl;
       stVideoPreview.hidden = false;
     };
     reader.readAsDataURL(file);
