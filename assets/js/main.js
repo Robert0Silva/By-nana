@@ -515,6 +515,7 @@
     const items = keys.map((key) => {
       const entry = cart[key];
       const p = entry ? PRODUCTS.find((x) => x.id === entry.productId) : null;
+      const variant = p && entry.variantId ? (p.variants || []).find((v) => v.id === entry.variantId) : null;
       const { price, promo } = p ? getEffective(p) : { price: null, promo: null };
       return {
         id: entry ? entry.productId : key,
@@ -524,6 +525,7 @@
         listPrice: p ? p.price : null,
         promoId: promo ? promo.promo.id : null,
         variantId: entry ? entry.variantId : null,
+        variantLabel: variant ? variantLabel(variant) : null,
       };
     });
     const coupon = activeCoupon();
@@ -547,9 +549,10 @@
         body: JSON.stringify(payload),
       });
       const data = await res.json().catch(() => ({}));
-      return data.orderId || null;
-    } catch {
-      return null;
+      if (!res.ok) throw new Error(data.error || 'Não foi possível reservar o estoque');
+      return data.orderId;
+    } catch (err) {
+      throw err;
     }
   }
 
@@ -566,10 +569,16 @@
     bagFormError.hidden = true;
     checkoutBtn.classList.add('is-loading');
     checkoutBtn.textContent = 'Enviando...';
-    persistOrder(ids).finally(() => {
+    persistOrder(ids).then(() => {
       window.open(waLink(buildOrderMessage(ids)), '_blank', 'noopener');
       checkoutBtn.classList.remove('is-loading');
       checkoutBtn.textContent = 'Finalizar no WhatsApp';
+    }).catch((err) => {
+      bagFormError.textContent = err.message;
+      bagFormError.hidden = false;
+      checkoutBtn.classList.remove('is-loading');
+      checkoutBtn.textContent = 'Finalizar no WhatsApp';
+      init();
     });
   });
 
@@ -697,12 +706,22 @@
   }
 
   function addToCart(productId, variantId) {
+    const product = PRODUCTS.find((p) => p.id === productId);
+    const variant = product && variantId ? (product.variants || []).find((v) => v.id === variantId) : null;
+    if (!variant) {
+      announce('Escolha um tamanho disponível.');
+      return false;
+    }
     const key = cartKey(productId, variantId);
+    if (cart[key] && cart[key].qty >= variant.stock) {
+      announce(`Estoque máximo do tamanho ${variantLabel(variant)} atingido.`);
+      return false;
+    }
     if (cart[key]) cart[key].qty += 1;
     else cart[key] = { productId, variantId: variantId || null, qty: 1 };
     saveCart();
-    const p = PRODUCTS.find((x) => x.id === productId);
-    announce(p ? `${p.name} adicionada à sacola.` : 'Peça adicionada à sacola.');
+    announce(product ? `${product.name} adicionada à sacola.` : 'Peça adicionada à sacola.');
+    return true;
   }
 
   document.addEventListener('click', (e) => {
@@ -733,8 +752,7 @@
     const addBtn = e.target.closest('.add-btn');
     if (addBtn) {
       if (addBtn.disabled) return;
-      addToCart(addBtn.dataset.id, addBtn.dataset.variantId || null);
-      openBag();
+      if (addToCart(addBtn.dataset.id, addBtn.dataset.variantId || null)) openBag();
       return;
     }
     const qtyBtn = e.target.closest('.qty-btn');
@@ -742,6 +760,15 @@
       const key = qtyBtn.dataset.key;
       const op = qtyBtn.dataset.op;
       if (!cart[key]) return;
+      if (op === 'inc') {
+        const entry = cart[key];
+        const product = PRODUCTS.find((p) => p.id === entry.productId);
+        const variant = product && entry.variantId ? (product.variants || []).find((v) => v.id === entry.variantId) : null;
+        if (!variant || entry.qty >= variant.stock) {
+          announce('Quantidade máxima disponível em estoque atingida.');
+          return;
+        }
+      }
       cart[key].qty += op === 'inc' ? 1 : -1;
       if (cart[key].qty <= 0) delete cart[key];
       saveCart();
@@ -1341,7 +1368,7 @@
     profileOrderList.innerHTML = orders
       .map((o) => {
         const when = new Date(o.createdAt).toLocaleString('pt-BR');
-        const itemsText = (o.items || []).map((it) => `${it.qty}x ${it.name}`).join(', ');
+        const itemsText = (o.items || []).map((it) => `${it.qty}x ${it.name}${it.variantLabel ? ` (${it.variantLabel})` : ''}`).join(', ');
         const statusLabel = PROFILE_ORDER_STATUS_LABELS[o.status] || o.status;
         return `
           <div class="profile-order-item">
@@ -1591,10 +1618,24 @@
 
   // ---------- mobile menu + mega-menu open/close ----------
   const nav = document.getElementById('mainNav');
+  const siteHeader = document.querySelector('.site-header');
+  const menuToggle = document.getElementById('menuToggle');
   const megaTrigger = document.getElementById('megaTrigger');
   const megaItem = megaTrigger.closest('.nav-item');
 
-  document.getElementById('menuToggle').addEventListener('click', () => nav.classList.toggle('is-open'));
+  function setMobileMenu(open) {
+    nav.classList.toggle('is-open', open);
+    menuToggle.setAttribute('aria-expanded', String(open));
+    menuToggle.setAttribute('aria-label', open ? 'Fechar menu' : 'Abrir menu');
+  }
+
+  menuToggle.addEventListener('click', () => setMobileMenu(!nav.classList.contains('is-open')));
+
+  function syncHeaderState() {
+    siteHeader.classList.toggle('is-scrolled', window.scrollY > 12);
+  }
+  syncHeaderState();
+  window.addEventListener('scroll', syncHeaderState, { passive: true });
 
   function closeMegaMenu() {
     megaItem.classList.remove('is-open');
@@ -1611,6 +1652,7 @@
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      setMobileMenu(false);
       closeMegaMenu();
       closeAccountModal();
       closeStoryViewer();
@@ -1627,7 +1669,7 @@
   // via delegação — funciona também para os links do mega-menu, gerados depois via JS
   nav.addEventListener('click', (e) => {
     if (e.target.closest('a')) {
-      nav.classList.remove('is-open');
+      setMobileMenu(false);
       closeMegaMenu();
     }
   });

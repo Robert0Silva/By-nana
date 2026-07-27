@@ -50,6 +50,24 @@ CREATE TABLE IF NOT EXISTS product_variants (
 );
 CREATE INDEX IF NOT EXISTS idx_variants_product ON product_variants(product_id);
 CREATE UNIQUE INDEX IF NOT EXISTS variants_sku_idx ON product_variants(sku) WHERE sku IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS variants_product_size_color_idx
+  ON product_variants(product_id, lower(COALESCE(size, '')), lower(COALESCE(color, '')));
+
+-- Razão permanente de cada entrada/saída. O saldo atual continua em product_variants.stock;
+-- esta tabela explica como ele chegou ao valor atual.
+CREATE TABLE IF NOT EXISTS inventory_movements (
+  id            BIGSERIAL PRIMARY KEY,
+  variant_id    TEXT NOT NULL REFERENCES product_variants(id) ON DELETE RESTRICT,
+  movement_type TEXT NOT NULL CHECK (movement_type IN ('initial', 'adjustment', 'sale', 'cancellation')),
+  quantity      INTEGER NOT NULL CHECK (quantity <> 0),
+  stock_after   INTEGER NOT NULL CHECK (stock_after >= 0),
+  order_id      TEXT,
+  admin_user_id UUID,
+  note          TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_inventory_movements_variant ON inventory_movements(variant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inventory_movements_order ON inventory_movements(order_id) WHERE order_id IS NOT NULL;
 
 -- scope decides which single target_* column is set; the others stay null.
 CREATE TABLE IF NOT EXISTS promotions (

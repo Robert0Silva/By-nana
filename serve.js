@@ -13,7 +13,8 @@ types.setTypeParser(1082, (v) => v);
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 const root = __dirname;
-const port = 8787;
+const port = Number(process.env.PORT) || 8787;
+const host = process.env.HOST || '0.0.0.0';
 const uploadDir = path.join(root, 'assets/img/processed');
 const videosDir = path.join(root, 'assets/videos');
 fs.mkdirSync(videosDir, { recursive: true });
@@ -115,6 +116,50 @@ async function getProductVariants(productId) {
   const { rows } = await pool.query(
     'SELECT id, size, color, sku, stock, position FROM product_variants WHERE product_id = $1 ORDER BY position ASC',
     [productId]
+  );
+  return rows;
+}
+
+const defaultSizesForCategory = (category) =>
+  String(category || '').toLocaleLowerCase('pt-BR').includes('calçado')
+    ? ['34', '35', '36', '37', '38', '39']
+    : ['P', 'M', 'G', 'GG'];
+
+async function createDefaultVariants(client, productId, category) {
+  const sizes = defaultSizesForCategory(category);
+  for (let position = 0; position < sizes.length; position += 1) {
+    const size = sizes[position];
+    const id = `variant-${productId}-${size.toLowerCase()}`;
+    const sku = `${productId}-${size}`.toUpperCase();
+    await client.query(
+      `INSERT INTO product_variants (id, product_id, size, sku, stock, position)
+       VALUES ($1,$2,$3,$4,0,$5) ON CONFLICT DO NOTHING`,
+      [id, productId, size, sku, position]
+    );
+  }
+}
+
+async function recordInventoryMovement(client, { variantId, type, quantity, stockAfter, orderId = null, adminUserId = null, note = null }) {
+  if (!quantity) return;
+  await client.query(
+    `INSERT INTO inventory_movements
+       (variant_id, movement_type, quantity, stock_after, order_id, admin_user_id, note)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [variantId, type, quantity, stockAfter, orderId, adminUserId, note]
+  );
+}
+
+async function getInventoryMovements(productId, limit = 40) {
+  const { rows } = await pool.query(
+    `SELECT m.id, m.variant_id AS "variantId", v.size, v.color, m.movement_type AS "type",
+            m.quantity, m.stock_after AS "stockAfter", m.order_id AS "orderId",
+            m.note, m.created_at AS "createdAt"
+       FROM inventory_movements m
+       JOIN product_variants v ON v.id = m.variant_id
+      WHERE v.product_id = $1
+      ORDER BY m.created_at DESC
+      LIMIT $2`,
+    [productId, limit]
   );
   return rows;
 }
@@ -758,8 +803,9 @@ async function handleApi(req, res, pathname) {
          VALUES ($1, $2, $3, (SELECT id FROM categories WHERE lower(name) = lower($4)), (SELECT id FROM collections WHERE lower(name) = lower($5)), $6, $7, $8, $9)`,
         [id, name, brand, category, collection || null, tag, price, img, desc]
       );
+      await createDefaultVariants(pool, id, category);
 
-      const product = { id, name, brand, category, collection, tag, price, img, desc };
+      const product = (await getProducts()).find((p) => p.id === id);
       const [categories, collections] = await Promise.all([getCategories(), getCollections()]);
       logActivity(admin, 'product.create', 'product', id, { name });
       return sendJSON(res, 201, { product, categories, collections });
@@ -869,7 +915,10 @@ async function handleApi(req, res, pathname) {
       const admin = await requireAdmin(body);
       if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       if (!body.productId) return sendJSON(res, 400, { error: 'productId é obrigatório' });
-      return sendJSON(res, 200, { variants: await getProductVariants(body.productId) });
+      return sendJSON(res, 200, {
+        variants: await getProductVariants(body.productId),
+        movements: await getInventoryMovements(body.productId),
+      });
     }
 
     if (pathname === '/api/products/variants' && req.method === 'POST') {
@@ -884,6 +933,7 @@ async function handleApi(req, res, pathname) {
       const sku = (body.sku || '').trim() || null;
       const stockNum = Number(body.stock);
       const stock = Number.isFinite(stockNum) ? Math.max(0, Math.floor(stockNum)) : 0;
+      if (!size) return sendJSON(res, 400, { error: 'O tamanho é obrigatório' });
 
       const { rows: maxRows } = await pool.query(
         'SELECT COALESCE(MAX(position), -1) AS max FROM product_variants WHERE product_id = $1',
@@ -891,16 +941,34 @@ async function handleApi(req, res, pathname) {
       );
       const id = `variant-${Date.now().toString(36)}`;
       try {
-        await pool.query(
-          'INSERT INTO product_variants (id, product_id, size, color, sku, stock, position) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-          [id, productId, size, color, sku, stock, maxRows[0].max + 1]
-        );
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          await client.query(
+            'INSERT INTO product_variants (id, product_id, size, color, sku, stock, position) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+            [id, productId, size, color, sku, stock, maxRows[0].max + 1]
+          );
+          await recordInventoryMovement(client, {
+            variantId: id, type: 'initial', quantity: stock, stockAfter: stock,
+            adminUserId: admin.id, note: 'Saldo inicial da variação',
+          });
+          await client.query('COMMIT');
+        } catch (err) {
+          await client.query('ROLLBACK');
+          throw err;
+        } finally {
+          client.release();
+        }
       } catch (err) {
-        if (err.code === '23505') return sendJSON(res, 409, { error: 'Já existe uma variação com esse SKU' });
+        if (err.code === '23505') return sendJSON(res, 409, { error: 'Já existe uma variação com esse tamanho/cor ou SKU' });
         throw err;
       }
       logActivity(admin, 'variant.create', 'product_variant', id, { productId, size, color });
-      return sendJSON(res, 201, { variants: await getProductVariants(productId), products: await getProducts() });
+      return sendJSON(res, 201, {
+        variants: await getProductVariants(productId),
+        movements: await getInventoryMovements(productId),
+        products: await getProducts(),
+      });
     }
 
     if (pathname === '/api/products/variants/update' && req.method === 'POST') {
@@ -914,20 +982,41 @@ async function handleApi(req, res, pathname) {
       const sku = (body.sku || '').trim() || null;
       const stockNum = Number(body.stock);
       const stock = Number.isFinite(stockNum) ? Math.max(0, Math.floor(stockNum)) : 0;
+      if (!size) return sendJSON(res, 400, { error: 'O tamanho é obrigatório' });
 
       try {
-        const result = await pool.query(
-          'UPDATE product_variants SET size=$1, color=$2, sku=$3, stock=$4 WHERE id=$5 RETURNING product_id AS "productId"',
-          [size, color, sku, stock, body.id]
-        );
-        if (!result.rowCount) return sendJSON(res, 404, { error: 'Variação não encontrada' });
+        const client = await pool.connect();
+        let result;
+        try {
+          await client.query('BEGIN');
+          const current = await client.query('SELECT stock FROM product_variants WHERE id=$1 FOR UPDATE', [body.id]);
+          if (!current.rowCount) {
+            await client.query('ROLLBACK');
+            return sendJSON(res, 404, { error: 'Variação não encontrada' });
+          }
+          result = await client.query(
+            'UPDATE product_variants SET size=$1, color=$2, sku=$3, stock=$4 WHERE id=$5 RETURNING product_id AS "productId"',
+            [size, color, sku, stock, body.id]
+          );
+          await recordInventoryMovement(client, {
+            variantId: body.id, type: 'adjustment', quantity: stock - current.rows[0].stock, stockAfter: stock,
+            adminUserId: admin.id, note: (body.note || '').trim() || 'Ajuste manual pelo painel',
+          });
+          await client.query('COMMIT');
+        } catch (err) {
+          await client.query('ROLLBACK');
+          throw err;
+        } finally {
+          client.release();
+        }
         logActivity(admin, 'variant.update', 'product_variant', body.id, { size, color, stock });
         return sendJSON(res, 200, {
           variants: await getProductVariants(result.rows[0].productId),
+          movements: await getInventoryMovements(result.rows[0].productId),
           products: await getProducts(),
         });
       } catch (err) {
-        if (err.code === '23505') return sendJSON(res, 409, { error: 'Já existe uma variação com esse SKU' });
+        if (err.code === '23505') return sendJSON(res, 409, { error: 'Já existe uma variação com esse tamanho/cor ou SKU' });
         throw err;
       }
     }
@@ -938,10 +1027,26 @@ async function handleApi(req, res, pathname) {
       if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
 
-      const { rows } = await pool.query('DELETE FROM product_variants WHERE id = $1 RETURNING product_id AS "productId"', [body.id]);
-      if (!rows.length) return sendJSON(res, 404, { error: 'Variação não encontrada' });
+      const lookup = await pool.query('SELECT product_id AS "productId" FROM product_variants WHERE id=$1', [body.id]);
+      if (!lookup.rowCount) return sendJSON(res, 404, { error: 'Variação não encontrada' });
+      const productId = lookup.rows[0].productId;
+      const [{ rows: countRows }, { rows: movementRows }] = await Promise.all([
+        pool.query('SELECT COUNT(*)::int AS count FROM product_variants WHERE product_id=$1', [productId]),
+        pool.query('SELECT COUNT(*)::int AS count FROM inventory_movements WHERE variant_id=$1', [body.id]),
+      ]);
+      if (countRows[0].count <= 1) {
+        return sendJSON(res, 409, { error: 'O produto precisa manter ao menos um tamanho' });
+      }
+      if (movementRows[0].count > 0) {
+        return sendJSON(res, 409, { error: 'Este tamanho possui histórico. Zere o estoque em vez de removê-lo' });
+      }
+      await pool.query('DELETE FROM product_variants WHERE id = $1', [body.id]);
       logActivity(admin, 'variant.delete', 'product_variant', body.id, null);
-      return sendJSON(res, 200, { variants: await getProductVariants(rows[0].productId), products: await getProducts() });
+      return sendJSON(res, 200, {
+        variants: await getProductVariants(productId),
+        movements: await getInventoryMovements(productId),
+        products: await getProducts(),
+      });
     }
 
     if (pathname === '/api/products' && req.method === 'DELETE') {
@@ -1207,24 +1312,50 @@ async function handleApi(req, res, pathname) {
       }
 
       const id = `pedido-${Date.now().toString(36)}`;
-      await pool.query(
-        `INSERT INTO orders (id, customer_id, customer_name, customer_phone, items, subtotal, discount, total, coupon_code, payment_method, delivery_method, address)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-        [id, customerId, customerName, customerPhone, JSON.stringify(items), subtotal, discount, total, couponCode, paymentMethod, deliveryMethod, address ? JSON.stringify(address) : null]
-      );
-
-      // decremento de estoque "best-effort": o negócio sempre confirma manualmente pelo WhatsApp,
-      // então isso é um controle de bookkeeping — nunca deve derrubar o pedido se falhar.
-      for (const item of items) {
-        if (!item.variantId) continue;
-        try {
-          await pool.query('UPDATE product_variants SET stock = GREATEST(stock - $1, 0) WHERE id = $2', [
-            Number(item.qty) || 0,
-            item.variantId,
-          ]);
-        } catch (err) {
-          console.error('Falha ao decrementar estoque da variação', item.variantId, err);
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        for (const item of items) {
+          const qty = Math.max(0, Math.floor(Number(item.qty) || 0));
+          if (!item.variantId || !qty) {
+            await client.query('ROLLBACK');
+            return sendJSON(res, 400, { error: `Escolha um tamanho válido para ${item.name || 'o produto'}` });
+          }
+          const locked = await client.query(
+            `SELECT v.id, v.stock, v.size, p.id AS "productId", p.name
+               FROM product_variants v JOIN products p ON p.id = v.product_id
+              WHERE v.id = $1 FOR UPDATE OF v`,
+            [item.variantId]
+          );
+          const variant = locked.rows[0];
+          if (!variant || variant.productId !== item.id) {
+            await client.query('ROLLBACK');
+            return sendJSON(res, 400, { error: `Tamanho inválido para ${item.name || 'o produto'}` });
+          }
+          if (variant.stock < qty) {
+            await client.query('ROLLBACK');
+            return sendJSON(res, 409, {
+              error: `${variant.name} — tamanho ${variant.size}: somente ${variant.stock} unidade(s) disponível(is)`,
+            });
+          }
+          const stockAfter = variant.stock - qty;
+          await client.query('UPDATE product_variants SET stock=$1 WHERE id=$2', [stockAfter, variant.id]);
+          await recordInventoryMovement(client, {
+            variantId: variant.id, type: 'sale', quantity: -qty, stockAfter, orderId: id,
+            note: `Reserva do pedido ${id}`,
+          });
         }
+        await client.query(
+          `INSERT INTO orders (id, customer_id, customer_name, customer_phone, items, subtotal, discount, total, coupon_code, payment_method, delivery_method, address)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+          [id, customerId, customerName, customerPhone, JSON.stringify(items), subtotal, discount, total, couponCode, paymentMethod, deliveryMethod, address ? JSON.stringify(address) : null]
+        );
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
       }
 
       return sendJSON(res, 201, { orderId: id });
@@ -1246,7 +1377,57 @@ async function handleApi(req, res, pathname) {
         return sendJSON(res, 400, { error: 'Status inválido' });
       }
       if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
-      await pool.query('UPDATE orders SET status = $1 WHERE id = $2', [status, body.id]);
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const orderResult = await client.query('SELECT status, items FROM orders WHERE id=$1 FOR UPDATE', [body.id]);
+        if (!orderResult.rowCount) {
+          await client.query('ROLLBACK');
+          return sendJSON(res, 404, { error: 'Pedido não encontrado' });
+        }
+        const order = orderResult.rows[0];
+        const items = Array.isArray(order.items) ? order.items : [];
+        if (order.status !== 'cancelado' && status === 'cancelado') {
+          for (const item of items) {
+            if (!item.variantId) continue;
+            const qty = Math.max(0, Math.floor(Number(item.qty) || 0));
+            const updated = await client.query(
+              'UPDATE product_variants SET stock=stock+$1 WHERE id=$2 RETURNING stock',
+              [qty, item.variantId]
+            );
+            if (updated.rowCount) {
+              await recordInventoryMovement(client, {
+                variantId: item.variantId, type: 'cancellation', quantity: qty,
+                stockAfter: updated.rows[0].stock, orderId: body.id, adminUserId: admin.id,
+                note: `Cancelamento do pedido ${body.id}`,
+              });
+            }
+          }
+        } else if (order.status === 'cancelado' && status !== 'cancelado') {
+          for (const item of items) {
+            if (!item.variantId) continue;
+            const qty = Math.max(0, Math.floor(Number(item.qty) || 0));
+            const locked = await client.query('SELECT stock FROM product_variants WHERE id=$1 FOR UPDATE', [item.variantId]);
+            if (!locked.rowCount || locked.rows[0].stock < qty) {
+              await client.query('ROLLBACK');
+              return sendJSON(res, 409, { error: `Estoque insuficiente para reativar ${item.name}` });
+            }
+            const stockAfter = locked.rows[0].stock - qty;
+            await client.query('UPDATE product_variants SET stock=$1 WHERE id=$2', [stockAfter, item.variantId]);
+            await recordInventoryMovement(client, {
+              variantId: item.variantId, type: 'sale', quantity: -qty, stockAfter,
+              orderId: body.id, adminUserId: admin.id, note: `Reativação do pedido ${body.id}`,
+            });
+          }
+        }
+        await client.query('UPDATE orders SET status = $1 WHERE id = $2', [status, body.id]);
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
       logActivity(admin, 'order.status_update', 'order', body.id, { status });
       return sendJSON(res, 200, { orders: await getOrders() });
     }
@@ -1721,4 +1902,4 @@ http
     }
     serveStatic(req, res, pathname);
   })
-  .listen(port, () => console.log(`Serving on http://localhost:${port}`));
+  .listen(port, host, () => console.log(`Serving on http://${host}:${port}`));

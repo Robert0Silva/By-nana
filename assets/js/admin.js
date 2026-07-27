@@ -494,7 +494,9 @@
           ${priceHtml}
           <div class="admin-product-item-actions">
             <button type="button" class="admin-product-item-edit" data-id="${p.id}">Editar</button>
-            <button type="button" class="admin-product-item-stock" data-id="${p.id}">${p.hasVariants ? `Estoque (${p.totalStock})` : 'Estoque'}</button>
+            <button type="button" class="admin-product-item-stock${p.totalStock === 0 ? ' is-empty' : p.totalStock <= 4 ? ' is-low' : ''}" data-id="${p.id}">
+              ${p.totalStock === 0 ? 'Esgotado' : p.totalStock <= 4 ? `Estoque baixo (${p.totalStock})` : `Estoque (${p.totalStock})`}
+            </button>
             <button type="button" class="admin-product-item-remove" data-id="${p.id}">Remover</button>
           </div>
           <div class="admin-variant-editor" hidden></div>
@@ -534,7 +536,7 @@
     container.innerHTML = '<p class="admin-empty-block">Carregando...</p>';
     try {
       const data = await api('/api/products/variants/list', 'POST', { productId });
-      renderVariantEditor(productId, container, data.variants || []);
+      renderVariantEditor(productId, container, data.variants || [], data.movements || []);
     } catch (err) {
       container.innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
     }
@@ -543,11 +545,26 @@
   function updateStockButton(productId) {
     const p = PRODUCTS.find((x) => x.id === productId);
     const btn = document.querySelector(`.admin-product-item-stock[data-id="${productId}"]`);
-    if (btn && p) btn.textContent = p.hasVariants ? `Estoque (${p.totalStock})` : 'Estoque';
+    if (btn && p) {
+      btn.textContent = p.totalStock === 0 ? 'Esgotado' : p.totalStock <= 4 ? `Estoque baixo (${p.totalStock})` : `Estoque (${p.totalStock})`;
+      btn.classList.toggle('is-empty', p.totalStock === 0);
+      btn.classList.toggle('is-low', p.totalStock > 0 && p.totalStock <= 4);
+    }
   }
 
-  function renderVariantEditor(productId, container, variants) {
+  function renderVariantEditor(productId, container, variants, movements = []) {
+    const movementLabels = {
+      initial: 'Saldo inicial',
+      adjustment: 'Ajuste manual',
+      sale: 'Venda',
+      cancellation: 'Cancelamento',
+    };
     container.innerHTML = `
+      <div class="admin-stock-summary">
+        <strong>${variants.reduce((sum, v) => sum + Number(v.stock || 0), 0)} unidades</strong>
+        <span>${variants.filter((v) => v.stock === 0).length} tamanho(s) esgotado(s)</span>
+        <span>${variants.filter((v) => v.stock > 0 && v.stock <= 2).length} com estoque baixo</span>
+      </div>
       <div class="admin-variant-list">
         ${variants
           .map(
@@ -571,6 +588,20 @@
         <button type="button" class="btn btn-primary v-add">Adicionar</button>
       </div>
       <p class="admin-form-msg" hidden></p>
+      <div class="admin-stock-history">
+        <strong>Histórico recente</strong>
+        ${
+          movements.length
+            ? movements.map((m) => `
+              <div class="admin-stock-movement">
+                <span>${m.size || '—'}${m.color ? ` · ${m.color}` : ''}</span>
+                <span>${movementLabels[m.type] || m.type}${m.orderId ? ` · ${m.orderId}` : ''}</span>
+                <b class="${m.quantity > 0 ? 'is-in' : 'is-out'}">${m.quantity > 0 ? '+' : ''}${m.quantity}</b>
+                <small>Saldo ${m.stockAfter} · ${new Date(m.createdAt).toLocaleString('pt-BR')}</small>
+              </div>`).join('')
+            : '<p class="admin-empty-block">Nenhuma movimentação registrada ainda.</p>'
+        }
+      </div>
     `;
 
     const msgEl = container.querySelector('.admin-form-msg');
@@ -592,7 +623,7 @@
             stock: row.querySelector('.v-stock').value,
           });
           PRODUCTS = data.products;
-          renderVariantEditor(productId, container, data.variants);
+          renderVariantEditor(productId, container, data.variants, data.movements || []);
           updateStockButton(productId);
         } catch (err) {
           setVariantMsg(err.message, 'error');
@@ -622,7 +653,7 @@
           stock: newRow.querySelector('.v-stock').value,
         });
         PRODUCTS = data.products;
-        renderVariantEditor(productId, container, data.variants);
+        renderVariantEditor(productId, container, data.variants, data.movements || []);
         updateStockButton(productId);
       } catch (err) {
         setVariantMsg(err.message, 'error');
@@ -1104,7 +1135,7 @@
       return;
     }
     list.forEach((o) => {
-      const itemsText = (o.items || []).map((it) => `${it.qty}x ${it.name}`).join(', ');
+      const itemsText = (o.items || []).map((it) => `${it.qty}x ${it.name}${it.variantLabel ? ` (${it.variantLabel})` : ''}`).join(', ');
       const when = new Date(o.createdAt).toLocaleString('pt-BR');
       const div = document.createElement('div');
       div.className = 'admin-order-item';

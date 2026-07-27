@@ -50,6 +50,30 @@ async function main() {
   }
   console.log(`Products: ${products.length}`);
 
+  // Todo produto vendável precisa de uma grade. Mantém dados já cadastrados e só cria
+  // a grade padrão quando o produto ainda não possui nenhuma variação.
+  const { rows: productsWithoutVariants } = await pool.query(
+    `SELECT p.id, c.name AS category
+       FROM products p
+       JOIN categories c ON c.id = p.category_id
+      WHERE NOT EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id = p.id)`
+  );
+  for (const product of productsWithoutVariants) {
+    const isShoe = product.category.toLocaleLowerCase('pt-BR').includes('calçado');
+    const sizes = isShoe ? ['34', '35', '36', '37', '38', '39'] : ['P', 'M', 'G', 'GG'];
+    for (let position = 0; position < sizes.length; position += 1) {
+      const size = sizes[position];
+      const variantId = `variant-${product.id}-${size.toLowerCase()}`;
+      const sku = `${product.id}-${size}`.toUpperCase();
+      await pool.query(
+        `INSERT INTO product_variants (id, product_id, size, sku, stock, position)
+         VALUES ($1,$2,$3,$4,0,$5) ON CONFLICT DO NOTHING`,
+        [variantId, product.id, size, sku, position]
+      );
+    }
+  }
+  console.log(`Default size grids created: ${productsWithoutVariants.length}`);
+
   for (const promo of promotions) {
     await pool.query(
       `INSERT INTO promotions (id, scope, target_product_id, target_category_id, target_collection_id, discount_type, discount_value, label, start_date, end_date, active)
