@@ -190,8 +190,9 @@
         <div class="admin-product-steps" aria-label="Etapas do cadastro">
           <span><b>1</b> Informações</span>
           <span><b>2</b> Foto</span>
-          <span><b>3</b> Grade e estoque</span>
-          <span><b>4</b> Revisão</span>
+          <span><b>3</b> Galeria</span>
+          <span><b>4</b> Grade e estoque</span>
+          <span><b>5</b> Revisão</span>
         </div>
         <form id="productForm" class="admin-product-form">
           <input type="hidden" id="pEditId" value="" />
@@ -231,6 +232,10 @@
               Descrição
               <textarea id="pDesc" rows="4" placeholder="Descreva tecido, caimento, modelagem e detalhes..." required></textarea>
             </label>
+            <label>
+              Composição (opcional)
+              <textarea id="pComposition" rows="3" placeholder="Ex: Cabedal em couro&#10;Forro em poliéster&#10;Solado em borracha"></textarea>
+            </label>
           </section>
 
           <section class="admin-editor-section">
@@ -247,7 +252,21 @@
           </section>
 
           <section class="admin-editor-section">
-            <div class="admin-editor-section-title"><span>3</span><div><h3>Grade e estoque</h3><p>Gere os tamanhos de uma vez e ajuste apenas o necessário.</p></div></div>
+            <div class="admin-editor-section-title"><span>3</span><div><h3>Galeria (fotos adicionais)</h3><p>Até 7 fotos extras além da capa. Aparecem na página do produto.</p></div></div>
+            <div class="admin-gallery-field">
+              <div class="admin-gallery-grid" id="pGalleryGrid"></div>
+              <label class="admin-upload-zone admin-upload-zone-sm" for="pGalleryInput">
+                <span class="admin-upload-icon">＋</span>
+                <strong>Adicionar fotos</strong>
+                <small id="pGalleryHint">Salve o produto antes de enviar a galeria</small>
+                <input type="file" id="pGalleryInput" accept="image/*" multiple disabled />
+              </label>
+            </div>
+            <p class="admin-form-msg" id="pGalleryMsg" hidden></p>
+          </section>
+
+          <section class="admin-editor-section">
+            <div class="admin-editor-section-title"><span>4</span><div><h3>Grade e estoque</h3><p>Gere os tamanhos de uma vez e ajuste apenas o necessário.</p></div></div>
             <div class="admin-grade-builder">
               <label>
                 Modelo de grade
@@ -274,7 +293,7 @@
             </div>
             <div class="admin-grade-table-wrap">
               <table class="admin-grade-table">
-                <thead><tr><th>Tamanho</th><th>Cor</th><th>SKU</th><th>Estoque</th><th><span class="sr-only">Remover</span></th></tr></thead>
+                <thead><tr><th>Tamanho</th><th>Cor</th><th>SKU</th><th>Estoque</th><th>Medidas</th><th><span class="sr-only">Remover</span></th></tr></thead>
                 <tbody id="pVariantRows"></tbody>
               </table>
               <p class="admin-empty-block" id="pVariantEmpty">Nenhum tamanho adicionado.</p>

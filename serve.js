@@ -57,6 +57,25 @@ async function processSiteImage(buffer, destPath) {
   }
 }
 
+// Pipeline de imagem de produto (capa e galeria) — era duplicado inline em criar/atualizar
+// produto; extraído aqui pra ser reaproveitado também pelos endpoints de galeria.
+async function processProductImage(buffer, outPath) {
+  await sharp(buffer)
+    .rotate()
+    .normalize({ lower: 1, upper: 99 })
+    .modulate({ brightness: 1.03, saturation: 1.05 })
+    .sharpen({ sigma: 0.5 })
+    .resize({ width: 1000, withoutEnlargement: true })
+    .jpeg({ quality: 90, mozjpeg: true })
+    .toFile(outPath);
+}
+
+function decodeImageDataUrl(dataUrl) {
+  if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) return null;
+  const match = dataUrl.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/s);
+  return match ? Buffer.from(match[1], 'base64') : null;
+}
+
 const types_ = {
   '.html': 'text/html',
   '.css': 'text/css',
@@ -99,7 +118,7 @@ async function getCollections() {
 async function attachVariants(products) {
   if (!products.length) return products;
   const { rows: variants } = await pool.query(
-    `SELECT id, product_id AS "productId", size, color, sku, stock FROM product_variants ORDER BY position ASC`
+    `SELECT id, product_id AS "productId", size, color, sku, stock, measurements FROM product_variants ORDER BY position ASC`
   );
   const byProduct = new Map();
   variants.forEach((v) => {
@@ -114,7 +133,30 @@ async function attachVariants(products) {
 
 async function getProductVariants(productId) {
   const { rows } = await pool.query(
-    'SELECT id, size, color, sku, stock, position FROM product_variants WHERE product_id = $1 ORDER BY position ASC',
+    'SELECT id, size, color, sku, stock, position, measurements FROM product_variants WHERE product_id = $1 ORDER BY position ASC',
+    [productId]
+  );
+  return rows;
+}
+
+// galeria adicional de um produto — a capa (products.img) é sempre a 1ª imagem, as extras vêm
+// depois na ordem de upload; ver processProductImage() para o pipeline de processamento.
+async function attachImages(products) {
+  if (!products.length) return products;
+  const { rows: images } = await pool.query(
+    'SELECT id, product_id AS "productId", url FROM product_images ORDER BY position ASC'
+  );
+  const byProduct = new Map();
+  images.forEach((img) => {
+    if (!byProduct.has(img.productId)) byProduct.set(img.productId, []);
+    byProduct.get(img.productId).push(img.url);
+  });
+  return products.map((p) => ({ ...p, images: [p.img, ...(byProduct.get(p.id) || [])] }));
+}
+
+async function getProductGallery(productId) {
+  const { rows } = await pool.query(
+    'SELECT id, url FROM product_images WHERE product_id = $1 ORDER BY position ASC',
     [productId]
   );
   return rows;
@@ -146,8 +188,9 @@ function normalizeVariantPayload(input) {
     const color = String(variant.color || '').trim();
     const sku = String(variant.sku || '').trim() || null;
     const stock = Math.max(0, Number.parseInt(variant.stock, 10) || 0);
+    const measurements = String(variant.measurements || '').trim() || null;
     if (!size) throw new Error('Todas as variações precisam de um tamanho');
-    return { id: String(variant.id || '').trim(), size, color, sku, stock };
+    return { id: String(variant.id || '').trim(), size, color, sku, stock, measurements };
   });
   if (!variants.length) throw new Error('Adicione ao menos um tamanho à grade');
   const combinations = new Set(variants.map((variant) =>
@@ -172,8 +215,8 @@ async function syncProductVariants(client, productId, variants, adminUserId) {
       const previous = currentById.get(variant.id);
       retainedIds.add(variant.id);
       await client.query(
-        'UPDATE product_variants SET size=$1, color=$2, sku=$3, stock=$4, position=$5 WHERE id=$6',
-        [variant.size, variant.color, variant.sku, variant.stock, position, variant.id]
+        'UPDATE product_variants SET size=$1, color=$2, sku=$3, stock=$4, position=$5, measurements=$6 WHERE id=$7',
+        [variant.size, variant.color, variant.sku, variant.stock, position, variant.measurements, variant.id]
       );
       await recordInventoryMovement(client, {
         variantId: variant.id,
@@ -188,8 +231,8 @@ async function syncProductVariants(client, productId, variants, adminUserId) {
 
     const id = `variant-${Date.now().toString(36)}-${position}-${Math.random().toString(36).slice(2, 7)}`;
     await client.query(
-      'INSERT INTO product_variants (id, product_id, size, color, sku, stock, position) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-      [id, productId, variant.size, variant.color, variant.sku, variant.stock, position]
+      'INSERT INTO product_variants (id, product_id, size, color, sku, stock, position, measurements) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+      [id, productId, variant.size, variant.color, variant.sku, variant.stock, position, variant.measurements]
     );
     await recordInventoryMovement(client, {
       variantId: id,
@@ -239,14 +282,21 @@ async function getInventoryMovements(productId, limit = 40) {
 async function getProducts() {
   const { rows } = await pool.query(`
     SELECT p.id, p.name, p.brand, c.name AS category, COALESCE(col.name, '') AS collection,
-           p.tag, p.price, p.img, p.description AS desc,
+           p.tag, p.price, p.img, p.description AS desc, p.composition,
            p.is_featured AS "isFeatured", p.featured_position AS "featuredPosition"
     FROM products p
     JOIN categories c ON c.id = p.category_id
     LEFT JOIN collections col ON col.id = p.collection_id
     ORDER BY p.created_at DESC
   `);
-  return attachVariants(rows);
+  return attachImages(await attachVariants(rows));
+}
+
+// Só o necessário pra montar o <head> da página de produto (título/meta/OG) no servidor —
+// não passa por attachVariants/attachImages, que são caros demais pra uma checagem de rota.
+async function getProductMeta(id) {
+  const { rows } = await pool.query('SELECT id, name, price, img, description AS desc FROM products WHERE id = $1', [id]);
+  return rows[0] || null;
 }
 
 // "Novidades" da home: curadoria manual (is_featured) se existir alguma; senão, cai automaticamente
@@ -855,23 +905,15 @@ async function handleApi(req, res, pathname) {
         return sendJSON(res, 400, { error: 'Envie uma foto do produto' });
       }
 
-      const match = body.image.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/s);
-      if (!match) return sendJSON(res, 400, { error: 'Imagem inválida' });
-      const buffer = Buffer.from(match[1], 'base64');
+      const buffer = decodeImageDataUrl(body.image);
+      if (!buffer) return sendJSON(res, 400, { error: 'Imagem inválida' });
 
       const slug = slugify(name);
       const fileName = `${slug}-${Date.now().toString(36)}.jpg`;
       const outPath = path.join(uploadDir, fileName);
+      await processProductImage(buffer, outPath);
 
-      await sharp(buffer)
-        .rotate()
-        .normalize({ lower: 1, upper: 99 })
-        .modulate({ brightness: 1.03, saturation: 1.05 })
-        .sharpen({ sigma: 0.5 })
-        .resize({ width: 1000, withoutEnlargement: true })
-        .jpeg({ quality: 90, mozjpeg: true })
-        .toFile(outPath);
-
+      const composition = (body.composition || '').trim() || null;
       let price = null;
       if (body.price !== null && body.price !== undefined && body.price !== '') {
         const n = Number(body.price);
@@ -898,9 +940,9 @@ async function handleApi(req, res, pathname) {
           await client.query('INSERT INTO collections(name) VALUES ($1) ON CONFLICT (lower(name)) DO NOTHING', [collection]);
         }
         await client.query(
-          `INSERT INTO products (id, name, brand, category_id, collection_id, tag, price, img, description)
-           VALUES ($1, $2, $3, (SELECT id FROM categories WHERE lower(name) = lower($4)), (SELECT id FROM collections WHERE lower(name) = lower($5)), $6, $7, $8, $9)`,
-          [id, name, brand, category, collection || null, tag, price, img, desc]
+          `INSERT INTO products (id, name, brand, category_id, collection_id, tag, price, img, description, composition)
+           VALUES ($1, $2, $3, (SELECT id FROM categories WHERE lower(name) = lower($4)), (SELECT id FROM collections WHERE lower(name) = lower($5)), $6, $7, $8, $9, $10)`,
+          [id, name, brand, category, collection || null, tag, price, img, desc, composition]
         );
         if (variants) await syncProductVariants(client, id, variants, admin.id);
         else await createDefaultVariants(client, id, category);
@@ -940,6 +982,7 @@ async function handleApi(req, res, pathname) {
       const collection = (body.collection || '').trim();
       const brand = (body.brand || 'By NaNa').trim();
       const tag = (body.tag || '').trim() || 'Novidade';
+      const composition = (body.composition || '').trim() || null;
       let variants;
       try {
         variants = normalizeVariantPayload(body.variants);
@@ -949,20 +992,12 @@ async function handleApi(req, res, pathname) {
 
       let img = null;
       if (body.image && typeof body.image === 'string' && body.image.startsWith('data:image/')) {
-        const match = body.image.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/s);
-        if (!match) return sendJSON(res, 400, { error: 'Imagem inválida' });
-        const buffer = Buffer.from(match[1], 'base64');
+        const buffer = decodeImageDataUrl(body.image);
+        if (!buffer) return sendJSON(res, 400, { error: 'Imagem inválida' });
         const slug = slugify(name);
         const fileName = `${slug}-${Date.now().toString(36)}.jpg`;
         const outPath = path.join(uploadDir, fileName);
-        await sharp(buffer)
-          .rotate()
-          .normalize({ lower: 1, upper: 99 })
-          .modulate({ brightness: 1.03, saturation: 1.05 })
-          .sharpen({ sigma: 0.5 })
-          .resize({ width: 1000, withoutEnlargement: true })
-          .jpeg({ quality: 90, mozjpeg: true })
-          .toFile(outPath);
+        await processProductImage(buffer, outPath);
         img = `assets/img/processed/${fileName}`;
       }
 
@@ -977,9 +1012,9 @@ async function handleApi(req, res, pathname) {
           `UPDATE products SET name=$1, brand=$2,
              category_id=(SELECT id FROM categories WHERE lower(name)=lower($3)),
              collection_id=(SELECT id FROM collections WHERE lower(name)=lower($4)),
-             tag=$5, price=$6, description=$7, img=COALESCE($8, img)
-           WHERE id=$9`,
-          [name, brand, category, collection || null, tag, price, desc, img, body.id]
+             tag=$5, price=$6, description=$7, img=COALESCE($8, img), composition=$9
+           WHERE id=$10`,
+          [name, brand, category, collection || null, tag, price, desc, img, composition, body.id]
         );
         if (!rowCount) {
           await client.query('ROLLBACK');
@@ -996,6 +1031,55 @@ async function handleApi(req, res, pathname) {
       }
       logActivity(admin, 'product.update', 'product', body.id, { name });
       return sendJSON(res, 200, { products: await getProducts() });
+    }
+
+    // ------ galeria de fotos adicionais do produto (a capa/products.img não muda aqui) ------
+    const PRODUCT_GALLERY_MAX_EXTRA = 7; // 8 fotos no total, contando a capa
+
+    if (pathname === '/api/products/images' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      if (!body.productId) return sendJSON(res, 400, { error: 'productId é obrigatório' });
+
+      const buffer = decodeImageDataUrl(body.image);
+      if (!buffer) return sendJSON(res, 400, { error: 'Imagem inválida' });
+
+      const existing = await getProductGallery(body.productId);
+      if (existing.length >= PRODUCT_GALLERY_MAX_EXTRA) {
+        return sendJSON(res, 400, { error: `A galeria já tem o máximo de ${PRODUCT_GALLERY_MAX_EXTRA} fotos extras` });
+      }
+
+      const fileName = `${body.productId}-gallery-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}.jpg`;
+      const outPath = path.join(uploadDir, fileName);
+      await processProductImage(buffer, outPath);
+      const url = `assets/img/processed/${fileName}`;
+
+      const id = `img-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      const nextPosition = existing.length;
+      try {
+        await pool.query(
+          'INSERT INTO product_images (id, product_id, url, position) VALUES ($1,$2,$3,$4)',
+          [id, body.productId, url, nextPosition]
+        );
+      } catch (err) {
+        if (err.code === '23503') return sendJSON(res, 404, { error: 'Produto não encontrado' });
+        throw err;
+      }
+      logActivity(admin, 'product.images.add', 'product', body.productId, null);
+      return sendJSON(res, 201, { gallery: await getProductGallery(body.productId) });
+    }
+
+    if (pathname === '/api/products/images' && req.method === 'DELETE') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
+
+      const { rows } = await pool.query('DELETE FROM product_images WHERE id = $1 RETURNING product_id AS "productId"', [body.id]);
+      if (!rows.length) return sendJSON(res, 404, { error: 'Imagem não encontrada' });
+      logActivity(admin, 'product.images.remove', 'product', rows[0].productId, null);
+      return sendJSON(res, 200, { gallery: await getProductGallery(rows[0].productId) });
     }
 
     if (pathname === '/api/products/featured' && req.method === 'POST') {
@@ -1046,6 +1130,7 @@ async function handleApi(req, res, pathname) {
       return sendJSON(res, 200, {
         variants: await getProductVariants(body.productId),
         movements: await getInventoryMovements(body.productId),
+        gallery: await getProductGallery(body.productId),
       });
     }
 
@@ -2077,7 +2162,50 @@ function serveStatic(req, res, pathname) {
 }
 
 const ROBOTS_TXT = `User-agent: *\nDisallow: /admin\nDisallow: /api/\nSitemap: /sitemap.xml\n`;
-const SITEMAP_XML = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  <url><loc>/</loc></url>\n</urlset>\n`;
+
+// dinâmico porque precisa listar /produto/:id de cada produto — antes era uma string fixa
+// com só a home.
+async function buildSitemap() {
+  const { rows } = await pool.query('SELECT id FROM products ORDER BY created_at DESC');
+  const urls = ['/', ...rows.map((r) => `/produto/${r.id}`)];
+  const items = urls.map((u) => `  <url><loc>${u}</loc></url>`).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${items}\n</urlset>\n`;
+}
+
+function escapeHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+// Sem template engine no projeto — monta o <head> por substituição de string simples nos
+// placeholders de produto.html. O corpo da página continua renderizado no client (main.js),
+// igual ao resto do site; só o título/meta/OG precisam vir prontos na resposta do servidor,
+// pra link compartilhado no WhatsApp e crawler mostrarem a prévia certa.
+async function serveProductPage(res, id) {
+  const product = await getProductMeta(id);
+  if (!product) {
+    serveNotFound(res);
+    return;
+  }
+  fs.readFile(path.join(root, 'produto.html'), 'utf8', (err, template) => {
+    if (err) {
+      serveNotFound(res);
+      return;
+    }
+    const title = `${product.name} — By NaNa`;
+    const description = (product.desc || `Confira ${product.name} na By NaNa.`).slice(0, 160);
+    const html = template
+      .replace(/<!--PRODUCT_TITLE-->/g, escapeHtml(title))
+      .replace(/<!--PRODUCT_DESCRIPTION-->/g, escapeHtml(description))
+      .replace(/<!--PRODUCT_OG_IMAGE-->/g, escapeHtml(product.img))
+      .replace(/<!--PRODUCT_CANONICAL-->/g, escapeHtml(`/produto/${product.id}`));
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
+    res.end(html);
+  });
+}
 
 http
   .createServer((req, res) => {
@@ -2092,8 +2220,15 @@ http
       return;
     }
     if (pathname === '/sitemap.xml') {
-      res.writeHead(200, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'no-cache' });
-      res.end(SITEMAP_XML);
+      buildSitemap().then((xml) => {
+        res.writeHead(200, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'no-cache' });
+        res.end(xml);
+      });
+      return;
+    }
+    if (pathname.startsWith('/produto/')) {
+      const id = decodeURIComponent(pathname.slice('/produto/'.length));
+      serveProductPage(res, id);
       return;
     }
     serveStatic(req, res, pathname);

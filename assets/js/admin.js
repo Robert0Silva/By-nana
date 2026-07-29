@@ -408,9 +408,16 @@
   const pStockSummary = document.getElementById('pStockSummary');
   const pReviewTitle = document.getElementById('pReviewTitle');
   const pReviewSummary = document.getElementById('pReviewSummary');
+  const pComposition = document.getElementById('pComposition');
+  const pGalleryGrid = document.getElementById('pGalleryGrid');
+  const pGalleryInput = document.getElementById('pGalleryInput');
+  const pGalleryHint = document.getElementById('pGalleryHint');
+  const pGalleryMsg = document.getElementById('pGalleryMsg');
 
+  const PRODUCT_GALLERY_MAX_EXTRA = 7;
   let imageDataUrl = '';
   let editorVariants = [];
+  let galleryImages = [];
   const gradePresets = {
     clothing: ['PP', 'P', 'M', 'G', 'GG', 'XGG'],
     shoes: ['33', '34', '35', '36', '37', '38', '39', '40'],
@@ -434,6 +441,67 @@
     reader.readAsDataURL(file);
   });
 
+  function setGalleryMsg(text, kind) {
+    pGalleryMsg.textContent = text;
+    pGalleryMsg.className = `admin-form-msg ${kind ? `is-${kind}` : ''}`;
+    pGalleryMsg.hidden = !text;
+  }
+
+  function renderGallery() {
+    pGalleryGrid.innerHTML = galleryImages.map((img) => `
+      <div class="admin-gallery-thumb">
+        <img src="${img.url}" alt="" />
+        <button type="button" class="admin-gallery-remove" data-id="${img.id}" aria-label="Remover foto">✕</button>
+      </div>
+    `).join('');
+    pGalleryGrid.querySelectorAll('.admin-gallery-remove').forEach((button) => {
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        try {
+          const data = await api('/api/products/images', 'DELETE', { id: button.dataset.id });
+          galleryImages = data.gallery || [];
+          renderGallery();
+        } catch (err) {
+          setGalleryMsg(err.message, 'error');
+          button.disabled = false;
+        }
+      });
+    });
+    const full = galleryImages.length >= PRODUCT_GALLERY_MAX_EXTRA;
+    pGalleryInput.disabled = !pEditId.value || full;
+    pGalleryHint.textContent = !pEditId.value
+      ? 'Salve o produto antes de enviar a galeria'
+      : full
+        ? `Limite de ${PRODUCT_GALLERY_MAX_EXTRA} fotos extras atingido`
+        : `${galleryImages.length}/${PRODUCT_GALLERY_MAX_EXTRA} fotos extras`;
+  }
+
+  pGalleryInput.addEventListener('change', async () => {
+    const files = Array.from(pGalleryInput.files || []);
+    pGalleryInput.value = '';
+    if (!files.length || !pEditId.value) return;
+    setGalleryMsg('', '');
+    for (const file of files) {
+      if (galleryImages.length >= PRODUCT_GALLERY_MAX_EXTRA) {
+        setGalleryMsg(`Limite de ${PRODUCT_GALLERY_MAX_EXTRA} fotos extras atingido.`, 'error');
+        break;
+      }
+      const image = await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.readAsDataURL(file);
+      });
+      try {
+        const data = await api('/api/products/images', 'POST', { productId: pEditId.value, image });
+        galleryImages = data.gallery || [];
+        renderGallery();
+      } catch (err) {
+        setGalleryMsg(err.message, 'error');
+        break;
+      }
+    }
+  });
+
   function setMsg(text, kind) {
     productMsg.textContent = text;
     productMsg.className = `admin-form-msg ${kind ? `is-${kind}` : ''}`;
@@ -448,6 +516,7 @@
       variant.color = row.querySelector('.v-color').value.trim();
       variant.sku = row.querySelector('.v-sku').value.trim();
       variant.stock = Math.max(0, Number.parseInt(row.querySelector('.v-stock').value, 10) || 0);
+      variant.measurements = row.querySelector('.v-measurements').value.trim();
     });
   }
 
@@ -469,6 +538,7 @@
         <td><input type="text" class="v-color" value="${variant.color || ''}" placeholder="Ex: Preto" aria-label="Cor" /></td>
         <td><input type="text" class="v-sku" value="${variant.sku || ''}" placeholder="Gerado automaticamente" aria-label="SKU" /></td>
         <td><input type="number" class="v-stock" min="0" step="1" value="${Number(variant.stock || 0)}" aria-label="Estoque" /></td>
+        <td><input type="text" class="v-measurements" value="${variant.measurements || ''}" placeholder="Ex: 24cm sola" aria-label="Medidas" /></td>
         <td><button type="button" class="admin-variant-remove" data-index="${index}" aria-label="Remover variação">✕</button></td>
       </tr>
     `).join('');
@@ -492,6 +562,7 @@
       color: variant.color || '',
       sku: variant.sku || '',
       stock: Number(variant.stock || 0),
+      measurements: variant.measurements || '',
     });
     renderEditorVariants();
     const lastInput = pVariantRows.querySelector('tr:last-child .v-size');
@@ -534,6 +605,7 @@
     document.getElementById('pTag').value = p.tag || '';
     document.getElementById('pPrice').value = p.price == null ? '' : p.price;
     document.getElementById('pDesc').value = p.desc;
+    pComposition.value = p.composition || '';
     imageDataUrl = '';
     pImage.value = '';
     pPreview.src = p.img;
@@ -546,6 +618,8 @@
     setMsg('', '');
     editorVariants = [];
     renderEditorVariants();
+    galleryImages = [];
+    renderGallery();
     renderProductList();
     productForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
     try {
@@ -553,6 +627,8 @@
       if (pEditId.value !== p.id) return;
       editorVariants = (data.variants || []).map((variant) => ({ ...variant, stock: Number(variant.stock || 0) }));
       renderEditorVariants();
+      galleryImages = data.gallery || [];
+      renderGallery();
     } catch (err) {
       setMsg(`Produto carregado, mas a grade não pôde ser aberta: ${err.message}`, 'error');
     }
@@ -571,6 +647,8 @@
     pCancelEdit.hidden = true;
     editorVariants = [];
     renderEditorVariants();
+    galleryImages = [];
+    renderGallery();
     renderProductList();
     if (scroll) productForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -578,6 +656,7 @@
   pCancelEdit.addEventListener('click', () => endEditProduct());
   pNewProduct.addEventListener('click', () => endEditProduct(true));
   renderEditorVariants();
+  renderGallery();
 
   productForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -600,6 +679,7 @@
         color: variant.color.trim(),
         sku: variant.sku.trim(),
         stock: Number(variant.stock || 0),
+        measurements: (variant.measurements || '').trim(),
       }))
       .filter((variant) => variant.size);
     if (!variants.length) {
@@ -625,6 +705,7 @@
         tag: document.getElementById('pTag').value.trim(),
         price: document.getElementById('pPrice').value,
         desc: document.getElementById('pDesc').value.trim(),
+        composition: pComposition.value.trim(),
         image: imageDataUrl,
         variants,
       };

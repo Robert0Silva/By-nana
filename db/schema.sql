@@ -38,6 +38,21 @@ ALTER TABLE products ADD COLUMN IF NOT EXISTS is_featured BOOLEAN NOT NULL DEFAU
 ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_position INTEGER;
 CREATE INDEX IF NOT EXISTS idx_products_featured ON products(featured_position) WHERE is_featured = true;
 
+-- composição do material (texto livre, ex. "Cabedal: couro\nForro: poliéster") — exibida na
+-- página de produto; não é estruturado porque é conteúdo descritivo, não é filtrado/consultado.
+ALTER TABLE products ADD COLUMN IF NOT EXISTS composition TEXT;
+
+-- fotos adicionais da galeria da página de produto; a capa de sempre (products.img) continua
+-- sendo a 1ª imagem da galeria (ver attachImages() em serve.js) — não duplicamos ela aqui.
+CREATE TABLE IF NOT EXISTS product_images (
+  id         TEXT PRIMARY KEY,
+  product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  url        TEXT NOT NULL,
+  position   INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_product_images_product ON product_images(product_id);
+
 -- variação de tamanho/cor + estoque. Produto sem nenhuma linha aqui continua se comportando
 -- exatamente como antes (sem seletor, sem bloqueio por estoque) — só produtos com pelo menos
 -- uma variação cadastrada ganham o seletor no site.
@@ -55,6 +70,10 @@ CREATE INDEX IF NOT EXISTS idx_variants_product ON product_variants(product_id);
 CREATE UNIQUE INDEX IF NOT EXISTS variants_sku_idx ON product_variants(sku) WHERE sku IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS variants_product_size_color_idx
   ON product_variants(product_id, lower(COALESCE(size, '')), lower(COALESCE(color, '')));
+
+-- medidas daquele tamanho específico (texto livre, ex. "Busto: 82cm\nComprimento: 90cm"),
+-- mostradas na página de produto quando a cliente seleciona essa variação.
+ALTER TABLE product_variants ADD COLUMN IF NOT EXISTS measurements TEXT;
 
 -- Razão permanente de cada entrada/saída. O saldo atual continua em product_variants.stock;
 -- esta tabela explica como ele chegou ao valor atual.

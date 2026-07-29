@@ -2,21 +2,24 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
+<base href="/" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>By NaNa — Curadoria de Moda Feminina & Masculina</title>
-<meta name="description" content="By NaNa — curadoria de moda feminina e masculina, calçados, bolsas e acessórios. Peça o seu look pelo WhatsApp." />
-<meta property="og:type" content="website" />
-<meta property="og:title" content="By NaNa — Curadoria de Moda Feminina & Masculina" />
-<meta property="og:description" content="Peças selecionadas a dedo, looks completos e calçados. Veja o catálogo e feche seu pedido direto pelo WhatsApp." />
-<meta property="og:image" content="assets/img/processed/site-hero-1.jpg" />
+<title><!--PRODUCT_TITLE--></title>
+<meta name="description" content="<!--PRODUCT_DESCRIPTION-->" />
+<link rel="canonical" href="<!--PRODUCT_CANONICAL-->" />
+<meta property="og:type" content="product" />
+<meta property="og:title" content="<!--PRODUCT_TITLE-->" />
+<meta property="og:description" content="<!--PRODUCT_DESCRIPTION-->" />
+<meta property="og:image" content="<!--PRODUCT_OG_IMAGE-->" />
+<meta property="og:url" content="<!--PRODUCT_CANONICAL-->" />
 <meta name="twitter:card" content="summary_large_image" />
-<link rel="icon" href="assets/img/processed/logo.png" />
+<link rel="icon" href="/assets/img/processed/logo.png" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,600;1,500&family=Poppins:wght@300;400;500;600&family=Great+Vibes&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/css/style.css" />
+<link rel="stylesheet" href="/assets/css/style.css" />
 </head>
-<body>
+<body data-page="produto">
 
 <div class="load-bar" id="loadBar" aria-hidden="true"></div>
 <div class="sr-only" id="cartAnnouncer" aria-live="polite"></div>
@@ -28,7 +31,7 @@
 
 <header class="site-header" id="topo">
   <div class="wrap header-row-top">
-    <a class="brand" href="#topo">
+    <a class="brand" href="/">
       <span class="brand-mark">By NaNa</span>
     </a>
 
@@ -66,177 +69,77 @@
           </button>
           <div class="mega-menu" id="megaMenu"><!-- gerado via JS a partir das categorias/grupos cadastrados --></div>
         </div>
-        <a href="#novidades"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 2v8M12 22v-6M4 12h4M16 12h4"/></svg>Novidades</a>
-        <a href="#colecao"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4h16v16H4z"/><path d="M4 9h16"/></svg>Coleção</a>
-        <a href="#sobre"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>Sobre</a>
-        <a href="#contato"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5Z"/></svg>Contato</a>
+        <a href="/#novidades"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 2v8M12 22v-6M4 12h4M16 12h4"/></svg>Novidades</a>
+        <a href="/#colecao"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4h16v16H4z"/><path d="M4 9h16"/></svg>Coleção</a>
+        <a href="/#sobre"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>Sobre</a>
+        <a href="/#contato"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5Z"/></svg>Contato</a>
       </nav>
     </div>
   </div>
 </header>
 
+<!-- rail/viewer de stories não é usado nesta página, mas fica presente (oculto) porque
+     assets/js/main.js liga listeners neles incondicionalmente ao carregar. -->
 <section class="stories-rail-wrap" id="storiesSection" hidden>
   <div class="wrap">
-    <div class="stories-rail" id="storiesRail"><!-- gerado via JS a partir dos stories cadastrados --></div>
+    <div class="stories-rail" id="storiesRail"></div>
   </div>
 </section>
 
 <main>
-
-  <section class="hero">
-    <div class="hero-bg"></div>
-    <div class="wrap hero-inner">
-      <div class="hero-copy">
-        <p class="eyebrow">Curadoria de moda · Loja &amp; atelier</p>
-        <h1>Peças com <span>assinatura</span>,<br/>estilo com identidade.</h1>
-        <p class="hero-text">Seleção de roupas, calçados, bolsas e acessórios femininos e masculinos, escolhidos a dedo. Cada peça, um look. Cada pedido, no seu ritmo — direto pelo WhatsApp.</p>
-        <div class="hero-ctas">
-          <a href="#colecao" class="btn btn-primary">Ver coleção</a>
-          <a href="https://www.instagram.com/bynanaloja/" target="_blank" rel="noopener" class="btn btn-ghost">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2.2c2.7 0 3 .01 4.1.06 1.05.05 1.62.22 2 .37.5.2.86.43 1.24.8.37.38.6.74.8 1.24.15.38.32.95.37 2 .05 1.1.06 1.4.06 4.1s-.01 3-.06 4.1c-.05 1.05-.22 1.62-.37 2-.2.5-.43.86-.8 1.24-.38.37-.74.6-1.24.8-.38.15-.95.32-2 .37-1.1.05-1.4.06-4.1.06s-3-.01-4.1-.06c-1.05-.05-1.62-.22-2-.37a3.3 3.3 0 0 1-1.24-.8 3.3 3.3 0 0 1-.8-1.24c-.15-.38-.32-.95-.37-2-.05-1.1-.06-1.4-.06-4.1s.01-3 .06-4.1c.05-1.05.22-1.62.37-2 .2-.5.43-.86.8-1.24.38-.37.74-.6 1.24-.8.38-.15.95-.32 2-.37 1.1-.05 1.4-.06 4.1-.06M12 0C9.25 0 8.9.01 7.8.06c-1.1.05-1.85.23-2.5.48-.68.26-1.26.62-1.83 1.19A4.9 4.9 0 0 0 2.28 3.6c-.25.65-.43 1.4-.48 2.5C1.75 7.2 1.74 7.55 1.74 10.3v3.4c0 2.75.01 3.1.06 4.2.05 1.1.23 1.85.48 2.5.26.68.62 1.26 1.19 1.83.57.57 1.15.93 1.83 1.19.65.25 1.4.43 2.5.48 1.1.05 1.45.06 4.2.06s3.1-.01 4.2-.06c1.1-.05 1.85-.23 2.5-.48a4.9 4.9 0 0 0 1.83-1.19 4.9 4.9 0 0 0 1.19-1.83c.25-.65.43-1.4.48-2.5.05-1.1.06-1.45.06-4.2v-3.4c0-2.75-.01-3.1-.06-4.2-.05-1.1-.23-1.85-.48-2.5A4.9 4.9 0 0 0 20.9 1.7 4.9 4.9 0 0 0 19.06.53c-.65-.25-1.4-.43-2.5-.48C15.46.01 15.1 0 12.35 0H12Z"/><path d="M12 5.84A6.16 6.16 0 1 0 12 18.16 6.16 6.16 0 0 0 12 5.84Zm0 10.16a4 4 0 1 1 0-8 4 4 0 0 1 0 8Z"/><circle cx="18.4" cy="5.6" r="1.44"/></svg>
-            @bynanaloja
-          </a>
-        </div>
-      </div>
-
-      <div class="hero-gallery" aria-hidden="true">
-        <img src="assets/img/processed/site-hero-1.jpg" alt="" class="hg hg-1" />
-        <img src="assets/img/processed/site-hero-2.jpg" alt="" class="hg hg-2" />
-        <img src="assets/img/processed/site-hero-3.jpg" alt="" class="hg hg-3" />
-      </div>
-    </div>
-  </section>
-
-  <div class="benefits">
-    <div class="wrap benefits-inner">
-      <div class="benefit">
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12.02 2C6.5 2 2 6.48 2 12c0 1.85.5 3.58 1.38 5.07L2 22l5.1-1.34A9.94 9.94 0 0 0 12.02 22C17.5 22 22 17.52 22 12S17.5 2 12.02 2Z"/></svg>
-        <span>Atendimento direto pelo WhatsApp</span>
-      </div>
-      <div class="benefit">
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 21s-7-4.5-9.5-9C.5 8 2 4 6 4c2 0 3.5 1 4 2.5C10.5 5 12 4 14 4c4 0 5.5 4 3.5 8-2.5 4.5-9.5 9-9.5 9Z"/></svg>
-        <span>Peças exclusivas, escolhidas a dedo</span>
-      </div>
-      <div class="benefit">
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7h13v10H3zM16 10h3l2 3v4h-5z"/><circle cx="7.5" cy="18.5" r="1.5"/><circle cx="17.5" cy="18.5" r="1.5"/></svg>
-        <span>Entrega combinada direto com você</span>
-      </div>
-    </div>
-  </div>
-
-  <section class="spotlight" id="destaque">
-    <div class="wrap spotlight-inner">
-      <div class="spotlight-copy">
-        <p class="eyebrow">Peça da vez</p>
-        <h2>Conjunto Alfaiataria <span>Off White</span></h2>
-        <p class="spotlight-text">Colete alfaiataria com fechamento em botões, combinado com calça pantalona no mesmo tom. Um look leve e sofisticado, ótimo para o trabalho ou um evento de dia.</p>
-        <a href="#colecao" class="btn btn-primary" id="spotlightCta">Ver esse look</a>
-      </div>
-      <div class="spotlight-media">
-        <img src="assets/img/processed/look-alfaiataria-off-white.jpg" alt="Conjunto Alfaiataria Off White" />
-        <div class="callout callout-1" style="top:26%;left:52%;">
-          <span class="callout-dot"></span><span class="callout-line"></span>
-          <span class="callout-label">Colete alfaiataria</span>
-        </div>
-        <div class="callout callout-2" style="top:44%;left:56%;">
-          <span class="callout-dot"></span><span class="callout-line"></span>
-          <span class="callout-label">Fechamento em botões</span>
-        </div>
-        <div class="callout callout-3" style="top:76%;left:46%;">
-          <span class="callout-dot"></span><span class="callout-line"></span>
-          <span class="callout-label">Pantalona no mesmo tom</span>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="categorias" id="categorias">
+  <section class="pdp" id="pdp">
     <div class="wrap">
-      <div class="cat-grid"><!-- gerado via JS a partir das categorias cadastradas --></div>
-    </div>
-  </section>
+      <nav class="pdp-breadcrumb" id="pdpBreadcrumb" aria-label="Você está em"></nav>
 
-  <section class="novidades" id="novidades">
-    <div class="wrap">
-      <div class="section-head">
-        <p class="eyebrow">Chegou agora</p>
-        <h2>Novidades</h2>
-        <p class="section-sub">As peças mais recentes do catálogo, direto pra você.</p>
-      </div>
-      <div class="product-grid" id="novidadesGrid"><!-- gerado via JS, curadoria manual ou últimos produtos cadastrados --></div>
-    </div>
-  </section>
+      <p class="pdp-not-found" id="pdpNotFound" hidden>
+        Não encontramos essa peça. <a href="/#colecao">Ver o catálogo completo</a>.
+      </p>
 
-  <section class="colecao" id="colecao">
-    <div class="wrap">
-      <div class="section-head">
-        <p class="eyebrow">Catálogo</p>
-        <h2>A coleção da vez</h2>
-        <p class="section-sub">Toque em uma peça para ver detalhes, ou adicione direto à sacola e feche o pedido no WhatsApp.</p>
-      </div>
+      <div class="pdp-layout" id="pdpLayout">
+        <div class="pdp-gallery">
+          <div class="pdp-gallery-main">
+            <img id="pdpMainImg" src="" alt="" />
+          </div>
+          <div class="pdp-gallery-thumbs" id="pdpThumbs"><!-- gerado via JS --></div>
+        </div>
 
-      <div class="catalog-toolbar">
-        <div class="filters" id="filters"><!-- gerado via JS --></div>
-        <div class="collection-filter-wrap" id="collectionFilterWrap"><!-- gerado via JS, só aparece se houver coleções --></div>
-        <div class="search-box">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-          <input type="search" id="searchInput" placeholder="Buscar peça no catálogo..." aria-label="Buscar peça" />
+        <div class="pdp-info">
+          <span class="product-cat" id="pdpBrand"></span>
+          <h1 class="pdp-name" id="pdpName"></h1>
+          <div class="pdp-price-row">
+            <span class="product-price-old" id="pdpPriceOld" hidden></span>
+            <span class="product-price" id="pdpPrice"></span>
+            <span class="discount-badge" id="pdpDiscountBadge" hidden></span>
+            <span class="low-stock-badge" id="pdpLowStock" hidden>Últimas unidades</span>
+          </div>
+          <div class="color-dot-row" id="pdpColorDots"></div>
+          <p class="pdp-desc" id="pdpDesc"></p>
+          <div class="variant-picker" id="pdpVariantPicker" hidden></div>
+          <div class="product-actions">
+            <button class="add-btn" id="pdpAdd">Adicionar à sacola</button>
+            <a class="ask-btn" id="pdpAsk" target="_blank" rel="noopener" aria-label="Perguntar no WhatsApp">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor"><path d="M12.02 2C6.5 2 2 6.48 2 12c0 1.85.5 3.58 1.38 5.07L2 22l5.1-1.34A9.94 9.94 0 0 0 12.02 22C17.5 22 22 17.52 22 12S17.5 2 12.02 2Zm5.87 14.14c-.25.7-1.45 1.34-2 1.42-.53.08-1.13.11-1.83-.12-.42-.14-.96-.32-1.66-.62-2.92-1.26-4.83-4.2-4.98-4.4-.15-.2-1.19-1.58-1.19-3.02 0-1.44.76-2.15 1.03-2.44.27-.29.6-.36.8-.36.2 0 .4 0 .57.01.18.01.43-.07.67.51.25.6.85 2.07.92 2.22.07.15.12.33.02.53-.1.2-.15.32-.3.5-.15.18-.31.4-.44.53-.15.15-.3.31-.13.6.17.3.76 1.25 1.63 2.02 1.12 1 2.06 1.31 2.36 1.46.3.15.47.13.65-.08.18-.2.76-.88.96-1.18.2-.3.4-.25.67-.15.27.1 1.73.82 2.03.97.3.15.5.22.57.35.07.13.07.75-.18 1.45Z"/></svg>
+            </a>
+          </div>
+          <button class="text-fav-btn" id="pdpFav">♡ Salvar nos favoritos</button>
+
+          <details class="pdp-accordion" id="pdpMeasurementsBlock" hidden>
+            <summary>Medidas deste tamanho</summary>
+            <p class="pdp-accordion-text" id="pdpMeasurements"></p>
+          </details>
+          <details class="pdp-accordion" id="pdpCompositionBlock" hidden>
+            <summary>Composição</summary>
+            <p class="pdp-accordion-text" id="pdpComposition"></p>
+          </details>
         </div>
       </div>
 
-      <div class="catalog-toolbar-secondary">
-        <div class="filter-group">
-          <span class="filter-group-label">Tamanho</span>
-          <div class="filters filters-sm" id="sizeFilters"><!-- gerado via JS --></div>
-        </div>
-        <div class="filter-group">
-          <span class="filter-group-label">Cor</span>
-          <div class="color-filters" id="colorFilters"><!-- gerado via JS --></div>
-        </div>
-        <div class="filter-group">
-          <span class="filter-group-label">Preço</span>
-          <select class="collection-select" id="priceFilterSelect" aria-label="Filtrar por preço"><!-- gerado via JS --></select>
-        </div>
-        <div class="filter-group">
-          <span class="filter-group-label">Ordenar</span>
-          <select class="collection-select" id="sortSelect" aria-label="Ordenar produtos"><!-- gerado via JS --></select>
-        </div>
-        <button type="button" class="btn btn-ghost btn-sm" id="clearFiltersBtn">Limpar filtros</button>
-      </div>
-
-      <p class="empty-state" id="emptyState" hidden>Nenhuma peça encontrada por aqui. Que tal ver outra categoria?</p>
-      <div class="product-grid" id="productGrid"><!-- gerado via JS --></div>
-
-      <div class="category-seo" id="categorySeoBlock" hidden>
-        <p class="category-seo-text" id="categorySeoText"></p>
-        <div class="category-faq" id="categoryFaq"><!-- gerado via JS --></div>
+      <div class="pdp-related" id="pdpRelated" hidden>
+        <p class="pdp-related-title">Combine também</p>
+        <div class="product-grid" id="pdpRelatedGrid"><!-- gerado via JS --></div>
       </div>
     </div>
   </section>
-
-  <section class="sobre" id="sobre">
-    <div class="wrap sobre-inner">
-      <div class="sobre-img">
-        <img src="assets/img/processed/site-sobre.jpg" alt="Vitrine By NaNa" />
-      </div>
-      <div class="sobre-copy">
-        <p class="eyebrow">Sobre a By NaNa</p>
-        <h2>Moda escolhida com carinho, uma peça de cada vez</h2>
-        <p>A By NaNa nasceu do olhar de quem ama moda de verdade: peças femininas e masculinas selecionadas com cuidado, looks montados para inspirar e um atendimento próximo, quase de amiga pra amiga.</p>
-        <p>Cada publicação no Instagram vira vitrine — e agora, também catálogo. Encontrou algo que combina com você? É só chamar no WhatsApp que a gente confirma tamanho, cor e forma de entrega.</p>
-        <a href="https://www.instagram.com/bynanaloja/" target="_blank" rel="noopener" class="btn btn-outline">Ver mais no Instagram</a>
-      </div>
-    </div>
-  </section>
-
-  <section class="cta-final" id="contato">
-    <div class="wrap cta-inner">
-      <h2>Viu um look que combina com você?</h2>
-      <p>Fala com a gente agora mesmo e garante sua peça antes que acabe.</p>
-      <a href="#" id="ctaWhats" target="_blank" rel="noopener" class="btn btn-primary btn-lg">Chamar no WhatsApp</a>
-    </div>
-  </section>
-
 </main>
 
 <footer class="site-footer">
@@ -483,9 +386,10 @@
   </div>
 </div>
 
+<!-- viewer de stories: não é usado nesta página, ver comentário acima do rail. -->
 <div class="story-viewer-overlay" id="storyOverlay"></div>
 <div class="story-viewer" id="storyViewer" role="dialog" aria-modal="true">
-  <div class="story-progress" id="storyProgress"><!-- gerado via JS, uma barra por story --></div>
+  <div class="story-progress" id="storyProgress"></div>
   <div class="story-top-actions">
     <span class="story-title" id="storyTitle"></span>
     <button class="icon-btn story-mute" id="storyMute" aria-label="Ativar som">
@@ -506,7 +410,7 @@
   <button class="btn btn-primary" id="mobileBarBtn">Ver sacola</button>
 </div>
 
-<script src="assets/js/promo.js"></script>
-<script src="assets/js/main.js"></script>
+<script src="/assets/js/promo.js"></script>
+<script src="/assets/js/main.js"></script>
 </body>
 </html>

@@ -43,7 +43,7 @@
     return v.size || v.color || 'Único';
   }
 
-  // ---------- estoque baixo e cores (vitrine + quickview) ----------
+  // ---------- estoque baixo e cores (vitrine + página de produto) ----------
   const LOW_STOCK_THRESHOLD = 3;
 
   // Nomes de cor são texto livre digitado no admin, sem hex salvo — mapeamos os mais comuns
@@ -228,7 +228,7 @@
     saveFavs();
     renderGrid(currentFilter, currentSearch);
     renderNovidades();
-    syncQuickviewFav();
+    syncPdpFavButton();
     if (!document.getElementById('profilePanel-favoritos').hidden) renderProfileFavorites();
 
     // Cliente logado: espelha no servidor em segundo plano — falha aqui não quebra a UI
@@ -241,6 +241,16 @@
         body: JSON.stringify({ token, productId: id }),
       }).catch(() => {});
     }
+  }
+
+  // Mantém o botão de favoritar da página de produto (#pdpFav) em sincronia — só existe em
+  // produto.html, então não faz nada nas demais páginas.
+  function syncPdpFavButton() {
+    const favBtn = document.getElementById('pdpFav');
+    if (!favBtn || !favBtn.dataset.id) return;
+    const isFav = favs.has(favBtn.dataset.id);
+    favBtn.textContent = isFav ? '♥ Nos favoritos' : '♡ Salvar nos favoritos';
+    favBtn.classList.toggle('is-fav', isFav);
   }
 
   // ---------- catalog render ----------
@@ -280,7 +290,7 @@
       : '';
 
     div.innerHTML = `
-      <div class="product-media" data-id="${p.id}">
+      <a class="product-media" href="/produto/${p.id}">
         <img src="${p.img}" alt="${p.name}" loading="lazy" />
         <div class="product-badges">
           <span class="product-tag">${p.tag}</span>
@@ -289,7 +299,7 @@
           ${lowStock ? `<span class="low-stock-badge">Últimas unidades</span>` : ''}
         </div>
         <button class="fav-btn ${isFav ? 'is-fav' : ''}" data-id="${p.id}" aria-label="Favoritar">${isFav ? '♥' : '♡'}</button>
-      </div>
+      </a>
       <div class="product-body">
         <span class="product-cat">${p.brand}${p.collection ? ` · ${p.collection}` : ''}</span>
         <h3 class="product-name">${p.name}</h3>
@@ -327,6 +337,7 @@
   }
 
   function renderSkeleton(count) {
+    if (!grid) return; // página de produto não tem vitrine — nada a esqueletizar
     grid.innerHTML = '';
     emptyState.hidden = true;
     for (let i = 0; i < count; i++) grid.appendChild(skeletonCard());
@@ -337,6 +348,7 @@
   function renderGrid(filter, search) {
     currentFilter = filter;
     currentSearch = search || '';
+    if (!grid) return; // página de produto não tem vitrine
     grid.innerHTML = '';
     let list = PRODUCTS;
     if (filter === 'Favoritos') list = list.filter((p) => favs.has(p.id));
@@ -582,8 +594,13 @@
     const link = e.target.closest('a[data-cat]');
     if (!link) return;
     e.preventDefault();
-    setFilter(link.dataset.cat);
-    document.getElementById('colecao').scrollIntoView({ behavior: 'smooth' });
+    const colecao = document.getElementById('colecao');
+    if (colecao && grid) {
+      setFilter(link.dataset.cat);
+      colecao.scrollIntoView({ behavior: 'smooth' });
+    } else {
+      location.href = `/?categoria=${encodeURIComponent(link.dataset.cat)}#colecao`;
+    }
   });
 
   // ---------- novidades (últimos produtos cadastrados) ----------
@@ -602,20 +619,30 @@
     };
   }
 
+  // `searchInput` só existe na vitrine (index.html) — na página de produto (produto.html)
+  // esse elemento não existe, então o listener e a busca em si ficam condicionados a ele.
   const searchInput = document.getElementById('searchInput');
   const debouncedSearch = debounce(() => {
     renderGrid(currentFilter, searchInput.value.trim().toLowerCase());
   }, 220);
-  searchInput.addEventListener('input', debouncedSearch);
+  if (searchInput) searchInput.addEventListener('input', debouncedSearch);
 
-  // ---------- busca no cabeçalho (espelha a busca do catálogo) ----------
+  // ---------- busca no cabeçalho (espelha a busca do catálogo; existe em toda página) ----------
   const headerSearchForm = document.getElementById('headerSearchForm');
   const headerSearchInput = document.getElementById('headerSearchInput');
   headerSearchForm.addEventListener('submit', (e) => {
     e.preventDefault();
-    searchInput.value = headerSearchInput.value;
-    renderGrid(currentFilter, headerSearchInput.value.trim().toLowerCase());
-    document.getElementById('colecao').scrollIntoView({ behavior: 'smooth' });
+    const term = headerSearchInput.value.trim();
+    const colecao = document.getElementById('colecao');
+    if (colecao && searchInput) {
+      // já está na vitrine: filtra ali mesmo, sem recarregar a página.
+      searchInput.value = headerSearchInput.value;
+      renderGrid(currentFilter, term.toLowerCase());
+      colecao.scrollIntoView({ behavior: 'smooth' });
+    } else {
+      // ex.: buscando a partir da página de produto — volta pra home já filtrando.
+      location.href = `/?busca=${encodeURIComponent(term)}#colecao`;
+    }
   });
 
   const bagCount = document.getElementById('bagCount');
@@ -1007,15 +1034,11 @@
   }
 
   document.addEventListener('click', (e) => {
-    const favBtn = e.target.closest('.fav-btn');
+    const favBtn = e.target.closest('.fav-btn, #pdpFav');
     if (favBtn) {
       e.stopPropagation();
+      e.preventDefault();
       toggleFav(favBtn.dataset.id);
-      return;
-    }
-    const media = e.target.closest('.product-media');
-    if (media && !e.target.closest('.fav-btn')) {
-      openQuickview(media.dataset.id);
       return;
     }
     const chip = e.target.closest('.variant-chip');
@@ -1024,7 +1047,7 @@
       const picker = chip.closest('.variant-picker');
       picker.querySelectorAll('.variant-chip').forEach((c) => c.classList.toggle('is-active', c === chip));
       const addBtnForChip =
-        picker.id === 'qvVariantPicker' ? qvAdd : picker.closest('.product-card, .rel-card')?.querySelector('.add-btn');
+        picker.id === 'pdpVariantPicker' ? document.getElementById('pdpAdd') : picker.closest('.product-card, .rel-card')?.querySelector('.add-btn');
       if (addBtnForChip) {
         addBtnForChip.dataset.variantId = chip.dataset.variantId;
         syncAddButton(addBtnForChip);
@@ -1110,7 +1133,6 @@
   const bagDrawer = document.getElementById('bagDrawer');
   const bagOverlay = document.getElementById('bagOverlay');
   function openBag() {
-    closeQuickview();
     prefillBagContact();
     bagDrawer.classList.add('is-open');
     bagOverlay.classList.add('is-open');
@@ -1125,134 +1147,6 @@
   document.getElementById('bagClose').addEventListener('click', closeBag);
   bagOverlay.addEventListener('click', closeBag);
   mobileBar.querySelector('#mobileBarBtn').addEventListener('click', openBag);
-
-  // ---------- quick view ----------
-  const qvOverlay = document.getElementById('qvOverlay');
-  const quickview = document.getElementById('quickview');
-  const qvImg = document.getElementById('qvImg');
-  const qvBrand = document.getElementById('qvBrand');
-  const qvName = document.getElementById('qvName');
-  const qvPrice = document.getElementById('qvPrice');
-  const qvPriceOld = document.getElementById('qvPriceOld');
-  const qvDiscountBadge = document.getElementById('qvDiscountBadge');
-  const qvDesc = document.getElementById('qvDesc');
-  const qvLowStock = document.getElementById('qvLowStock');
-  const qvColorDots = document.getElementById('qvColorDots');
-  const qvVariantPicker = document.getElementById('qvVariantPicker');
-  const qvAdd = document.getElementById('qvAdd');
-  const qvAsk = document.getElementById('qvAsk');
-  const qvFav = document.getElementById('qvFav');
-  const qvRelatedGrid = document.getElementById('qvRelatedGrid');
-  const qvInfoEl = document.querySelector('.qv-info');
-  const qvStickyBar = document.getElementById('qvStickyBar');
-  const qvStickyImg = document.getElementById('qvStickyImg');
-  const qvStickyName = document.getElementById('qvStickyName');
-  const qvStickyPrice = document.getElementById('qvStickyPrice');
-  const qvStickyAdd = document.getElementById('qvStickyAdd');
-  const QV_STICKY_SCROLL_THRESHOLD = 160;
-  let qvCurrentId = null;
-
-  function handleQvScroll() {
-    qvStickyBar.classList.toggle('is-visible', qvInfoEl.scrollTop > QV_STICKY_SCROLL_THRESHOLD);
-  }
-
-  function syncQuickviewFav() {
-    if (!qvCurrentId) return;
-    const isFav = favs.has(qvCurrentId);
-    qvFav.textContent = isFav ? '♥ Nos favoritos' : '♡ Salvar nos favoritos';
-    qvFav.classList.toggle('is-fav', isFav);
-  }
-
-  function openQuickview(id) {
-    const p = PRODUCTS.find((x) => x.id === id);
-    if (!p) return;
-    qvCurrentId = id;
-    qvImg.src = p.img;
-    qvImg.alt = p.name;
-    qvBrand.textContent = p.brand;
-    qvName.textContent = p.name;
-    const { price, promo } = getEffective(p);
-    qvPrice.textContent = money(price);
-    qvPrice.classList.toggle('consult', p.price == null);
-    qvPrice.classList.toggle('is-promo', !!promo);
-    qvPriceOld.textContent = promo ? money(p.price) : '';
-    qvPriceOld.hidden = !promo;
-    qvDiscountBadge.textContent = promo ? `-${promo.percent}%` : '';
-    qvDiscountBadge.hidden = !promo;
-    qvDesc.textContent = p.desc;
-
-    const variants = p.variants || [];
-    const inStock = variants.filter((v) => v.stock > 0);
-    const soldOut = p.hasVariants && inStock.length === 0;
-    const defaultVariant = inStock[0] || null;
-    qvLowStock.hidden = !isLowStock(p, soldOut);
-    qvColorDots.innerHTML = colorDotsHtml(variants);
-    if (p.hasVariants) {
-      qvVariantPicker.hidden = false;
-      qvVariantPicker.innerHTML = variants
-        .map(
-          (v) => `<button type="button" class="variant-chip${v.stock <= 0 ? ' is-soldout' : ''}${defaultVariant && v.id === defaultVariant.id ? ' is-active' : ''}" data-variant-id="${v.id}" ${v.stock <= 0 ? 'disabled' : ''}>${variantLabel(v)}</button>`
-        )
-        .join('');
-    } else {
-      qvVariantPicker.hidden = true;
-      qvVariantPicker.innerHTML = '';
-    }
-
-    qvAdd.dataset.id = p.id;
-    if (defaultVariant) qvAdd.dataset.variantId = defaultVariant.id;
-    else delete qvAdd.dataset.variantId;
-    qvAdd.classList.toggle('is-soldout', soldOut);
-    qvAdd.disabled = soldOut;
-    if (soldOut) qvAdd.textContent = 'Esgotado';
-    else syncAddButton(qvAdd);
-    qvAsk.href = waLink(`Olá! Tenho interesse na peça "${p.name}" que vi no catálogo By NaNa. Pode me passar mais detalhes?`);
-    syncQuickviewFav();
-
-    const related = PRODUCTS.filter((x) => x.category === p.category && x.id !== p.id).slice(0, 3);
-    qvRelatedGrid.innerHTML = related
-      .map(
-        (r) => `
-      <div class="rel-card" data-id="${r.id}">
-        <img src="${r.img}" alt="${r.name}" />
-        <span>${r.name}</span>
-      </div>`
-      )
-      .join('');
-
-    qvStickyImg.src = p.img;
-    qvStickyImg.alt = p.name;
-    qvStickyName.textContent = p.name;
-    qvStickyPrice.textContent = money(price);
-    qvStickyBar.classList.remove('is-visible');
-    qvInfoEl.scrollTop = 0;
-    qvInfoEl.addEventListener('scroll', handleQvScroll);
-
-    qvOverlay.classList.add('is-open');
-    quickview.classList.add('is-open');
-    openModalFocus(quickview);
-  }
-
-  function closeQuickview() {
-    if (!quickview.classList.contains('is-open')) return;
-    qvOverlay.classList.remove('is-open');
-    quickview.classList.remove('is-open');
-    qvInfoEl.removeEventListener('scroll', handleQvScroll);
-    qvStickyBar.classList.remove('is-visible');
-    qvCurrentId = null;
-    closeModalFocus(quickview);
-  }
-
-  qvOverlay.addEventListener('click', closeQuickview);
-  document.getElementById('qvClose').addEventListener('click', closeQuickview);
-  // adicionar à sacola é tratado pelo delegate global de ".add-btn" (qvAdd tem essa classe) —
-  // um listener dedicado aqui duplicava addToCart() a cada clique (bug corrigido nesta revisão).
-  qvFav.addEventListener('click', () => qvCurrentId && toggleFav(qvCurrentId));
-  qvStickyAdd.addEventListener('click', () => qvAdd.click());
-  qvRelatedGrid.addEventListener('click', (e) => {
-    const rel = e.target.closest('.rel-card');
-    if (rel) openQuickview(rel.dataset.id);
-  });
 
   // ---------- stories (carrossel de vídeo estilo Instagram) ----------
   const storiesSection = document.getElementById('storiesSection');
@@ -1310,17 +1204,15 @@
     storyTitle.textContent = story.title || '';
     const product = story.productId ? PRODUCTS.find((p) => p.id === story.productId) : null;
     if (product) {
-      storyCta.removeAttribute('href');
-      storyCta.dataset.productId = product.id;
+      storyCta.href = `/produto/${product.id}`;
       storyCta.textContent = story.linkLabel && story.linkLabel !== 'Ver mais' ? story.linkLabel : 'Ver produto';
       storyCta.hidden = false;
     } else if (story.linkUrl) {
-      delete storyCta.dataset.productId;
       storyCta.href = story.linkUrl;
       storyCta.textContent = story.linkLabel || 'Ver mais';
       storyCta.hidden = false;
     } else {
-      delete storyCta.dataset.productId;
+      storyCta.removeAttribute('href');
       storyCta.hidden = true;
     }
     storyVideo.muted = storyMuted;
@@ -1382,14 +1274,9 @@
   document.getElementById('storyPrev').addEventListener('click', prevStory);
   document.getElementById('storyClose').addEventListener('click', closeStoryViewer);
   storyOverlay.addEventListener('click', closeStoryViewer);
-  storyCta.addEventListener('click', (e) => {
-    if (storyCta.dataset.productId) {
-      e.preventDefault();
-      const id = storyCta.dataset.productId;
-      closeStoryViewer();
-      openQuickview(id);
-    }
-  });
+  // O CTA agora é sempre um link real (produto ou linkUrl externo) — a navegação é nativa,
+  // só fechamos o viewer antes pra não ficar um modal aberto por cima da próxima página.
+  storyCta.addEventListener('click', () => closeStoryViewer());
   storyMuteBtn.addEventListener('click', () => {
     storyMuted = !storyMuted;
     storyVideo.muted = storyMuted;
@@ -1486,7 +1373,7 @@
       saveFavs();
       renderGrid(currentFilter, currentSearch);
       renderNovidades();
-      syncQuickviewFav();
+      syncPdpFavButton();
       if (!document.getElementById('profilePanel-favoritos').hidden) renderProfileFavorites();
     } catch {
       // sem conexão agora — os favoritos locais continuam valendo e sincronizam no próximo login
@@ -1991,7 +1878,6 @@
       closeMegaMenu();
       closeAccountModal();
       closeStoryViewer();
-      closeQuickview();
       closeBag();
     }
     if (storyViewer.classList.contains('is-open')) {
@@ -2016,6 +1902,129 @@
   const dataError = document.getElementById('dataError');
   const dataErrorRetry = document.getElementById('dataErrorRetry');
 
+  // ---------- página de produto (produto.html) ----------
+  // Reaproveita os mesmos helpers da vitrine (getEffective, money, colorDotsHtml,
+  // variantLabel, isLowStock, syncAddButton, productCard) — é o mesmo main.js rodando nas duas
+  // páginas, só muda o que é populado ao carregar.
+  function initProductPage() {
+    const id = decodeURIComponent(location.pathname.replace(/^\/produto\//, ''));
+    const p = PRODUCTS.find((x) => x.id === id);
+    const layout = document.getElementById('pdpLayout');
+    const notFound = document.getElementById('pdpNotFound');
+    if (!p) {
+      layout.hidden = true;
+      notFound.hidden = false;
+      return;
+    }
+
+    document.getElementById('pdpBreadcrumb').innerHTML =
+      `<a href="/">Home</a> / <a href="/#colecao">${p.category}</a> / <span>${p.name}</span>`;
+
+    const images = p.images && p.images.length ? p.images : [p.img];
+    const mainImg = document.getElementById('pdpMainImg');
+    const thumbs = document.getElementById('pdpThumbs');
+    mainImg.src = images[0];
+    mainImg.alt = p.name;
+    thumbs.innerHTML = images
+      .map(
+        (url, i) => `<button type="button" class="pdp-thumb${i === 0 ? ' is-active' : ''}" data-src="${url}"><img src="${url}" alt="" /></button>`
+      )
+      .join('');
+    thumbs.hidden = images.length <= 1;
+    thumbs.querySelectorAll('.pdp-thumb').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        mainImg.src = btn.dataset.src;
+        thumbs.querySelectorAll('.pdp-thumb').forEach((b) => b.classList.toggle('is-active', b === btn));
+      });
+    });
+
+    document.getElementById('pdpBrand').textContent = `${p.brand}${p.collection ? ` · ${p.collection}` : ''}`;
+    document.getElementById('pdpName').textContent = p.name;
+
+    const { price, promo } = getEffective(p);
+    const priceEl = document.getElementById('pdpPrice');
+    const priceOldEl = document.getElementById('pdpPriceOld');
+    const discountBadge = document.getElementById('pdpDiscountBadge');
+    priceEl.textContent = money(price);
+    priceEl.classList.toggle('consult', p.price == null);
+    priceEl.classList.toggle('is-promo', !!promo);
+    priceOldEl.textContent = promo ? money(p.price) : '';
+    priceOldEl.hidden = !promo;
+    discountBadge.textContent = promo ? `-${promo.percent}%` : '';
+    discountBadge.hidden = !promo;
+
+    document.getElementById('pdpDesc').textContent = p.desc;
+
+    const variants = p.variants || [];
+    const inStock = variants.filter((v) => v.stock > 0);
+    const soldOut = p.hasVariants && inStock.length === 0;
+    const defaultVariant = inStock[0] || null;
+    document.getElementById('pdpLowStock').hidden = !isLowStock(p, soldOut);
+    document.getElementById('pdpColorDots').innerHTML = colorDotsHtml(variants);
+
+    const variantPicker = document.getElementById('pdpVariantPicker');
+    if (p.hasVariants) {
+      variantPicker.hidden = false;
+      variantPicker.innerHTML = variants
+        .map(
+          (v) => `<button type="button" class="variant-chip${v.stock <= 0 ? ' is-soldout' : ''}${defaultVariant && v.id === defaultVariant.id ? ' is-active' : ''}" data-variant-id="${v.id}" ${v.stock <= 0 ? 'disabled' : ''}>${variantLabel(v)}</button>`
+        )
+        .join('');
+    } else {
+      variantPicker.hidden = true;
+      variantPicker.innerHTML = '';
+    }
+
+    const addBtn = document.getElementById('pdpAdd');
+    addBtn.dataset.id = p.id;
+    if (defaultVariant) addBtn.dataset.variantId = defaultVariant.id;
+    else delete addBtn.dataset.variantId;
+    addBtn.classList.toggle('is-soldout', soldOut);
+    addBtn.disabled = soldOut;
+    if (soldOut) addBtn.textContent = 'Esgotado';
+    else syncAddButton(addBtn);
+
+    document.getElementById('pdpAsk').href = waLink(
+      `Olá! Tenho interesse na peça "${p.name}" que vi no catálogo By NaNa. Pode me passar mais detalhes?`
+    );
+
+    document.getElementById('pdpFav').dataset.id = p.id;
+    syncPdpFavButton();
+
+    // medidas: mostra a do tamanho selecionado no momento (ou da variante padrão, se só houver uma)
+    const measurementsBlock = document.getElementById('pdpMeasurementsBlock');
+    const measurementsText = document.getElementById('pdpMeasurements');
+    function syncMeasurements() {
+      const activeChip = variantPicker.querySelector('.variant-chip.is-active');
+      const variant = activeChip ? variants.find((v) => v.id === activeChip.dataset.variantId) : defaultVariant;
+      if (variant && variant.measurements) {
+        measurementsText.textContent = variant.measurements;
+        measurementsBlock.hidden = false;
+      } else {
+        measurementsBlock.hidden = true;
+      }
+    }
+    syncMeasurements();
+    variantPicker.addEventListener('click', () => setTimeout(syncMeasurements, 0));
+
+    const compositionBlock = document.getElementById('pdpCompositionBlock');
+    if (p.composition) {
+      document.getElementById('pdpComposition').textContent = p.composition;
+      compositionBlock.hidden = false;
+    } else {
+      compositionBlock.hidden = true;
+    }
+
+    const related = PRODUCTS.filter((x) => x.category === p.category && x.id !== p.id).slice(0, 4);
+    const relatedGrid = document.getElementById('pdpRelatedGrid');
+    relatedGrid.innerHTML = '';
+    related.forEach((r) => relatedGrid.appendChild(productCard(r)));
+    document.getElementById('pdpRelated').hidden = related.length === 0;
+
+    layout.hidden = false;
+    notFound.hidden = true;
+  }
+
   async function init() {
     dataError.hidden = true;
     loadBar.classList.remove('is-done');
@@ -2037,25 +2046,35 @@
       NOVIDADES = data.novidades || [];
     } catch (e) {
       loadBar.classList.remove('is-active');
-      grid.innerHTML = '';
-      emptyState.hidden = true;
+      if (grid) grid.innerHTML = '';
+      if (emptyState) emptyState.hidden = true;
       dataError.hidden = false;
       return;
     }
 
     loadBar.classList.remove('is-active');
     loadBar.classList.add('is-done');
-    buildFilters();
-    buildCatCards();
     buildMegaMenu();
-    buildCollectionFilter();
-    buildSecondaryFilters();
     renderPromoBanner();
-    renderGrid('Todos', '');
-    renderNovidades();
-    renderStoriesRail();
     renderCart();
     restoreSession();
+
+    if (document.body.dataset.page === 'produto') {
+      initProductPage();
+    } else {
+      const params = new URLSearchParams(location.search);
+      const initialSearch = params.get('busca') || '';
+      const initialCategory = params.get('categoria') || 'Todos';
+      buildFilters();
+      buildCatCards();
+      buildCollectionFilter();
+      buildSecondaryFilters();
+      if (searchInput) searchInput.value = initialSearch;
+      renderGrid(initialCategory, initialSearch);
+      filtersEl.querySelectorAll('.filter-chip').forEach((c) => c.classList.toggle('is-active', c.dataset.filter === initialCategory));
+      renderNovidades();
+      renderStoriesRail();
+    }
   }
 
   dataErrorRetry.addEventListener('click', init);
