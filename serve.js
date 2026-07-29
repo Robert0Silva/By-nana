@@ -139,6 +139,78 @@ async function createDefaultVariants(client, productId, category) {
   }
 }
 
+function normalizeVariantPayload(input) {
+  if (!Array.isArray(input)) return null;
+  const variants = input.map((variant) => {
+    const size = String(variant.size || '').trim();
+    const color = String(variant.color || '').trim();
+    const sku = String(variant.sku || '').trim() || null;
+    const stock = Math.max(0, Number.parseInt(variant.stock, 10) || 0);
+    if (!size) throw new Error('Todas as variações precisam de um tamanho');
+    return { id: String(variant.id || '').trim(), size, color, sku, stock };
+  });
+  if (!variants.length) throw new Error('Adicione ao menos um tamanho à grade');
+  const combinations = new Set(variants.map((variant) =>
+    `${variant.size.toLocaleLowerCase('pt-BR')}|${variant.color.toLocaleLowerCase('pt-BR')}`));
+  if (combinations.size !== variants.length) throw new Error('Existem tamanhos e cores repetidos na grade');
+  const skus = variants.filter((variant) => variant.sku).map((variant) => variant.sku.toLocaleLowerCase('pt-BR'));
+  if (new Set(skus).size !== skus.length) throw new Error('Existem SKUs repetidos na grade');
+  return variants;
+}
+
+async function syncProductVariants(client, productId, variants, adminUserId) {
+  const { rows: current } = await client.query(
+    'SELECT id, stock FROM product_variants WHERE product_id=$1 FOR UPDATE',
+    [productId]
+  );
+  const currentById = new Map(current.map((variant) => [variant.id, variant]));
+  const retainedIds = new Set();
+
+  for (let position = 0; position < variants.length; position += 1) {
+    const variant = variants[position];
+    if (variant.id && currentById.has(variant.id)) {
+      const previous = currentById.get(variant.id);
+      retainedIds.add(variant.id);
+      await client.query(
+        'UPDATE product_variants SET size=$1, color=$2, sku=$3, stock=$4, position=$5 WHERE id=$6',
+        [variant.size, variant.color, variant.sku, variant.stock, position, variant.id]
+      );
+      await recordInventoryMovement(client, {
+        variantId: variant.id,
+        type: 'adjustment',
+        quantity: variant.stock - previous.stock,
+        stockAfter: variant.stock,
+        adminUserId,
+        note: 'Edição completa do produto',
+      });
+      continue;
+    }
+
+    const id = `variant-${Date.now().toString(36)}-${position}-${Math.random().toString(36).slice(2, 7)}`;
+    await client.query(
+      'INSERT INTO product_variants (id, product_id, size, color, sku, stock, position) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+      [id, productId, variant.size, variant.color, variant.sku, variant.stock, position]
+    );
+    await recordInventoryMovement(client, {
+      variantId: id,
+      type: 'initial',
+      quantity: variant.stock,
+      stockAfter: variant.stock,
+      adminUserId,
+      note: 'Cadastro pelo editor de produto',
+    });
+  }
+
+  const removed = current.filter((variant) => !retainedIds.has(variant.id));
+  for (const variant of removed) {
+    const history = await client.query('SELECT COUNT(*)::int AS count FROM inventory_movements WHERE variant_id=$1', [variant.id]);
+    if (history.rows[0].count > 0) {
+      throw new Error('Uma variação removida possui histórico. Mantenha-a na grade com estoque zero');
+    }
+    await client.query('DELETE FROM product_variants WHERE id=$1', [variant.id]);
+  }
+}
+
 async function recordInventoryMovement(client, { variantId, type, quantity, stockAfter, orderId = null, adminUserId = null, note = null }) {
   if (!quantity) return;
   await client.query(
@@ -803,19 +875,35 @@ async function handleApi(req, res, pathname) {
       const tag = (body.tag || '').trim() || 'Novidade';
       const img = `assets/img/processed/${fileName}`;
       const id = `${slug}-${Date.now().toString(36)}`;
-
-      // keep categories/collections in sync so filters pick up brand-new ones
-      await pool.query('INSERT INTO categories(name) VALUES ($1) ON CONFLICT (lower(name)) DO NOTHING', [category]);
-      if (collection) {
-        await pool.query('INSERT INTO collections(name) VALUES ($1) ON CONFLICT (lower(name)) DO NOTHING', [collection]);
+      let variants;
+      try {
+        variants = normalizeVariantPayload(body.variants);
+      } catch (err) {
+        return sendJSON(res, 400, { error: err.message });
       }
 
-      await pool.query(
-        `INSERT INTO products (id, name, brand, category_id, collection_id, tag, price, img, description)
-         VALUES ($1, $2, $3, (SELECT id FROM categories WHERE lower(name) = lower($4)), (SELECT id FROM collections WHERE lower(name) = lower($5)), $6, $7, $8, $9)`,
-        [id, name, brand, category, collection || null, tag, price, img, desc]
-      );
-      await createDefaultVariants(pool, id, category);
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('INSERT INTO categories(name) VALUES ($1) ON CONFLICT (lower(name)) DO NOTHING', [category]);
+        if (collection) {
+          await client.query('INSERT INTO collections(name) VALUES ($1) ON CONFLICT (lower(name)) DO NOTHING', [collection]);
+        }
+        await client.query(
+          `INSERT INTO products (id, name, brand, category_id, collection_id, tag, price, img, description)
+           VALUES ($1, $2, $3, (SELECT id FROM categories WHERE lower(name) = lower($4)), (SELECT id FROM collections WHERE lower(name) = lower($5)), $6, $7, $8, $9)`,
+          [id, name, brand, category, collection || null, tag, price, img, desc]
+        );
+        if (variants) await syncProductVariants(client, id, variants, admin.id);
+        else await createDefaultVariants(client, id, category);
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        if (err.code === '23505') return sendJSON(res, 409, { error: 'Já existe uma variação com esse tamanho/cor ou SKU' });
+        return sendJSON(res, 400, { error: err.message || 'Não foi possível cadastrar o produto' });
+      } finally {
+        client.release();
+      }
 
       const product = (await getProducts()).find((p) => p.id === id);
       const [categories, collections] = await Promise.all([getCategories(), getCollections()]);
@@ -844,10 +932,11 @@ async function handleApi(req, res, pathname) {
       const collection = (body.collection || '').trim();
       const brand = (body.brand || 'By NaNa').trim();
       const tag = (body.tag || '').trim() || 'Novidade';
-
-      await pool.query('INSERT INTO categories(name) VALUES ($1) ON CONFLICT (lower(name)) DO NOTHING', [category]);
-      if (collection) {
-        await pool.query('INSERT INTO collections(name) VALUES ($1) ON CONFLICT (lower(name)) DO NOTHING', [collection]);
+      let variants;
+      try {
+        variants = normalizeVariantPayload(body.variants);
+      } catch (err) {
+        return sendJSON(res, 400, { error: err.message });
       }
 
       let img = null;
@@ -869,15 +958,34 @@ async function handleApi(req, res, pathname) {
         img = `assets/img/processed/${fileName}`;
       }
 
-      const { rowCount } = await pool.query(
-        `UPDATE products SET name=$1, brand=$2,
-           category_id=(SELECT id FROM categories WHERE lower(name)=lower($3)),
-           collection_id=(SELECT id FROM collections WHERE lower(name)=lower($4)),
-           tag=$5, price=$6, description=$7, img=COALESCE($8, img)
-         WHERE id=$9`,
-        [name, brand, category, collection || null, tag, price, desc, img, body.id]
-      );
-      if (!rowCount) return sendJSON(res, 404, { error: 'Produto não encontrado' });
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('INSERT INTO categories(name) VALUES ($1) ON CONFLICT (lower(name)) DO NOTHING', [category]);
+        if (collection) {
+          await client.query('INSERT INTO collections(name) VALUES ($1) ON CONFLICT (lower(name)) DO NOTHING', [collection]);
+        }
+        const { rowCount } = await client.query(
+          `UPDATE products SET name=$1, brand=$2,
+             category_id=(SELECT id FROM categories WHERE lower(name)=lower($3)),
+             collection_id=(SELECT id FROM collections WHERE lower(name)=lower($4)),
+             tag=$5, price=$6, description=$7, img=COALESCE($8, img)
+           WHERE id=$9`,
+          [name, brand, category, collection || null, tag, price, desc, img, body.id]
+        );
+        if (!rowCount) {
+          await client.query('ROLLBACK');
+          return sendJSON(res, 404, { error: 'Produto não encontrado' });
+        }
+        if (variants) await syncProductVariants(client, body.id, variants, admin.id);
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        if (err.code === '23505') return sendJSON(res, 409, { error: 'Já existe uma variação com esse tamanho/cor ou SKU' });
+        return sendJSON(res, 400, { error: err.message || 'Não foi possível atualizar o produto' });
+      } finally {
+        client.release();
+      }
       logActivity(admin, 'product.update', 'product', body.id, { name });
       return sendJSON(res, 200, { products: await getProducts() });
     }

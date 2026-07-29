@@ -394,10 +394,29 @@
   const pPreview = document.getElementById('pPreview');
   const pSubmit = document.getElementById('pSubmit');
   const pCancelEdit = document.getElementById('pCancelEdit');
+  const pNewProduct = document.getElementById('pNewProduct');
   const productFormTitle = document.getElementById('productFormTitle');
+  const productFormEyebrow = document.getElementById('productFormEyebrow');
   const productMsg = document.getElementById('productMsg');
+  const pGradePreset = document.getElementById('pGradePreset');
+  const pGradeColor = document.getElementById('pGradeColor');
+  const pGradeStock = document.getElementById('pGradeStock');
+  const pGenerateGrade = document.getElementById('pGenerateGrade');
+  const pAddVariant = document.getElementById('pAddVariant');
+  const pVariantRows = document.getElementById('pVariantRows');
+  const pVariantEmpty = document.getElementById('pVariantEmpty');
+  const pStockSummary = document.getElementById('pStockSummary');
+  const pReviewTitle = document.getElementById('pReviewTitle');
+  const pReviewSummary = document.getElementById('pReviewSummary');
 
   let imageDataUrl = '';
+  let editorVariants = [];
+  const gradePresets = {
+    clothing: ['PP', 'P', 'M', 'G', 'GG', 'XGG'],
+    shoes: ['33', '34', '35', '36', '37', '38', '39', '40'],
+    unique: ['Único'],
+    custom: [],
+  };
 
   pImage.addEventListener('change', () => {
     const file = pImage.files[0];
@@ -421,7 +440,90 @@
     productMsg.hidden = !text;
   }
 
-  function startEditProduct(p) {
+  function readVariantRows() {
+    pVariantRows.querySelectorAll('tr[data-index]').forEach((row) => {
+      const variant = editorVariants[Number(row.dataset.index)];
+      if (!variant) return;
+      variant.size = row.querySelector('.v-size').value.trim();
+      variant.color = row.querySelector('.v-color').value.trim();
+      variant.sku = row.querySelector('.v-sku').value.trim();
+      variant.stock = Math.max(0, Number.parseInt(row.querySelector('.v-stock').value, 10) || 0);
+    });
+  }
+
+  function updateProductReview() {
+    readVariantRows();
+    const valid = editorVariants.filter((variant) => variant.size);
+    const total = valid.reduce((sum, variant) => sum + Number(variant.stock || 0), 0);
+    const empty = valid.filter((variant) => Number(variant.stock || 0) === 0).length;
+    pStockSummary.innerHTML = `<strong>${total} unidades</strong><span>${valid.length} variações</span><span>${empty} sem estoque</span>`;
+    const name = document.getElementById('pName').value.trim();
+    pReviewTitle.textContent = pEditId.value ? 'Salvar todas as alterações' : 'Produto pronto para publicar?';
+    pReviewSummary.textContent = `${name || 'Produto sem nome'} · ${valid.length} tamanho(s) · ${total} unidade(s)`;
+  }
+
+  function renderEditorVariants() {
+    pVariantRows.innerHTML = editorVariants.map((variant, index) => `
+      <tr data-index="${index}">
+        <td><input type="text" class="v-size" value="${variant.size || ''}" placeholder="Ex: P ou 36" aria-label="Tamanho" /></td>
+        <td><input type="text" class="v-color" value="${variant.color || ''}" placeholder="Ex: Preto" aria-label="Cor" /></td>
+        <td><input type="text" class="v-sku" value="${variant.sku || ''}" placeholder="Gerado automaticamente" aria-label="SKU" /></td>
+        <td><input type="number" class="v-stock" min="0" step="1" value="${Number(variant.stock || 0)}" aria-label="Estoque" /></td>
+        <td><button type="button" class="admin-variant-remove" data-index="${index}" aria-label="Remover variação">✕</button></td>
+      </tr>
+    `).join('');
+    pVariantEmpty.hidden = editorVariants.length > 0;
+    pVariantRows.querySelectorAll('input').forEach((input) => input.addEventListener('input', updateProductReview));
+    pVariantRows.querySelectorAll('.admin-variant-remove').forEach((button) => {
+      button.addEventListener('click', () => {
+        readVariantRows();
+        editorVariants.splice(Number(button.dataset.index), 1);
+        renderEditorVariants();
+      });
+    });
+    updateProductReview();
+  }
+
+  function addVariantRow(variant = {}) {
+    readVariantRows();
+    editorVariants.push({
+      id: variant.id || '',
+      size: variant.size || '',
+      color: variant.color || '',
+      sku: variant.sku || '',
+      stock: Number(variant.stock || 0),
+    });
+    renderEditorVariants();
+    const lastInput = pVariantRows.querySelector('tr:last-child .v-size');
+    if (lastInput && !variant.size) lastInput.focus();
+  }
+
+  pGenerateGrade.addEventListener('click', () => {
+    readVariantRows();
+    const sizes = gradePresets[pGradePreset.value] || [];
+    if (!sizes.length) {
+      addVariantRow({ color: pGradeColor.value.trim(), stock: pGradeStock.value });
+      return;
+    }
+    const color = pGradeColor.value.trim();
+    const stock = Math.max(0, Number.parseInt(pGradeStock.value, 10) || 0);
+    let added = 0;
+    sizes.forEach((size) => {
+      const exists = editorVariants.some((variant) =>
+        variant.size.toLocaleLowerCase('pt-BR') === size.toLocaleLowerCase('pt-BR')
+        && (variant.color || '').toLocaleLowerCase('pt-BR') === color.toLocaleLowerCase('pt-BR'));
+      if (!exists) {
+        editorVariants.push({ id: '', size, color, sku: '', stock });
+        added += 1;
+      }
+    });
+    renderEditorVariants();
+    setMsg(added ? `${added} variações adicionadas à grade.` : 'Essa combinação de tamanhos e cor já está na grade.', added ? 'ok' : 'error');
+  });
+  pAddVariant.addEventListener('click', () => addVariantRow());
+  ['pName', 'pPrice'].forEach((id) => document.getElementById(id).addEventListener('input', updateProductReview));
+
+  async function startEditProduct(p) {
     pEditId.value = p.id;
     document.getElementById('pName').value = p.name;
     document.getElementById('pBrand').value = p.brand;
@@ -436,29 +538,46 @@
     pImage.value = '';
     pPreview.src = p.img;
     pPreview.hidden = false;
-    pImageHint.textContent = '(opcional — deixe em branco para manter a foto atual)';
-    productFormTitle.textContent = `Editando "${p.name}"`;
-    pSubmit.textContent = 'Salvar alterações';
+    pImageHint.textContent = 'Escolha outra foto somente se quiser substituir a atual';
+    productFormEyebrow.textContent = 'Editando produto';
+    productFormTitle.textContent = p.name;
+    pSubmit.textContent = 'Salvar produto completo';
     pCancelEdit.hidden = false;
     setMsg('', '');
+    editorVariants = [];
+    renderEditorVariants();
     renderProductList();
     productForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    try {
+      const data = await api('/api/products/variants/list', 'POST', { productId: p.id });
+      if (pEditId.value !== p.id) return;
+      editorVariants = (data.variants || []).map((variant) => ({ ...variant, stock: Number(variant.stock || 0) }));
+      renderEditorVariants();
+    } catch (err) {
+      setMsg(`Produto carregado, mas a grade não pôde ser aberta: ${err.message}`, 'error');
+    }
   }
 
-  function endEditProduct() {
+  function endEditProduct(scroll = false) {
     pEditId.value = '';
     productForm.reset();
     document.getElementById('pBrand').value = 'By NaNa';
     pPreview.hidden = true;
     imageDataUrl = '';
-    pImageHint.textContent = '';
-    productFormTitle.textContent = 'Adicionar produto';
-    pSubmit.textContent = 'Publicar no catálogo';
+    pImageHint.textContent = 'JPG, PNG ou WebP';
+    productFormEyebrow.textContent = 'Novo produto';
+    productFormTitle.textContent = 'Cadastre o produto completo';
+    pSubmit.textContent = 'Salvar produto completo';
     pCancelEdit.hidden = true;
+    editorVariants = [];
+    renderEditorVariants();
     renderProductList();
+    if (scroll) productForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
-  pCancelEdit.addEventListener('click', endEditProduct);
+  pCancelEdit.addEventListener('click', () => endEditProduct());
+  pNewProduct.addEventListener('click', () => endEditProduct(true));
+  renderEditorVariants();
 
   productForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -471,6 +590,26 @@
     const editing = !!pEditId.value;
     if (!editing && !imageDataUrl) {
       setMsg('Selecione uma foto do produto.', 'error');
+      return;
+    }
+    readVariantRows();
+    const variants = editorVariants
+      .map((variant) => ({
+        id: variant.id || undefined,
+        size: variant.size.trim(),
+        color: variant.color.trim(),
+        sku: variant.sku.trim(),
+        stock: Number(variant.stock || 0),
+      }))
+      .filter((variant) => variant.size);
+    if (!variants.length) {
+      setMsg('Adicione ao menos um tamanho à grade do produto.', 'error');
+      return;
+    }
+    const combinations = new Set(variants.map((variant) =>
+      `${variant.size.toLocaleLowerCase('pt-BR')}|${variant.color.toLocaleLowerCase('pt-BR')}`));
+    if (combinations.size !== variants.length) {
+      setMsg('Existem tamanhos e cores repetidos na grade.', 'error');
       return;
     }
 
@@ -487,6 +626,7 @@
         price: document.getElementById('pPrice').value,
         desc: document.getElementById('pDesc').value.trim(),
         image: imageDataUrl,
+        variants,
       };
 
       if (editing) {
@@ -513,6 +653,7 @@
       setMsg(err.message, 'error');
     } finally {
       pSubmit.disabled = false;
+      pSubmit.textContent = 'Salvar produto completo';
     }
   });
 
@@ -545,21 +686,15 @@
         <div class="admin-product-item-body">
           <span class="admin-product-item-name">${p.name}</span>
           <span class="admin-product-item-meta">${p.category}${p.collection ? ` · ${p.collection}` : ''}</span>
+          <span class="admin-product-item-meta">${(p.variants || []).length} variações · ${p.totalStock || 0} unidades</span>
           ${priceHtml}
           <div class="admin-product-item-actions">
-            <button type="button" class="admin-product-item-edit" data-id="${p.id}">Editar</button>
-            <button type="button" class="admin-product-item-stock${p.totalStock === 0 ? ' is-empty' : p.totalStock <= 4 ? ' is-low' : ''}" data-id="${p.id}">
-              ${p.totalStock === 0 ? 'Esgotado' : p.totalStock <= 4 ? `Estoque baixo (${p.totalStock})` : `Estoque (${p.totalStock})`}
-            </button>
+            <button type="button" class="admin-product-item-edit" data-id="${p.id}">Editar produto</button>
             <button type="button" class="admin-product-item-remove" data-id="${p.id}">Remover</button>
           </div>
-          <div class="admin-variant-editor" hidden></div>
         </div>
       `;
       div.querySelector('.admin-product-item-edit').addEventListener('click', () => startEditProduct(p));
-      div.querySelector('.admin-product-item-stock').addEventListener('click', () => {
-        toggleVariantEditor(p.id, div.querySelector('.admin-variant-editor'));
-      });
       div.querySelector('.admin-product-item-remove').addEventListener('click', async () => {
         if (!confirm(`Remover "${p.name}" do catálogo?`)) return;
         try {

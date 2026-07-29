@@ -178,65 +178,126 @@
     </section>
 
     <section class="admin-panel" id="panel-produtos" hidden>
-      <section class="admin-card admin-card-wide">
-        <h2 id="productFormTitle">Adicionar produto</h2>
-        <p class="admin-card-hint">A foto é ajustada automaticamente (cor, nitidez e tamanho) ao ser publicada.</p>
+      <section class="admin-card admin-card-wide admin-product-editor">
+        <div class="admin-product-editor-head">
+          <div>
+            <span class="admin-eyebrow" id="productFormEyebrow">Novo produto</span>
+            <h2 id="productFormTitle">Cadastre o produto completo</h2>
+            <p class="admin-card-hint">Informações, foto, grade e estoque são salvos juntos.</p>
+          </div>
+          <button type="button" class="btn btn-ghost" id="pCancelEdit" hidden>Fechar edição</button>
+        </div>
+        <div class="admin-product-steps" aria-label="Etapas do cadastro">
+          <span><b>1</b> Informações</span>
+          <span><b>2</b> Foto</span>
+          <span><b>3</b> Grade e estoque</span>
+          <span><b>4</b> Revisão</span>
+        </div>
         <form id="productForm" class="admin-product-form">
           <input type="hidden" id="pEditId" value="" />
-          <div class="admin-form-row">
+          <section class="admin-editor-section">
+            <div class="admin-editor-section-title"><span>1</span><div><h3>Informações do produto</h3><p>Dados exibidos na vitrine e na busca.</p></div></div>
+            <div class="admin-form-row">
+              <label>
+                Nome da peça
+                <input type="text" id="pName" placeholder="Ex: Vestido Midi Floral" required />
+              </label>
+              <label>
+                Marca
+                <input type="text" id="pBrand" placeholder="By NaNa" value="By NaNa" />
+              </label>
+            </div>
+            <div class="admin-form-row">
+              <label>
+                Categoria
+                <select id="pCategory" required></select>
+              </label>
+              <label>
+                Coleção (opcional)
+                <select id="pCollection"><option value="">Nenhuma</option></select>
+              </label>
+            </div>
+            <div class="admin-form-row">
+              <label>
+                Selo/tag
+                <input type="text" id="pTag" placeholder="Ex: Novidade, Exclusivo, Casual" />
+              </label>
+              <label>
+                Valor (R$)
+                <input type="number" id="pPrice" min="0" step="0.01" placeholder="Deixe vazio para Sob consulta" />
+              </label>
+            </div>
             <label>
-              Nome da peça
-              <input type="text" id="pName" placeholder="Ex: Vestido Midi Floral" required />
+              Descrição
+              <textarea id="pDesc" rows="4" placeholder="Descreva tecido, caimento, modelagem e detalhes..." required></textarea>
             </label>
-            <label>
-              Marca
-              <input type="text" id="pBrand" placeholder="By NaNa" value="By NaNa" />
-            </label>
-          </div>
+          </section>
 
-          <div class="admin-form-row">
-            <label>
-              Categoria
-              <select id="pCategory" required></select>
-            </label>
-            <label>
-              Coleção (opcional)
-              <select id="pCollection"><option value="">Nenhuma</option></select>
-            </label>
-          </div>
+          <section class="admin-editor-section">
+            <div class="admin-editor-section-title"><span>2</span><div><h3>Foto principal</h3><p>Será ajustada automaticamente ao publicar.</p></div></div>
+            <div class="admin-product-photo-field">
+              <label class="admin-upload-zone" for="pImage">
+                <span class="admin-upload-icon">＋</span>
+                <strong>Escolher foto do produto</strong>
+                <small id="pImageHint">JPG, PNG ou WebP</small>
+                <input type="file" id="pImage" accept="image/*" />
+              </label>
+              <img id="pPreview" class="admin-preview" hidden alt="Pré-visualização" />
+            </div>
+          </section>
 
-          <div class="admin-form-row">
-            <label>
-              Selo/tag
-              <input type="text" id="pTag" placeholder="Ex: Peça exclusiva, Casual, Promoção" />
-            </label>
-            <label>
-              Valor (R$) — deixe em branco para "Sob consulta"
-              <input type="number" id="pPrice" min="0" step="0.01" placeholder="Ex: 199.90" />
-            </label>
-          </div>
+          <section class="admin-editor-section">
+            <div class="admin-editor-section-title"><span>3</span><div><h3>Grade e estoque</h3><p>Gere os tamanhos de uma vez e ajuste apenas o necessário.</p></div></div>
+            <div class="admin-grade-builder">
+              <label>
+                Modelo de grade
+                <select id="pGradePreset">
+                  <option value="clothing">Roupa — PP ao XGG</option>
+                  <option value="shoes">Calçado — 33 ao 40</option>
+                  <option value="unique">Tamanho único</option>
+                  <option value="custom">Personalizada</option>
+                </select>
+              </label>
+              <label>
+                Cor (opcional)
+                <input type="text" id="pGradeColor" placeholder="Ex: Preto" />
+              </label>
+              <label>
+                Estoque inicial por tamanho
+                <input type="number" id="pGradeStock" min="0" step="1" value="0" />
+              </label>
+              <button type="button" class="btn btn-outline" id="pGenerateGrade">Gerar grade</button>
+            </div>
+            <div class="admin-grade-toolbar">
+              <div class="admin-stock-summary" id="pStockSummary"></div>
+              <button type="button" class="btn btn-ghost" id="pAddVariant">＋ Adicionar tamanho</button>
+            </div>
+            <div class="admin-grade-table-wrap">
+              <table class="admin-grade-table">
+                <thead><tr><th>Tamanho</th><th>Cor</th><th>SKU</th><th>Estoque</th><th><span class="sr-only">Remover</span></th></tr></thead>
+                <tbody id="pVariantRows"></tbody>
+              </table>
+              <p class="admin-empty-block" id="pVariantEmpty">Nenhum tamanho adicionado.</p>
+            </div>
+            <p class="admin-field-help">O SKU pode ficar vazio. O estoque informado aqui cria o saldo inicial; alterações posteriores ficam registradas no histórico.</p>
+          </section>
 
-          <label>
-            Descrição
-            <textarea id="pDesc" rows="3" placeholder="Descreva o tecido, caimento, detalhes..." required></textarea>
-          </label>
-
-          <label>
-            Foto do produto <span id="pImageHint"></span>
-            <input type="file" id="pImage" accept="image/*" />
-          </label>
-          <img id="pPreview" class="admin-preview" hidden alt="Pré-visualização" />
-
-          <div class="admin-form-actions">
-            <button type="submit" class="btn btn-primary btn-lg" id="pSubmit">Publicar no catálogo</button>
-            <button type="button" class="btn btn-ghost" id="pCancelEdit" hidden>Cancelar edição</button>
+          <div class="admin-form-actions admin-product-savebar">
+            <div>
+              <strong id="pReviewTitle">Produto pronto para publicar?</strong>
+              <span id="pReviewSummary">Preencha os dados e confira a grade.</span>
+            </div>
+            <button type="submit" class="btn btn-primary btn-lg" id="pSubmit">Salvar produto completo</button>
           </div>
           <p class="admin-form-msg" id="productMsg" hidden></p>
         </form>
       </section>
 
       <section class="admin-card admin-card-wide">
-        <h2>Produtos no catálogo (<span id="productCount">0</span>)</h2>
+        <div class="admin-list-heading">
+          <div><h2>Produtos no catálogo (<span id="productCount">0</span>)</h2><p class="admin-card-hint">Edite informações, grade e estoque no mesmo lugar.</p></div>
+          <button type="button" class="btn btn-primary" id="pNewProduct">＋ Novo produto</button>
+        </div>
         <input type="search" id="productSearch" class="admin-search" placeholder="Buscar por nome, categoria ou coleção..." />
         <div class="admin-product-list" id="productList"></div>
       </section>
