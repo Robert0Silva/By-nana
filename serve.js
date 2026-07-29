@@ -382,6 +382,14 @@ async function getCustomerAddresses(customerId) {
   return rows;
 }
 
+async function getCustomerFavorites(customerId) {
+  const { rows } = await pool.query(
+    'SELECT product_id AS "productId" FROM customer_favorites WHERE customer_id = $1 ORDER BY created_at DESC',
+    [customerId]
+  );
+  return rows.map((r) => r.productId);
+}
+
 // Resolve a identidade do cliente sempre a partir do token assinado — nunca de um id
 // enviado no corpo da requisição, para que ninguém possa ler/alterar dados de outra conta.
 function resolveCustomerId(body) {
@@ -1781,6 +1789,54 @@ async function handleApi(req, res, pathname) {
 
       await pool.query('DELETE FROM customer_addresses WHERE id = $1 AND customer_id = $2', [body.id, customerId]);
       return sendJSON(res, 200, { addresses: await getCustomerAddresses(customerId) });
+    }
+
+    // ------ favoritos do cliente (sincroniza a lista de desejos entre dispositivos) ------
+    if (pathname === '/api/customers/favorites/list' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const customerId = resolveCustomerId(body);
+      if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
+      return sendJSON(res, 200, { favorites: await getCustomerFavorites(customerId) });
+    }
+
+    if (pathname === '/api/customers/favorites' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const customerId = resolveCustomerId(body);
+      if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
+      if (!body.productId) return sendJSON(res, 400, { error: 'productId é obrigatório' });
+
+      await pool.query(
+        'INSERT INTO customer_favorites (customer_id, product_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
+        [customerId, body.productId]
+      );
+      return sendJSON(res, 201, { favorites: await getCustomerFavorites(customerId) });
+    }
+
+    if (pathname === '/api/customers/favorites' && req.method === 'DELETE') {
+      const body = await readJSONBody(req);
+      const customerId = resolveCustomerId(body);
+      if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
+      if (!body.productId) return sendJSON(res, 400, { error: 'productId é obrigatório' });
+
+      await pool.query('DELETE FROM customer_favorites WHERE customer_id = $1 AND product_id = $2', [customerId, body.productId]);
+      return sendJSON(res, 200, { favorites: await getCustomerFavorites(customerId) });
+    }
+
+    // Mescla o que já estava no localStorage do dispositivo com o servidor — nunca remove
+    // favoritos que o servidor já tinha e o dispositivo atual não conhecia (merge aditivo).
+    if (pathname === '/api/customers/favorites/sync' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const customerId = resolveCustomerId(body);
+      if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
+      const productIds = Array.isArray(body.productIds) ? body.productIds.filter((id) => typeof id === 'string' && id) : [];
+
+      for (const productId of productIds) {
+        await pool.query(
+          'INSERT INTO customer_favorites (customer_id, product_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
+          [customerId, productId]
+        );
+      }
+      return sendJSON(res, 200, { favorites: await getCustomerFavorites(customerId) });
     }
 
     if (pathname === '/api/customers/list' && req.method === 'POST') {

@@ -61,6 +61,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 .btn-outline{background:transparent;color:var(--ink);border:1.5px solid var(--ink);}
 .btn-outline:hover{background:var(--ink);color:var(--white);}
 .btn-lg{padding:16px 36px;font-size:1rem;}
+.btn-sm{padding:9px 16px;font-size:.8rem;}
 .btn-block{width:100%;justify-content:center;}
 
 /* ---------- accessibility helpers ---------- */
@@ -379,6 +380,30 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
   border:none;outline:none;background:transparent;font-family:var(--sans);font-size:.88rem;
   width:100%;color:var(--ink);
 }
+/* ---------- filtros secundários: tamanho, cor, preço, ordenação ---------- */
+.catalog-toolbar-secondary{
+  display:flex;align-items:flex-end;gap:22px;flex-wrap:wrap;
+  padding:16px 20px;margin-bottom:32px;border-radius:var(--radius-sm);background:var(--cream-dark);
+}
+.filter-group{display:flex;flex-direction:column;gap:8px;min-width:0;}
+.filter-group-label{font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft);font-weight:600;}
+.filters-sm{gap:6px;justify-content:flex-start;}
+.filter-chip-sm{padding:6px 14px;font-size:.78rem;}
+.color-filters{display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
+.color-filter-chip{
+  padding:3px;border-radius:50%;border:2px solid transparent;background:none;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;transition:border-color .2s;
+}
+.color-filter-chip .color-dot{margin:0;}
+.color-filter-chip:hover{border-color:var(--line);}
+.color-filter-chip.is-active{border-color:var(--gold);}
+.catalog-toolbar-secondary .collection-select{font-size:.82rem;padding:8px 14px;}
+.catalog-toolbar-secondary .btn-sm{align-self:flex-end;}
+@media (max-width:720px){
+  .catalog-toolbar-secondary{flex-direction:column;align-items:stretch;gap:16px;}
+  .catalog-toolbar-secondary .btn-sm{align-self:stretch;justify-content:center;}
+}
+
 .empty-state{text-align:center;color:var(--ink-soft);padding:40px 0;font-size:.95rem;}
 
 .product-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:26px;}

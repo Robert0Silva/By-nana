@@ -171,6 +171,14 @@ CREATE TABLE IF NOT EXISTS customer_addresses (
 );
 CREATE INDEX IF NOT EXISTS idx_addresses_customer ON customer_addresses(customer_id);
 
+-- lista de desejos sincronizada entre dispositivos; chave composta evita favorito duplicado.
+CREATE TABLE IF NOT EXISTS customer_favorites (
+  customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  product_id  TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (customer_id, product_id)
+);
+
 -- pedidos fechados pelo checkout do site (persistidos antes de abrir o WhatsApp, para dar
 -- ao admin uma lista/histórico real em vez de depender só da mensagem enviada).
 CREATE TABLE IF NOT EXISTS orders (

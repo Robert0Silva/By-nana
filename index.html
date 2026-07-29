@@ -184,6 +184,26 @@
         </div>
       </div>
 
+      <div class="catalog-toolbar-secondary">
+        <div class="filter-group">
+          <span class="filter-group-label">Tamanho</span>
+          <div class="filters filters-sm" id="sizeFilters"><!-- gerado via JS --></div>
+        </div>
+        <div class="filter-group">
+          <span class="filter-group-label">Cor</span>
+          <div class="color-filters" id="colorFilters"><!-- gerado via JS --></div>
+        </div>
+        <div class="filter-group">
+          <span class="filter-group-label">Preço</span>
+          <select class="collection-select" id="priceFilterSelect" aria-label="Filtrar por preço"><!-- gerado via JS --></select>
+        </div>
+        <div class="filter-group">
+          <span class="filter-group-label">Ordenar</span>
+          <select class="collection-select" id="sortSelect" aria-label="Ordenar produtos"><!-- gerado via JS --></select>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" id="clearFiltersBtn">Limpar filtros</button>
+      </div>
+
       <p class="empty-state" id="emptyState" hidden>Nenhuma peça encontrada por aqui. Que tal ver outra categoria?</p>
       <div class="product-grid" id="productGrid"><!-- gerado via JS --></div>
 

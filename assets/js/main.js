@@ -110,6 +110,57 @@
     return !!p.hasVariants && !soldOut && typeof p.totalStock === 'number' && p.totalStock > 0 && p.totalStock <= LOW_STOCK_THRESHOLD;
   }
 
+  // ---------- filtros de tamanho/cor/preço + ordenação (vitrine) ----------
+  const CLOTHING_SIZE_ORDER = ['PP', 'P', 'M', 'G', 'GG', 'GG1', 'GG2', 'XG', 'ÚNICO', 'UNICO', 'U'];
+
+  // Tamanhos numéricos (calçados) ordenam por valor; tamanhos de roupa seguem a ordem PP→GG;
+  // qualquer coisa fora desses dois grupos cai em ordem alfabética como último recurso.
+  function compareSizes(a, b) {
+    const na = Number(a);
+    const nb = Number(b);
+    if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
+    const ia = CLOTHING_SIZE_ORDER.indexOf(a.toUpperCase());
+    const ib = CLOTHING_SIZE_ORDER.indexOf(b.toUpperCase());
+    if (ia !== -1 && ib !== -1) return ia - ib;
+    if (ia !== -1) return -1;
+    if (ib !== -1) return 1;
+    return a.localeCompare(b, 'pt-BR');
+  }
+
+  function allVariants() {
+    return PRODUCTS.flatMap((p) => p.variants || []);
+  }
+
+  function availableSizes() {
+    const seen = new Set();
+    const list = [];
+    allVariants().forEach((v) => {
+      const s = (v.size || '').trim();
+      if (s && !seen.has(s)) {
+        seen.add(s);
+        list.push(s);
+      }
+    });
+    return list.sort(compareSizes);
+  }
+
+  function availableColors() {
+    return uniqueColors(allVariants());
+  }
+
+  // Limites não se sobrepõem: min exclusivo (exceto a 1ª faixa) e max inclusivo, exceto a última (sem teto).
+  const PRICE_RANGES = [
+    { id: 'until-150', label: 'Até R$ 150', min: -Infinity, max: 150 },
+    { id: '150-300', label: 'R$ 150 a R$ 300', min: 150, max: 300 },
+    { id: '300-500', label: 'R$ 300 a R$ 500', min: 300, max: 500 },
+    { id: 'above-500', label: 'Acima de R$ 500', min: 500, max: Infinity },
+  ];
+
+  let currentSize = '';
+  let currentColor = '';
+  let currentPriceRange = '';
+  let currentSort = 'recent';
+
   function cartSubtotal(keys) {
     return keys.reduce((sum, key) => {
       const entry = cart[key];
@@ -171,13 +222,25 @@
     localStorage.setItem(FAV_KEY, JSON.stringify([...favs]));
   }
   function toggleFav(id) {
-    if (favs.has(id)) favs.delete(id);
-    else favs.add(id);
+    const nowFav = !favs.has(id);
+    if (nowFav) favs.add(id);
+    else favs.delete(id);
     saveFavs();
     renderGrid(currentFilter, currentSearch);
     renderNovidades();
     syncQuickviewFav();
     if (!document.getElementById('profilePanel-favoritos').hidden) renderProfileFavorites();
+
+    // Cliente logado: espelha no servidor em segundo plano — falha aqui não quebra a UI
+    // (o estado local já é a fonte de verdade da tela; o próximo login resincroniza tudo).
+    if (currentCustomer) {
+      const token = getCustomerToken();
+      fetch('/api/customers/favorites', {
+        method: nowFav ? 'POST' : 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, productId: id }),
+      }).catch(() => {});
+    }
   }
 
   // ---------- catalog render ----------
@@ -280,12 +343,37 @@
     else if (filter !== 'Todos') list = list.filter((p) => p.category === filter);
     if (currentCollection) list = list.filter((p) => p.collection === currentCollection);
     list = list.filter((p) => matchesSearch(p, currentSearch));
+    if (currentSize) list = list.filter((p) => (p.variants || []).some((v) => v.size === currentSize && v.stock > 0));
+    if (currentColor) {
+      list = list.filter((p) => (p.variants || []).some((v) => (v.color || '').trim().toLowerCase() === currentColor.toLowerCase()));
+    }
+    if (currentPriceRange) {
+      const range = PRICE_RANGES.find((r) => r.id === currentPriceRange);
+      if (range) {
+        list = list.filter((p) => {
+          const { price } = getEffective(p);
+          return price != null && price > range.min && price <= range.max;
+        });
+      }
+    }
+    if (currentSort === 'price-asc' || currentSort === 'price-desc') {
+      list = [...list].sort((a, b) => {
+        const pa = getEffective(a).price;
+        const pb = getEffective(b).price;
+        if (pa == null && pb == null) return 0;
+        if (pa == null) return 1;
+        if (pb == null) return -1;
+        return currentSort === 'price-asc' ? pa - pb : pb - pa;
+      });
+    }
 
     if (list.length === 0) {
       if (currentSearch) {
         emptyState.textContent = `Nenhuma peça encontrada para "${search}". Tente outro termo.`;
       } else if (filter === 'Favoritos') {
         emptyState.textContent = 'Você ainda não salvou nenhuma peça nos favoritos. Toque no ♡ de uma peça para guardá-la aqui.';
+      } else if (currentSize || currentColor || currentPriceRange) {
+        emptyState.textContent = 'Nenhuma peça encontrada com esses filtros. Tente limpar algum deles.';
       } else {
         emptyState.textContent = 'Nenhuma peça encontrada por aqui. Que tal ver outra categoria?';
       }
@@ -387,6 +475,80 @@
       renderGrid(currentFilter, currentSearch);
     });
     collectionWrap.appendChild(select);
+  }
+
+  // ---------- filtros de tamanho/cor/preço + ordenação ----------
+  const sizeFiltersEl = document.getElementById('sizeFilters');
+  const colorFiltersEl = document.getElementById('colorFilters');
+  const priceFilterSelect = document.getElementById('priceFilterSelect');
+  const sortSelect = document.getElementById('sortSelect');
+  const clearFiltersBtn = document.getElementById('clearFiltersBtn');
+
+  function buildSecondaryFilters() {
+    if (!sizeFiltersEl || !colorFiltersEl || !priceFilterSelect || !sortSelect) return;
+
+    const sizes = availableSizes();
+    sizeFiltersEl.innerHTML =
+      `<button type="button" class="filter-chip filter-chip-sm is-active" data-size="">Todos os tamanhos</button>` +
+      sizes.map((s) => `<button type="button" class="filter-chip filter-chip-sm" data-size="${s}">${s}</button>`).join('');
+    sizeFiltersEl.querySelectorAll('[data-size]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        currentSize = btn.dataset.size;
+        sizeFiltersEl.querySelectorAll('[data-size]').forEach((b) => b.classList.toggle('is-active', b === btn));
+        renderGrid(currentFilter, currentSearch);
+      });
+    });
+
+    const colors = availableColors();
+    colorFiltersEl.innerHTML =
+      `<button type="button" class="color-filter-chip is-active" data-color="" title="Todas as cores"><span class="color-dot color-dot-label">Tudo</span></button>` +
+      colors
+        .map((c) => {
+          const hex = colorToHex(c);
+          const swatch = hex
+            ? `<span class="color-dot" style="background-color:${hex}"></span>`
+            : `<span class="color-dot color-dot-label">${c.slice(0, 3)}</span>`;
+          return `<button type="button" class="color-filter-chip" data-color="${c}" title="${c}">${swatch}</button>`;
+        })
+        .join('');
+    colorFiltersEl.querySelectorAll('[data-color]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        currentColor = btn.dataset.color;
+        colorFiltersEl.querySelectorAll('[data-color]').forEach((b) => b.classList.toggle('is-active', b === btn));
+        renderGrid(currentFilter, currentSearch);
+      });
+    });
+
+    priceFilterSelect.innerHTML =
+      `<option value="">Qualquer preço</option>` + PRICE_RANGES.map((r) => `<option value="${r.id}">${r.label}</option>`).join('');
+    priceFilterSelect.addEventListener('change', () => {
+      currentPriceRange = priceFilterSelect.value;
+      renderGrid(currentFilter, currentSearch);
+    });
+
+    sortSelect.innerHTML = `
+      <option value="recent">Mais recentes</option>
+      <option value="price-asc">Menor preço</option>
+      <option value="price-desc">Maior preço</option>
+    `;
+    sortSelect.addEventListener('change', () => {
+      currentSort = sortSelect.value;
+      renderGrid(currentFilter, currentSearch);
+    });
+
+    if (clearFiltersBtn) {
+      clearFiltersBtn.addEventListener('click', () => {
+        currentSize = '';
+        currentColor = '';
+        currentPriceRange = '';
+        currentSort = 'recent';
+        sizeFiltersEl.querySelectorAll('[data-size]').forEach((b) => b.classList.toggle('is-active', b.dataset.size === ''));
+        colorFiltersEl.querySelectorAll('[data-color]').forEach((b) => b.classList.toggle('is-active', b.dataset.color === ''));
+        priceFilterSelect.value = '';
+        sortSelect.value = 'recent';
+        renderGrid(currentFilter, currentSearch);
+      });
+    }
   }
 
   // ---------- mega-menu (categorias agrupadas no header) ----------
@@ -1307,6 +1469,30 @@
     updateAccountButton();
   }
 
+  // Mescla os favoritos salvos neste dispositivo (localStorage) com os do servidor assim que
+  // uma sessão começa (login, cadastro ou restauração de sessão) — nunca some com o que já
+  // existia do lado do servidor, só soma o que faltava.
+  async function syncFavoritesWithServer() {
+    if (!currentCustomer) return;
+    try {
+      const res = await fetch('/api/customers/favorites/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: getCustomerToken(), productIds: [...favs] }),
+      });
+      const data = await res.json();
+      if (!res.ok) return;
+      favs = new Set(data.favorites);
+      saveFavs();
+      renderGrid(currentFilter, currentSearch);
+      renderNovidades();
+      syncQuickviewFav();
+      if (!document.getElementById('profilePanel-favoritos').hidden) renderProfileFavorites();
+    } catch {
+      // sem conexão agora — os favoritos locais continuam valendo e sincronizam no próximo login
+    }
+  }
+
   function clearCustomer() {
     currentCustomer = null;
     localStorage.removeItem(CUSTOMER_KEY);
@@ -1356,6 +1542,7 @@
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Não foi possível entrar');
       setCustomer(data.customer, data.token);
+      syncFavoritesWithServer();
       loginForm.reset();
       showAccountView('profile');
       fillProfileDataForm();
@@ -1399,6 +1586,7 @@
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Não foi possível criar a conta');
       setCustomer(data.customer, data.token);
+      syncFavoritesWithServer();
       signupForm.reset();
       showAccountView('profile');
       fillProfileDataForm();
@@ -1420,6 +1608,7 @@
       const data = await res.json();
       if (!res.ok) throw new Error();
       setCustomer(data.customer, token);
+      syncFavoritesWithServer();
     } catch {
       clearCustomer();
     }
@@ -1860,6 +2049,7 @@
     buildCatCards();
     buildMegaMenu();
     buildCollectionFilter();
+    buildSecondaryFilters();
     renderPromoBanner();
     renderGrid('Todos', '');
     renderNovidades();
