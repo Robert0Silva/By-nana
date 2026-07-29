@@ -75,6 +75,44 @@
     return Math.max(0, total - coupon.value);
   }
 
+  // ---------- desconto automático de Pix e progressivo por quantidade ----------
+  const PIX_DISCOUNT_PERCENT = 5;
+  // Faixas em ordem decrescente de minQty — a primeira que a quantidade atender vence.
+  const QUANTITY_DISCOUNT_TIERS = [
+    { minQty: 3, percent: 30 },
+    { minQty: 2, percent: 20 },
+  ];
+
+  function quantityDiscountTier(itemCount) {
+    return QUANTITY_DISCOUNT_TIERS.find((t) => itemCount >= t.minQty) || null;
+  }
+
+  // Calcula cupom, Pix e desconto por quantidade sobre o mesmo subtotal e aplica só o maior
+  // dos três (nunca soma) — mantém o total previsível para a cliente.
+  function bestDiscount(subtotal, { coupon, itemCount, payment } = {}) {
+    if (!subtotal) return null;
+    const candidates = [];
+
+    if (coupon) {
+      const amount = subtotal - applyCoupon(subtotal, coupon);
+      if (amount > 0) candidates.push({ type: 'coupon', label: `Cupom ${coupon.code}`, amount });
+    }
+
+    if (payment === 'Pix') {
+      const amount = subtotal * (PIX_DISCOUNT_PERCENT / 100);
+      if (amount > 0) candidates.push({ type: 'pix', label: `Desconto Pix (-${PIX_DISCOUNT_PERCENT}%)`, amount });
+    }
+
+    const tier = quantityDiscountTier(itemCount || 0);
+    if (tier) {
+      const amount = subtotal * (tier.percent / 100);
+      if (amount > 0) candidates.push({ type: 'quantity', label: `${tier.minQty}+ itens (-${tier.percent}%)`, amount });
+    }
+
+    if (!candidates.length) return null;
+    return candidates.reduce((best, c) => (c.amount > best.amount ? c : best));
+  }
+
   window.PromoEngine = {
     todayISO,
     isPromoActive,
@@ -85,5 +123,8 @@
     activeSitePromo,
     findCoupon,
     applyCoupon,
+    bestDiscount,
+    PIX_DISCOUNT_PERCENT,
+    QUANTITY_DISCOUNT_TIERS,
   };
 })();

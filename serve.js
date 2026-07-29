@@ -233,6 +233,17 @@ async function getCategoryGroups() {
   return rows;
 }
 
+// texto de SEO + FAQ exibidos ao final da vitrine quando a categoria está filtrada;
+// só devolve categorias com algum conteúdo cadastrado, pra o front não precisar filtrar vazio.
+async function getCategoryContent() {
+  const { rows } = await pool.query(
+    `SELECT name, seo_text AS "seoText", faq_json AS "faq" FROM categories
+      WHERE COALESCE(seo_text, '') <> '' OR faq_json <> '[]'::jsonb
+      ORDER BY id`
+  );
+  return rows;
+}
+
 function maskCpf(cpf) {
   const digits = (cpf || '').replace(/\D/g, '');
   if (digits.length < 2) return '***.***.**-**';
@@ -558,17 +569,18 @@ async function handleApi(req, res, pathname) {
   try {
     // ------ catalog ------
     if (pathname === '/api/data' && req.method === 'GET') {
-      const [products, categories, collections, promotions, coupons, categoryGroups, stories, novidades] = await Promise.all([
+      const [products, categories, collections, promotions, coupons, categoryGroups, categoryContent, stories, novidades] = await Promise.all([
         getProducts(),
         getCategories(),
         getCollections(),
         getPromotions(),
         getCoupons(),
         getCategoryGroups(),
+        getCategoryContent(),
         getStories(true),
         getNovidades(),
       ]);
-      return sendJSON(res, 200, { products, categories, collections, promotions, coupons, categoryGroups, stories, novidades });
+      return sendJSON(res, 200, { products, categories, collections, promotions, coupons, categoryGroups, categoryContent, stories, novidades });
     }
 
     // ------ admin auth (login multiusuário, papéis, log de atividade) ------
@@ -1100,6 +1112,26 @@ async function handleApi(req, res, pathname) {
       if (!name) return sendJSON(res, 400, { error: 'Informe a categoria' });
       await pool.query('UPDATE categories SET group_name = $1 WHERE lower(name) = lower($2)', [groupName, name]);
       return sendJSON(res, 200, { categoryGroups: await getCategoryGroups() });
+    }
+
+    if (pathname === '/api/categories/seo' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      const name = (body.name || '').trim();
+      if (!name) return sendJSON(res, 400, { error: 'Informe a categoria' });
+      const seoText = (body.seoText || '').trim();
+      const faq = Array.isArray(body.faq)
+        ? body.faq
+            .map((f) => ({ question: (f.question || '').trim(), answer: (f.answer || '').trim() }))
+            .filter((f) => f.question && f.answer)
+        : [];
+      await pool.query('UPDATE categories SET seo_text = $1, faq_json = $2 WHERE lower(name) = lower($3)', [
+        seoText || null,
+        JSON.stringify(faq),
+        name,
+      ]);
+      return sendJSON(res, 200, { categoryContent: await getCategoryContent() });
     }
 
     // ------ collections ------

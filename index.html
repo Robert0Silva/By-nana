@@ -186,6 +186,11 @@
 
       <p class="empty-state" id="emptyState" hidden>Nenhuma peça encontrada por aqui. Que tal ver outra categoria?</p>
       <div class="product-grid" id="productGrid"><!-- gerado via JS --></div>
+
+      <div class="category-seo" id="categorySeoBlock" hidden>
+        <p class="category-seo-text" id="categorySeoText"></p>
+        <div class="category-faq" id="categoryFaq"><!-- gerado via JS --></div>
+      </div>
     </div>
   </section>
 
@@ -264,6 +269,16 @@
         </div>
       </div>
 
+      <div class="bag-field-group">
+        <label class="account-check">
+          <input type="checkbox" id="bagIsGift" />
+          É um presente?
+        </label>
+        <div class="bag-gift-message" id="bagGiftMessageWrap" hidden>
+          <textarea id="bagGiftMessage" rows="2" placeholder="Mensagem para o cartão (opcional)"></textarea>
+        </div>
+      </div>
+
       <div class="bag-address" id="bagAddress" hidden>
         <label class="bag-cep-label" for="cepInput">CEP</label>
         <div class="bag-cep-row">
@@ -302,6 +317,7 @@
     </div>
     <p class="bag-note">Peças "sob consulta" têm valor combinado no WhatsApp.</p>
     <p class="bag-form-error" id="bagFormError" hidden></p>
+    <p class="bag-security-badge">🔒 Compra 100% segura</p>
     <a href="#" id="bagCheckout" target="_blank" rel="noopener" class="btn btn-primary btn-block">Finalizar no WhatsApp</a>
   </div>
 </aside>
@@ -325,7 +341,9 @@
       <span class="product-price-old" id="qvPriceOld" hidden></span>
       <span class="product-price" id="qvPrice"></span>
       <span class="discount-badge" id="qvDiscountBadge" hidden></span>
+      <span class="low-stock-badge" id="qvLowStock" hidden>Últimas unidades</span>
     </div>
+    <div class="color-dot-row" id="qvColorDots"></div>
     <p class="qv-desc" id="qvDesc"></p>
     <div class="variant-picker" id="qvVariantPicker" hidden></div>
     <div class="product-actions">
@@ -340,6 +358,12 @@
       <p class="qv-related-title">Combine também</p>
       <div class="qv-related-grid" id="qvRelatedGrid"></div>
     </div>
+  </div>
+  <div class="qv-sticky-bar" id="qvStickyBar">
+    <img id="qvStickyImg" src="" alt="" />
+    <span class="qv-sticky-bar-name" id="qvStickyName"></span>
+    <span class="qv-sticky-bar-price" id="qvStickyPrice"></span>
+    <button type="button" class="btn btn-primary" id="qvStickyAdd">Comprar</button>
   </div>
 </div>
 

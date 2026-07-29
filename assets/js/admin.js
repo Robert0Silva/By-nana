@@ -14,6 +14,7 @@
 
   let CATEGORIES = [];
   let CATEGORY_GROUPS = [];
+  let CATEGORY_CONTENT = [];
   let COLLECTIONS = [];
   let PRODUCTS = [];
   let PROMOTIONS = [];
@@ -63,6 +64,7 @@
     PRODUCTS = data.products || [];
     CATEGORIES = data.categories || [];
     CATEGORY_GROUPS = data.categoryGroups || [];
+    CATEGORY_CONTENT = data.categoryContent || [];
     COLLECTIONS = data.collections || [];
     PROMOTIONS = data.promotions || [];
     COUPONS = data.coupons || [];
@@ -206,6 +208,15 @@
     categoryGroupList.innerHTML = groups.map((g) => `<option value="${g}"></option>`).join('');
   }
 
+  function faqRowHtml(q, a) {
+    return `
+      <div class="admin-category-faq-row">
+        <input type="text" class="admin-faq-question" placeholder="Pergunta" value="${q || ''}" />
+        <textarea class="admin-faq-answer" rows="2" placeholder="Resposta">${a || ''}</textarea>
+        <button type="button" class="admin-faq-remove" aria-label="Remover pergunta">✕</button>
+      </div>`;
+  }
+
   function renderCategories() {
     categoryList.innerHTML = '';
     renderCategoryGroupOptions();
@@ -215,13 +226,28 @@
     }
     CATEGORIES.forEach((c) => {
       const groupInfo = CATEGORY_GROUPS.find((g) => g.name === c);
+      const content = CATEGORY_CONTENT.find((x) => x.name === c);
+      const faq = content && Array.isArray(content.faq) ? content.faq : [];
       const row = document.createElement('div');
       row.className = 'admin-category-item';
       row.innerHTML = `
-        <span class="admin-category-item-name">${c}</span>
-        <input type="text" class="admin-category-group-input" list="categoryGroupList" placeholder="Grupo no mega-menu (opcional)" value="${groupInfo && groupInfo.groupName ? groupInfo.groupName : ''}" />
-        <button type="button" class="admin-category-save">Salvar</button>
-        <button type="button" class="admin-category-remove" aria-label="Remover">✕</button>
+        <div class="admin-category-item-row">
+          <span class="admin-category-item-name">${c}</span>
+          <input type="text" class="admin-category-group-input" list="categoryGroupList" placeholder="Grupo no mega-menu (opcional)" value="${groupInfo && groupInfo.groupName ? groupInfo.groupName : ''}" />
+          <button type="button" class="admin-category-save">Salvar</button>
+          <button type="button" class="admin-category-seo-toggle">Editar texto/FAQ</button>
+          <button type="button" class="admin-category-remove" aria-label="Remover">✕</button>
+        </div>
+        <div class="admin-category-seo-editor" hidden>
+          <label>Texto da categoria (SEO)
+            <textarea class="admin-category-seo-text" rows="3" placeholder="Parágrafo curto sobre esta categoria">${content && content.seoText ? content.seoText : ''}</textarea>
+          </label>
+          <div class="admin-category-faq-rows">
+            ${faq.map((f) => faqRowHtml(f.question, f.answer)).join('')}
+          </div>
+          <button type="button" class="admin-category-faq-add">+ Adicionar pergunta</button>
+          <button type="button" class="admin-category-seo-save">Salvar texto/FAQ</button>
+        </div>
       `;
       row.querySelector('.admin-category-save').addEventListener('click', async () => {
         const groupName = row.querySelector('.admin-category-group-input').value.trim();
@@ -249,6 +275,34 @@
           alert(err.message);
         }
       });
+
+      const seoEditor = row.querySelector('.admin-category-seo-editor');
+      const faqRows = row.querySelector('.admin-category-faq-rows');
+      row.querySelector('.admin-category-seo-toggle').addEventListener('click', () => {
+        seoEditor.hidden = !seoEditor.hidden;
+      });
+      faqRows.addEventListener('click', (e) => {
+        if (e.target.classList.contains('admin-faq-remove')) {
+          e.target.closest('.admin-category-faq-row').remove();
+        }
+      });
+      row.querySelector('.admin-category-faq-add').addEventListener('click', () => {
+        faqRows.insertAdjacentHTML('beforeend', faqRowHtml('', ''));
+      });
+      row.querySelector('.admin-category-seo-save').addEventListener('click', async () => {
+        const seoText = row.querySelector('.admin-category-seo-text').value.trim();
+        const faqPayload = [...faqRows.querySelectorAll('.admin-category-faq-row')].map((r) => ({
+          question: r.querySelector('.admin-faq-question').value.trim(),
+          answer: r.querySelector('.admin-faq-answer').value.trim(),
+        }));
+        try {
+          const data = await api('/api/categories/seo', 'POST', { name: c, seoText, faq: faqPayload });
+          CATEGORY_CONTENT = data.categoryContent;
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+
       categoryList.appendChild(row);
     });
   }
@@ -528,11 +582,16 @@
 
   // ---------- estoque / variação (tamanho, cor) por produto ----------
   async function toggleVariantEditor(productId, container) {
+    // o card do produto tem só ~200px de largura no grid — sem abrir em largura total,
+    // os campos de tamanho/cor/sku ficam pequenos demais pra digitar com confiança.
+    const card = container.closest('.admin-product-item');
     if (!container.hidden) {
       container.hidden = true;
+      if (card) card.classList.remove('is-stock-open');
       return;
     }
     container.hidden = false;
+    if (card) card.classList.add('is-stock-open');
     container.innerHTML = '<p class="admin-empty-block">Carregando...</p>';
     try {
       const data = await api('/api/products/variants/list', 'POST', { productId });
@@ -570,10 +629,10 @@
           .map(
             (v) => `
           <div class="admin-variant-row" data-id="${v.id}">
-            <input type="text" class="v-size" placeholder="Tamanho" value="${v.size || ''}" />
-            <input type="text" class="v-color" placeholder="Cor" value="${v.color || ''}" />
-            <input type="text" class="v-sku" placeholder="SKU (opcional)" value="${v.sku || ''}" />
-            <input type="number" class="v-stock" min="0" step="1" value="${v.stock}" />
+            <label class="admin-variant-field"><span class="admin-variant-field-label">Tamanho</span><input type="text" class="v-size" placeholder="Ex: P, 38..." value="${v.size || ''}" /></label>
+            <label class="admin-variant-field"><span class="admin-variant-field-label">Cor</span><input type="text" class="v-color" placeholder="Ex: Preto" value="${v.color || ''}" /></label>
+            <label class="admin-variant-field"><span class="admin-variant-field-label">SKU</span><input type="text" class="v-sku" placeholder="Opcional" value="${v.sku || ''}" /></label>
+            <label class="admin-variant-field"><span class="admin-variant-field-label">Estoque</span><input type="number" class="v-stock" min="0" step="1" value="${v.stock}" /></label>
             <button type="button" class="btn btn-outline v-save">Salvar</button>
             <button type="button" class="admin-variant-remove" aria-label="Remover">✕</button>
           </div>`
@@ -581,11 +640,11 @@
           .join('')}
       </div>
       <div class="admin-variant-row admin-variant-row-new">
-        <input type="text" class="v-size" placeholder="Tamanho" />
-        <input type="text" class="v-color" placeholder="Cor" />
-        <input type="text" class="v-sku" placeholder="SKU (opcional)" />
-        <input type="number" class="v-stock" min="0" step="1" value="0" />
-        <button type="button" class="btn btn-primary v-add">Adicionar</button>
+        <label class="admin-variant-field"><span class="admin-variant-field-label">Tamanho</span><input type="text" class="v-size" placeholder="Ex: P, 38..." /></label>
+        <label class="admin-variant-field"><span class="admin-variant-field-label">Cor</span><input type="text" class="v-color" placeholder="Ex: Preto" /></label>
+        <label class="admin-variant-field"><span class="admin-variant-field-label">SKU</span><input type="text" class="v-sku" placeholder="Opcional" /></label>
+        <label class="admin-variant-field"><span class="admin-variant-field-label">Estoque</span><input type="number" class="v-stock" min="0" step="1" value="0" /></label>
+        <button type="button" class="btn btn-primary v-add">Adicionar nova variação</button>
       </div>
       <p class="admin-form-msg" hidden></p>
       <div class="admin-stock-history">

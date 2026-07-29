@@ -7,6 +7,9 @@ CREATE TABLE IF NOT EXISTS categories (
 CREATE UNIQUE INDEX IF NOT EXISTS categories_name_lower_idx ON categories (lower(name));
 -- agrupamento usado pelo mega-menu da vitrine; categorias sem grupo caem numa coluna "Categorias" no front.
 ALTER TABLE categories ADD COLUMN IF NOT EXISTS group_name TEXT;
+-- texto de SEO + FAQ exibidos ao final da vitrine quando essa categoria está filtrada.
+ALTER TABLE categories ADD COLUMN IF NOT EXISTS seo_text TEXT;
+ALTER TABLE categories ADD COLUMN IF NOT EXISTS faq_json JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE TABLE IF NOT EXISTS collections (
   id   SERIAL PRIMARY KEY,

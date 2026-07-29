@@ -127,10 +127,51 @@
 /* ---------- categorias (linha com grupo do mega-menu) ---------- */
 .admin-category-list{display:flex;flex-direction:column;gap:8px;}
 .admin-category-item{
-  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  display:flex;flex-direction:column;gap:10px;
   padding:10px 14px;border-radius:12px;background:var(--cream);border:1px solid var(--line);
 }
+.admin-category-item-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
 .admin-category-item-name{font-size:.88rem;font-weight:600;flex:1 1 140px;min-width:100px;}
+.admin-category-seo-toggle{
+  padding:8px 14px;border-radius:8px;border:1px solid var(--line);background:var(--white);
+  color:var(--ink);font-size:.78rem;cursor:pointer;
+}
+.admin-category-seo-toggle:hover{border-color:var(--ink);}
+.admin-category-seo-editor{
+  display:flex;flex-direction:column;gap:10px;padding-top:10px;border-top:1px solid var(--line);
+}
+.admin-category-seo-editor[hidden]{display:none;}
+.admin-category-seo-editor label{display:flex;flex-direction:column;gap:6px;font-size:.78rem;color:var(--ink-soft);font-weight:500;}
+.admin-category-seo-editor textarea{
+  width:100%;box-sizing:border-box;resize:vertical;
+  padding:9px 12px;border-radius:8px;border:1px solid var(--line);
+  font-family:var(--sans);font-size:.85rem;background:var(--white);color:var(--ink);
+}
+.admin-category-faq-rows{display:flex;flex-direction:column;gap:8px;}
+.admin-category-faq-row{display:flex;gap:8px;align-items:flex-start;}
+.admin-category-faq-row .admin-faq-question{
+  flex:1 1 160px;padding:8px 12px;border-radius:8px;border:1px solid var(--line);
+  font-family:var(--sans);font-size:.82rem;background:var(--white);color:var(--ink);
+}
+.admin-category-faq-row .admin-faq-answer{
+  flex:2 1 260px;padding:8px 12px;border-radius:8px;border:1px solid var(--line);resize:vertical;
+  font-family:var(--sans);font-size:.82rem;background:var(--white);color:var(--ink);
+}
+.admin-category-faq-row .admin-faq-remove{
+  width:28px;height:28px;border-radius:50%;border:none;background:var(--white);color:var(--ink-soft);
+  cursor:pointer;font-size:.75rem;line-height:1;display:flex;align-items:center;justify-content:center;flex:none;
+}
+.admin-category-faq-row .admin-faq-remove:hover{background:var(--wine);color:#fff;}
+.admin-category-faq-add{
+  align-self:flex-start;padding:7px 12px;border-radius:8px;border:1px dashed var(--line);background:none;
+  color:var(--ink-soft);font-size:.78rem;cursor:pointer;
+}
+.admin-category-faq-add:hover{border-color:var(--ink);color:var(--ink);}
+.admin-category-seo-save{
+  align-self:flex-start;padding:9px 16px;border-radius:8px;border:none;background:var(--ink);
+  color:#fff;font-size:.8rem;cursor:pointer;
+}
+.admin-category-seo-save:hover{background:var(--wine);}
 .admin-category-group-input{
   flex:1 1 160px;padding:8px 12px;border-radius:8px;border:1px solid var(--line);
   font-family:var(--sans);font-size:.82rem;background:var(--white);color:var(--ink);
@@ -176,19 +217,35 @@
 
 /* ---------- editor de estoque/variação (dentro do card do produto) ---------- */
 .admin-variant-editor{margin-top:10px;padding-top:10px;border-top:1px dashed var(--line);display:flex;flex-direction:column;gap:8px;}
-.admin-variant-list{display:flex;flex-direction:column;gap:6px;}
-.admin-variant-row{display:grid;grid-template-columns:1fr 1fr 1fr 70px auto auto;gap:6px;align-items:center;}
+.admin-variant-list{display:flex;flex-direction:column;gap:10px;}
+.admin-variant-row{display:grid;grid-template-columns:1fr 1fr 1fr 90px auto auto;gap:10px;align-items:end;}
+.admin-variant-field{display:flex;flex-direction:column;gap:3px;min-width:0;}
+.admin-variant-field-label{
+  font-size:.66rem;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-soft);font-weight:600;
+}
 .admin-variant-row input{
-  padding:6px 8px;border-radius:6px;border:1px solid var(--line);font-family:var(--sans);
-  font-size:.76rem;background:var(--white);color:var(--ink);width:100%;
+  padding:8px 10px;border-radius:6px;border:1px solid var(--line);font-family:var(--sans);
+  font-size:.82rem;background:var(--white);color:var(--ink);width:100%;
 }
 .admin-variant-row button{
-  padding:6px 8px;border-radius:6px;border:1px solid var(--line);background:var(--white);
-  font-size:.72rem;cursor:pointer;white-space:nowrap;
+  padding:8px 10px;border-radius:6px;border:1px solid var(--line);background:var(--white);
+  font-size:.76rem;cursor:pointer;white-space:nowrap;
 }
 .admin-variant-remove{color:var(--ink-soft);}
 .admin-variant-remove:hover{background:var(--wine);color:#fff;border-color:var(--wine);}
-.admin-variant-row-new{border-top:1px solid var(--line);padding-top:8px;margin-top:2px;}
+.admin-variant-row-new{border-top:1px solid var(--line);padding-top:10px;margin-top:2px;}
+
+/* card do produto abre em largura total (fora da coluna estreita do grid) enquanto o
+   estoque está sendo editado — do contrário os campos de tamanho/cor/sku ficam ilegíveis. */
+.admin-product-item.is-stock-open{
+  grid-column:1 / -1;flex-direction:row;align-items:flex-start;gap:16px;
+}
+.admin-product-item.is-stock-open img{width:120px;height:150px;flex:none;aspect-ratio:auto;}
+.admin-product-item.is-stock-open .admin-product-item-body{flex:1;min-width:0;}
+@media (max-width:640px){
+  .admin-product-item.is-stock-open{flex-direction:column;}
+  .admin-product-item.is-stock-open img{width:100%;height:auto;aspect-ratio:4/5;}
+}
 .admin-stock-summary{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 12px;background:var(--cream);border-radius:10px;font-size:.76rem;color:var(--ink-soft);}
 .admin-stock-summary strong{color:var(--ink);font-size:.9rem;}
 .admin-stock-history{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:6px;}

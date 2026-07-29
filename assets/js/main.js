@@ -11,6 +11,7 @@
   let PROMOTIONS = [];
   let COUPONS = [];
   let CATEGORY_GROUPS = [];
+  let CATEGORY_CONTENT = [];
   let STORIES = [];
   let NOVIDADES = [];
 
@@ -42,6 +43,73 @@
     return v.size || v.color || 'Único';
   }
 
+  // ---------- estoque baixo e cores (vitrine + quickview) ----------
+  const LOW_STOCK_THRESHOLD = 3;
+
+  // Nomes de cor são texto livre digitado no admin, sem hex salvo — mapeamos os mais comuns
+  // e caímos para um chip de texto quando a cor não está no dicionário (evita mostrar cor errada).
+  const COLOR_HEX_MAP = {
+    preto: '#1e1c1a',
+    branco: '#ffffff',
+    'off-white': '#f5f0e6',
+    bege: '#e8dcc8',
+    marrom: '#6b4a2f',
+    camel: '#a9713c',
+    caramelo: '#a9713c',
+    dourado: '#c9a24b',
+    prata: '#c7c7c7',
+    prateado: '#c7c7c7',
+    vinho: '#7c2a3a',
+    bordo: '#7c2a3a',
+    nude: '#dcbfa6',
+    rosa: '#e3a9b7',
+    vermelho: '#b1352f',
+    azul: '#33506b',
+    'azul marinho': '#1f2c40',
+    verde: '#4f6f52',
+    cinza: '#9a938a',
+    amarelo: '#dcb84f',
+    laranja: '#c96f34',
+  };
+
+  function colorToHex(name) {
+    if (!name) return null;
+    return COLOR_HEX_MAP[name.trim().toLowerCase()] || null;
+  }
+
+  function uniqueColors(variants) {
+    const seen = new Set();
+    const list = [];
+    (variants || []).forEach((v) => {
+      const c = (v.color || '').trim();
+      if (c && !seen.has(c.toLowerCase())) {
+        seen.add(c.toLowerCase());
+        list.push(c);
+      }
+    });
+    return list;
+  }
+
+  function colorDotsHtml(variants) {
+    const colors = uniqueColors(variants);
+    if (!colors.length) return '';
+    const shown = colors.slice(0, 5);
+    const dots = shown
+      .map((c) => {
+        const hex = colorToHex(c);
+        return hex
+          ? `<span class="color-dot" style="background-color:${hex}" title="${c}"></span>`
+          : `<span class="color-dot color-dot-label" title="${c}">${c.slice(0, 3)}</span>`;
+      })
+      .join('');
+    const extra = colors.length > shown.length ? `<span class="color-dot-more">+${colors.length - shown.length}</span>` : '';
+    return `<div class="color-dot-row">${dots}${extra}</div>`;
+  }
+
+  function isLowStock(p, soldOut) {
+    return !!p.hasVariants && !soldOut && typeof p.totalStock === 'number' && p.totalStock > 0 && p.totalStock <= LOW_STOCK_THRESHOLD;
+  }
+
   function cartSubtotal(keys) {
     return keys.reduce((sum, key) => {
       const entry = cart[key];
@@ -53,10 +121,19 @@
     }, 0);
   }
 
+  // Escolhe o maior desconto entre cupom, Pix e quantidade de itens — nunca soma os três
+  // (mantém o total previsível: "o melhor desconto é aplicado automaticamente").
+  function cartDiscountInfo(keys) {
+    const subtotal = cartSubtotal(keys);
+    const itemCount = keys.reduce((sum, key) => sum + (cart[key] ? cart[key].qty : 0), 0);
+    const coupon = activeCoupon();
+    return window.PromoEngine.bestDiscount(subtotal, { coupon, itemCount, payment: selectedPayment });
+  }
+
   function cartFinalTotal(keys) {
     const subtotal = cartSubtotal(keys);
-    const coupon = activeCoupon();
-    return coupon ? window.PromoEngine.applyCoupon(subtotal, coupon) : subtotal;
+    const discount = cartDiscountInfo(keys);
+    return discount ? Math.max(0, subtotal - discount.amount) : subtotal;
   }
 
   const waLink = (text) => `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`;
@@ -128,6 +205,7 @@
     const inStock = variants.filter((v) => v.stock > 0);
     const soldOut = p.hasVariants && inStock.length === 0;
     const defaultVariant = inStock[0] || null;
+    const lowStock = isLowStock(p, soldOut);
     const variantHtml = p.hasVariants
       ? `<div class="variant-picker">
           ${variants
@@ -145,6 +223,7 @@
           <span class="product-tag">${p.tag}</span>
           ${promo ? `<span class="discount-badge">-${promo.percent}%</span>` : ''}
           ${soldOut ? `<span class="soldout-badge">Esgotado</span>` : ''}
+          ${lowStock ? `<span class="low-stock-badge">Últimas unidades</span>` : ''}
         </div>
         <button class="fav-btn ${isFav ? 'is-fav' : ''}" data-id="${p.id}" aria-label="Favoritar">${isFav ? '♥' : '♡'}</button>
       </div>
@@ -152,6 +231,7 @@
         <span class="product-cat">${p.brand}${p.collection ? ` · ${p.collection}` : ''}</span>
         <h3 class="product-name">${p.name}</h3>
         <div class="product-price-row">${priceHtml}</div>
+        ${colorDotsHtml(variants)}
         ${variantHtml}
         <div class="product-actions">
           <button class="add-btn${soldOut ? ' is-soldout' : ''}" data-id="${p.id}" ${defaultVariant ? `data-variant-id="${defaultVariant.id}"` : ''} ${soldOut ? 'disabled' : ''}>${soldOut ? 'Esgotado' : 'Adicionar à sacola'}</button>
@@ -213,12 +293,39 @@
     emptyState.hidden = list.length !== 0;
     list.forEach((p) => grid.appendChild(productCard(p)));
     syncAddButtons();
+    renderCategorySeoBlock(filter);
   }
 
   // ---------- filters + search (built dynamically from categories/collections) ----------
   const filtersEl = document.getElementById('filters');
   const catGrid = document.querySelector('.cat-grid');
   const collectionWrap = document.getElementById('collectionFilterWrap');
+  const categorySeoBlock = document.getElementById('categorySeoBlock');
+  const categorySeoText = document.getElementById('categorySeoText');
+  const categoryFaq = document.getElementById('categoryFaq');
+
+  // texto de SEO + FAQ da categoria em foco — some quando a categoria não tem conteúdo cadastrado
+  // (ex.: "Todos", "Favoritos" ou uma categoria ainda sem texto no admin).
+  function renderCategorySeoBlock(filter) {
+    const content = CATEGORY_CONTENT.find((c) => c.name === filter);
+    const faq = content && Array.isArray(content.faq) ? content.faq : [];
+    if (!content || (!content.seoText && !faq.length)) {
+      categorySeoBlock.hidden = true;
+      return;
+    }
+    categorySeoText.textContent = content.seoText || '';
+    categorySeoText.hidden = !content.seoText;
+    categoryFaq.innerHTML = faq
+      .map(
+        (f) => `
+        <details class="category-faq-item">
+          <summary>${f.question}</summary>
+          <p>${f.answer}</p>
+        </details>`
+      )
+      .join('');
+    categorySeoBlock.hidden = false;
+  }
 
   function setFilter(filter) {
     filtersEl.querySelectorAll('.filter-chip').forEach((c) => c.classList.toggle('is-active', c.dataset.filter === filter));
@@ -389,7 +496,16 @@
       selectedPayment = input.value;
       updateChipStyles('payment');
       bagFormError.hidden = true;
+      renderCart();
     });
+  });
+
+  // ---------- é um presente? ----------
+  const bagIsGift = document.getElementById('bagIsGift');
+  const bagGiftMessageWrap = document.getElementById('bagGiftMessageWrap');
+  const bagGiftMessage = document.getElementById('bagGiftMessage');
+  bagIsGift.addEventListener('change', () => {
+    bagGiftMessageWrap.hidden = !bagIsGift.checked;
   });
 
   document.querySelectorAll('input[name="delivery"]').forEach((input) => {
@@ -493,17 +609,20 @@
       msg += `• ${entry.qty}x ${p.name}${variantText} — ${priceText}\n`;
     });
     const subtotal = cartSubtotal(keys);
-    const coupon = activeCoupon();
-    if (coupon) {
+    const discount = cartDiscountInfo(keys);
+    if (discount) {
       msg += `\nSubtotal (itens com preço): ${money(subtotal)}`;
-      const discountText = coupon.type === 'percent' ? `${coupon.value}%` : money(coupon.value);
-      msg += `\n🏷️ Cupom ${coupon.code} (-${discountText})`;
+      msg += `\n🏷️ ${discount.label}`;
       msg += `\nTotal: ${money(cartFinalTotal(keys))}`;
     } else {
       msg += `\nTotal (itens com preço): ${money(subtotal)}`;
     }
     msg += `\n\n💳 Pagamento: ${selectedPayment}`;
     msg += `\n🚚 Entrega: ${selectedDelivery}`;
+    if (bagIsGift.checked) {
+      const giftMsg = bagGiftMessage.value.trim();
+      msg += `\n🎁 Presente${giftMsg ? `: "${giftMsg}"` : ''}`;
+    }
     if (selectedDelivery === 'Entrega') {
       const a = address;
       msg += `\n📍 Endereço: ${a.rua}, ${a.numero}${a.complemento ? ` - ${a.complemento}` : ''} - ${a.bairro}, ${a.cidade}/${a.estado} - CEP ${a.cep}`;
@@ -529,12 +648,13 @@
       };
     });
     const coupon = activeCoupon();
+    const discount = cartDiscountInfo(keys);
     const payload = {
       customerName: bagNameInput.value.trim(),
       customerPhone: bagPhoneInput.value.trim(),
       items,
       subtotal: cartSubtotal(keys),
-      discount: coupon ? cartSubtotal(keys) - cartFinalTotal(keys) : 0,
+      discount: discount ? discount.amount : 0,
       total: cartFinalTotal(keys),
       couponCode: coupon ? coupon.code : null,
       paymentMethod: selectedPayment,
@@ -677,16 +797,16 @@
     }
 
     const subtotal = cartSubtotal(keys);
-    const coupon = activeCoupon();
+    const discount = cartDiscountInfo(keys);
     const final = cartFinalTotal(keys);
-    const hasCouponDiscount = coupon && final < subtotal;
+    const hasDiscount = !!discount && final < subtotal;
 
-    bagSubtotalRow.hidden = !hasCouponDiscount;
-    bagDiscountRow.hidden = !hasCouponDiscount;
-    if (hasCouponDiscount) {
+    bagSubtotalRow.hidden = !hasDiscount;
+    bagDiscountRow.hidden = !hasDiscount;
+    if (hasDiscount) {
       bagSubtotalEl.textContent = money(subtotal);
-      bagDiscountLabelEl.textContent = `Cupom ${coupon.code}`;
-      bagDiscountValueEl.textContent = `- ${money(subtotal - final)}`;
+      bagDiscountLabelEl.textContent = discount.label;
+      bagDiscountValueEl.textContent = `- ${money(discount.amount)}`;
     }
     bagTotalEl.textContent = money(final) === 'Sob consulta' ? 'R$ 0,00' : money(final);
 
@@ -854,12 +974,25 @@
   const qvPriceOld = document.getElementById('qvPriceOld');
   const qvDiscountBadge = document.getElementById('qvDiscountBadge');
   const qvDesc = document.getElementById('qvDesc');
+  const qvLowStock = document.getElementById('qvLowStock');
+  const qvColorDots = document.getElementById('qvColorDots');
   const qvVariantPicker = document.getElementById('qvVariantPicker');
   const qvAdd = document.getElementById('qvAdd');
   const qvAsk = document.getElementById('qvAsk');
   const qvFav = document.getElementById('qvFav');
   const qvRelatedGrid = document.getElementById('qvRelatedGrid');
+  const qvInfoEl = document.querySelector('.qv-info');
+  const qvStickyBar = document.getElementById('qvStickyBar');
+  const qvStickyImg = document.getElementById('qvStickyImg');
+  const qvStickyName = document.getElementById('qvStickyName');
+  const qvStickyPrice = document.getElementById('qvStickyPrice');
+  const qvStickyAdd = document.getElementById('qvStickyAdd');
+  const QV_STICKY_SCROLL_THRESHOLD = 160;
   let qvCurrentId = null;
+
+  function handleQvScroll() {
+    qvStickyBar.classList.toggle('is-visible', qvInfoEl.scrollTop > QV_STICKY_SCROLL_THRESHOLD);
+  }
 
   function syncQuickviewFav() {
     if (!qvCurrentId) return;
@@ -890,6 +1023,8 @@
     const inStock = variants.filter((v) => v.stock > 0);
     const soldOut = p.hasVariants && inStock.length === 0;
     const defaultVariant = inStock[0] || null;
+    qvLowStock.hidden = !isLowStock(p, soldOut);
+    qvColorDots.innerHTML = colorDotsHtml(variants);
     if (p.hasVariants) {
       qvVariantPicker.hidden = false;
       qvVariantPicker.innerHTML = variants
@@ -923,6 +1058,14 @@
       )
       .join('');
 
+    qvStickyImg.src = p.img;
+    qvStickyImg.alt = p.name;
+    qvStickyName.textContent = p.name;
+    qvStickyPrice.textContent = money(price);
+    qvStickyBar.classList.remove('is-visible');
+    qvInfoEl.scrollTop = 0;
+    qvInfoEl.addEventListener('scroll', handleQvScroll);
+
     qvOverlay.classList.add('is-open');
     quickview.classList.add('is-open');
     openModalFocus(quickview);
@@ -932,6 +1075,8 @@
     if (!quickview.classList.contains('is-open')) return;
     qvOverlay.classList.remove('is-open');
     quickview.classList.remove('is-open');
+    qvInfoEl.removeEventListener('scroll', handleQvScroll);
+    qvStickyBar.classList.remove('is-visible');
     qvCurrentId = null;
     closeModalFocus(quickview);
   }
@@ -941,6 +1086,7 @@
   // adicionar à sacola é tratado pelo delegate global de ".add-btn" (qvAdd tem essa classe) —
   // um listener dedicado aqui duplicava addToCart() a cada clique (bug corrigido nesta revisão).
   qvFav.addEventListener('click', () => qvCurrentId && toggleFav(qvCurrentId));
+  qvStickyAdd.addEventListener('click', () => qvAdd.click());
   qvRelatedGrid.addEventListener('click', (e) => {
     const rel = e.target.closest('.rel-card');
     if (rel) openQuickview(rel.dataset.id);
@@ -1697,6 +1843,7 @@
       PROMOTIONS = data.promotions || [];
       COUPONS = data.coupons || [];
       CATEGORY_GROUPS = data.categoryGroups || [];
+      CATEGORY_CONTENT = data.categoryContent || [];
       STORIES = data.stories || [];
       NOVIDADES = data.novidades || [];
     } catch (e) {
