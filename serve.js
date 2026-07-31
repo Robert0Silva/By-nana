@@ -2336,6 +2336,20 @@ function serveNotFound(res) {
   });
 }
 
+function decodePath(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch (err) {
+    if (err instanceof URIError) return null;
+    throw err;
+  }
+}
+
+function serveBadRequest(res) {
+  res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' });
+  res.end('URL inválida');
+}
+
 // Só o que o front realmente precisa buscar por HTTP: as páginas HTML públicas e tudo
 // dentro de assets/. Tudo mais no repo (serve.js, .env, db/, node_modules/, package.json...)
 // nunca deve ser servido como arquivo estático — allowlist em vez de bloquear só ".."
@@ -2347,7 +2361,11 @@ function isPublicStaticPath(filePath) {
 }
 
 function serveStatic(req, res, pathname) {
-  let filePath = decodeURIComponent(pathname);
+  let filePath = decodePath(pathname);
+  if (filePath === null) {
+    serveBadRequest(res);
+    return;
+  }
 
   // formas canônicas: uma única URL "de verdade" por página, sem duplicar / vs /index.html
   if (filePath === '/index.html') {
@@ -2458,7 +2476,11 @@ http
       return;
     }
     if (pathname.startsWith('/produto/')) {
-      const id = decodeURIComponent(pathname.slice('/produto/'.length));
+      const id = decodePath(pathname.slice('/produto/'.length));
+      if (id === null) {
+        serveBadRequest(res);
+        return;
+      }
       serveProductPage(req, res, id);
       return;
     }
