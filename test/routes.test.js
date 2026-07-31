@@ -74,3 +74,50 @@ test('rejeita URL malformada sem derrubar o servidor', async () => {
   const healthy = await fetch(origin);
   assert.equal(healthy.status, 200);
 });
+
+test('esqueci minha senha responde com sucesso genérico mesmo para e-mail inexistente (não revela contas)', async () => {
+  const response = await fetch(`${origin}/api/customers/forgot-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: `nao-existe-${Date.now()}@example.com` }),
+  });
+  const data = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(data.ok, true);
+});
+
+test('redefinir senha com token inválido ou expirado é rejeitado', async () => {
+  const response = await fetch(`${origin}/api/customers/reset-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: 'token-que-nao-existe', newPassword: 'novaSenha123' }),
+  });
+  const data = await response.json();
+  assert.equal(response.status, 400);
+  assert.ok(data.error);
+});
+
+test('serve a página de redefinição de senha', async () => {
+  const response = await fetch(`${origin}/redefinir-senha.html`);
+  assert.equal(response.status, 200);
+});
+
+test('pedido sem e-mail continua sendo rejeitado só por falta dos campos obrigatórios existentes (e-mail não é um deles)', async () => {
+  // Sem produtos/itens válidos o pedido é rejeitado antes de tocar o banco — isso já basta pra
+  // confirmar que a ausência de customerEmail não é o motivo da rejeição (a mensagem de erro
+  // não menciona e-mail) sem precisar criar um pedido/baixar estoque real no banco de dados.
+  const response = await fetch(`${origin}/api/orders`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      customerName: 'Cliente Teste',
+      customerPhone: '31999999999',
+      paymentMethod: 'Pix',
+      deliveryMethod: 'Retirada em loja',
+      items: [],
+    }),
+  });
+  const data = await response.json();
+  assert.equal(response.status, 400);
+  assert.doesNotMatch(data.error, /e-?mail/i);
+});

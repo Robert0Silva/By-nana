@@ -268,6 +268,7 @@
         <div class="bag-contact-fields">
           <label>Nome<input type="text" id="bagName" autocomplete="name" placeholder="Seu nome" /></label>
           <label>Telefone<input type="tel" id="bagPhone" autocomplete="tel" placeholder="(31) 90000-0000" /></label>
+          <label>E-mail<input type="email" id="bagEmail" autocomplete="email" placeholder="seu@email.com" /></label>
         </div>
       </div>
 
@@ -365,7 +366,19 @@
       <p class="account-form-msg" id="loginMsg" hidden></p>
       <button type="submit" class="btn btn-primary btn-block">Entrar</button>
     </form>
+    <p class="account-switch"><button type="button" class="account-link" id="goForgot">Esqueci minha senha</button></p>
     <p class="account-switch">Não tem conta? <button type="button" class="account-link" id="goSignup">Cadastre-se</button></p>
+  </div>
+
+  <div class="account-view" id="accountViewForgot" hidden>
+    <h3>Esqueci minha senha</h3>
+    <p class="account-sub">Informe seu e-mail e enviaremos um link para redefinir a senha.</p>
+    <form class="account-form" id="forgotForm">
+      <label>E-mail<input type="email" id="forgotEmail" required autocomplete="email" /></label>
+      <p class="account-form-msg" id="forgotMsg" hidden></p>
+      <button type="submit" class="btn btn-primary btn-block">Enviar link</button>
+    </form>
+    <p class="account-switch"><button type="button" class="account-link" id="goLoginFromForgot">Voltar para o login</button></p>
   </div>
 
   <div class="account-view" id="accountViewSignup" hidden>

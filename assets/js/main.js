@@ -838,6 +838,8 @@
   function validateCheckout() {
     if (!bagNameInput.value.trim()) return 'Informe seu nome.';
     if (!bagPhoneInput.value.trim()) return 'Informe seu telefone.';
+    const email = bagEmailInput.value.trim();
+    if (email && !/^\S+@\S+\.\S+$/.test(email)) return 'Informe um e-mail válido (ou deixe em branco).';
     if (!selectedPayment) return 'Selecione a forma de pagamento.';
     if (!selectedDelivery) return 'Selecione retirada em loja ou entrega.';
     if (selectedDelivery === 'Entrega') {
@@ -911,6 +913,7 @@
     const payload = {
       customerName: bagNameInput.value.trim(),
       customerPhone: bagPhoneInput.value.trim(),
+      customerEmail: bagEmailInput.value.trim(),
       items,
       subtotal: cartSubtotal(keys),
       discount: discount ? discount.amount : 0,
@@ -1399,15 +1402,19 @@
   const accountOverlay = document.getElementById('accountOverlay');
   const accountModal = document.getElementById('accountModal');
   const accountViewLogin = document.getElementById('accountViewLogin');
+  const accountViewForgot = document.getElementById('accountViewForgot');
   const accountViewSignup = document.getElementById('accountViewSignup');
   const accountViewProfile = document.getElementById('accountViewProfile');
   const loginForm = document.getElementById('loginForm');
   const loginMsg = document.getElementById('loginMsg');
+  const forgotForm = document.getElementById('forgotForm');
+  const forgotMsg = document.getElementById('forgotMsg');
   const signupForm = document.getElementById('signupForm');
   const signupMsg = document.getElementById('signupMsg');
   const profileName = document.getElementById('profileName');
   const bagNameInput = document.getElementById('bagName');
   const bagPhoneInput = document.getElementById('bagPhone');
+  const bagEmailInput = document.getElementById('bagEmail');
 
   let currentCustomer = JSON.parse(localStorage.getItem(CUSTOMER_KEY) || 'null');
 
@@ -1419,6 +1426,7 @@
 
   function showAccountView(view) {
     accountViewLogin.hidden = view !== 'login';
+    accountViewForgot.hidden = view !== 'forgot';
     accountViewSignup.hidden = view !== 'signup';
     accountViewProfile.hidden = view !== 'profile';
     accountModal.classList.toggle('is-profile', view === 'profile');
@@ -1434,6 +1442,7 @@
       bagNameInput.value = `${currentCustomer.firstName} ${currentCustomer.lastName || ''}`.trim();
     }
     if (bagPhoneInput && !bagPhoneInput.value) bagPhoneInput.value = currentCustomer.phone || '';
+    if (bagEmailInput && !bagEmailInput.value) bagEmailInput.value = currentCustomer.email || '';
   }
 
   function updateAccountButton() {
@@ -1509,6 +1518,8 @@
   accountOverlay.addEventListener('click', closeAccountModal);
   document.getElementById('goSignup').addEventListener('click', () => showAccountView('signup'));
   document.getElementById('goLogin').addEventListener('click', () => showAccountView('login'));
+  document.getElementById('goForgot').addEventListener('click', () => showAccountView('forgot'));
+  document.getElementById('goLoginFromForgot').addEventListener('click', () => showAccountView('login'));
   document.getElementById('logoutBtn').addEventListener('click', () => {
     clearCustomer();
     closeAccountModal();
@@ -1535,6 +1546,24 @@
       showProfileTab('dados');
     } catch (err) {
       setFormMsg(loginMsg, err.message, 'error');
+    }
+  });
+
+  forgotForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    setFormMsg(forgotMsg, '', '');
+    const email = document.getElementById('forgotEmail').value.trim();
+    try {
+      const res = await fetch('/api/customers/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Não foi possível enviar o e-mail');
+      setFormMsg(forgotMsg, 'Se esse e-mail tiver uma conta, enviamos um link de redefinição.', 'ok');
+    } catch (err) {
+      setFormMsg(forgotMsg, err.message, 'error');
     }
   });
 
