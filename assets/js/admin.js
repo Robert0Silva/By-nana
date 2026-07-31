@@ -19,6 +19,7 @@
   let PRODUCTS = [];
   let PROMOTIONS = [];
   let COUPONS = [];
+  let SHIPPING_RULES = [];
   let CUSTOMERS = [];
   let STORIES = [];
   let ORDERS = [];
@@ -27,6 +28,13 @@
 
   const money = (v) =>
     v == null ? 'Sob consulta' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+  // avaliações trazem texto livre digitado por clientes (nome, comentário) — escapa antes do
+  // innerHTML pra não virar XSS armazenado dentro do próprio painel admin.
+  const ESCAPE_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  function escapeHtml(str) {
+    return String(str == null ? '' : str).replace(/[&<>"']/g, (c) => ESCAPE_MAP[c]);
+  }
 
   const formatDate = (iso) => {
     if (!iso) return '';
@@ -68,6 +76,7 @@
     COLLECTIONS = data.collections || [];
     PROMOTIONS = data.promotions || [];
     COUPONS = data.coupons || [];
+    SHIPPING_RULES = data.shippingRules || [];
     renderCategories();
     renderCollections();
     renderCategorySelect();
@@ -78,6 +87,7 @@
     renderStoryProductSelect();
     renderPromoList();
     renderCouponList();
+    renderShippingList();
     loadSiteImages();
     loadCustomers();
     loadStories();
@@ -130,6 +140,7 @@
     'rel-produtos': () => loadProductsReport(),
     'rel-promocoes': () => loadPromotionsReport(),
     'rel-clientes': () => loadCustomersReport(),
+    avaliacoes: () => loadReviews(),
   };
 
   document.querySelectorAll('.admin-tab').forEach((btn) => {
@@ -763,10 +774,10 @@
       const div = document.createElement('div');
       div.className = `admin-product-item${pEditId.value === p.id ? ' is-editing' : ''}`;
       div.innerHTML = `
-        <img src="${p.img}" alt="${p.name}" />
+        <img src="${escapeHtml(p.img)}" alt="${escapeHtml(p.name)}" />
         <div class="admin-product-item-body">
-          <span class="admin-product-item-name">${p.name}</span>
-          <span class="admin-product-item-meta">${p.category}${p.collection ? ` · ${p.collection}` : ''}</span>
+          <span class="admin-product-item-name">${escapeHtml(p.name)}</span>
+          <span class="admin-product-item-meta">${escapeHtml(p.category)}${p.collection ? ` · ${escapeHtml(p.collection)}` : ''}</span>
           <span class="admin-product-item-meta">${(p.variants || []).length} variações · ${p.totalStock || 0} unidades</span>
           ${priceHtml}
           <div class="admin-product-item-actions">
@@ -958,10 +969,10 @@
       div.className = `admin-featured-item${p.isFeatured ? ' is-featured' : ''}`;
       const idx = featured.findIndex((f) => f.id === p.id);
       div.innerHTML = `
-        <div class="admin-featured-thumb"><img src="${p.img}" alt="${p.name}" /></div>
+        <div class="admin-featured-thumb"><img src="${escapeHtml(p.img)}" alt="${escapeHtml(p.name)}" /></div>
         <div class="admin-featured-info">
-          <span class="admin-featured-name">${p.name}</span>
-          <span class="admin-featured-meta">${p.category}${p.collection ? ` · ${p.collection}` : ''}</span>
+          <span class="admin-featured-name">${escapeHtml(p.name)}</span>
+          <span class="admin-featured-meta">${escapeHtml(p.category)}${p.collection ? ` · ${escapeHtml(p.collection)}` : ''}</span>
         </div>
         <div class="admin-featured-actions">
           <button type="button" class="admin-featured-move" data-dir="up" aria-label="Mover para cima" ${!p.isFeatured || idx === 0 ? 'disabled' : ''}>↑</button>
@@ -1022,7 +1033,7 @@
     const scope = promoScope.value;
     promoTargetWrap.hidden = scope === 'site';
     if (scope === 'product') {
-      promoTarget.innerHTML = PRODUCTS.map((p) => `<option value="${p.id}">${p.name}</option>`).join('');
+      promoTarget.innerHTML = PRODUCTS.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
     } else if (scope === 'category') {
       promoTarget.innerHTML = CATEGORIES.map((c) => `<option value="${c}">${c}</option>`).join('');
     } else if (scope === 'collection') {
@@ -1244,6 +1255,112 @@
     }
   });
 
+  // ---------- shipping rules (frete por UF) ----------
+  const shippingForm = document.getElementById('shippingForm');
+  const shippingEditId = document.getElementById('shippingEditId');
+  const shippingUf = document.getElementById('shippingUf');
+  const shippingLabel = document.getElementById('shippingLabel');
+  const shippingPrice = document.getElementById('shippingPrice');
+  const shippingFreeAbove = document.getElementById('shippingFreeAbove');
+  const shippingActive = document.getElementById('shippingActive');
+  const shippingSubmit = document.getElementById('shippingSubmit');
+  const shippingCancelEdit = document.getElementById('shippingCancelEdit');
+  const shippingFormTitle = document.getElementById('shippingFormTitle');
+  const shippingMsg = document.getElementById('shippingMsg');
+  const shippingList = document.getElementById('shippingList');
+
+  function setShippingMsg(text, kind) {
+    shippingMsg.textContent = text;
+    shippingMsg.className = `admin-form-msg ${kind ? `is-${kind}` : ''}`;
+    shippingMsg.hidden = !text;
+  }
+
+  function renderShippingList() {
+    shippingList.innerHTML = '';
+    if (!SHIPPING_RULES.length) {
+      shippingList.innerHTML = '<li class="admin-empty">Nenhuma regra de frete cadastrada ainda.</li>';
+      return;
+    }
+    SHIPPING_RULES.forEach((r) => {
+      const ufText = r.uf === '*' ? 'Padrão (demais estados)' : r.uf;
+      const freeText = r.freeAbove != null ? ` · grátis acima de ${money(r.freeAbove)}` : '';
+      const inactiveText = r.active ? '' : ' · inativa';
+      const li = document.createElement('li');
+      li.innerHTML = `<span>${ufText}${r.label ? ` — ${r.label}` : ''} · ${money(r.price)}${freeText}${inactiveText}</span><button type="button" class="admin-coupon-edit" aria-label="Editar">✎</button><button type="button" aria-label="Remover">✕</button>`;
+      li.querySelector('.admin-coupon-edit').addEventListener('click', () => startEditShipping(r));
+      li.querySelector('button:not(.admin-coupon-edit)').addEventListener('click', async () => {
+        if (!confirm(`Remover a regra de frete "${ufText}"?`)) return;
+        const data = await api('/api/shipping-rules', 'DELETE', { id: r.id });
+        SHIPPING_RULES = data.shippingRules;
+        if (Number(shippingEditId.value) === r.id) endEditShipping();
+        renderShippingList();
+      });
+      shippingList.appendChild(li);
+    });
+  }
+
+  function startEditShipping(r) {
+    shippingEditId.value = r.id;
+    shippingUf.value = r.uf;
+    shippingUf.readOnly = true;
+    shippingLabel.value = r.label || '';
+    shippingPrice.value = r.price;
+    shippingFreeAbove.value = r.freeAbove != null ? r.freeAbove : '';
+    shippingActive.checked = r.active;
+    shippingFormTitle.textContent = `Editando regra "${r.uf === '*' ? 'Padrão' : r.uf}"`;
+    shippingSubmit.textContent = 'Salvar alterações';
+    shippingCancelEdit.hidden = false;
+    setShippingMsg('', '');
+    shippingForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function endEditShipping() {
+    shippingEditId.value = '';
+    shippingForm.reset();
+    shippingActive.checked = true;
+    shippingUf.readOnly = false;
+    shippingFormTitle.textContent = 'Frete por estado';
+    shippingSubmit.textContent = 'Adicionar regra';
+    shippingCancelEdit.hidden = true;
+    renderShippingList();
+  }
+
+  shippingCancelEdit.addEventListener('click', endEditShipping);
+
+  shippingForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    setShippingMsg('', '');
+    shippingSubmit.disabled = true;
+    const editing = !!shippingEditId.value;
+    try {
+      const payload = editing
+        ? {
+            id: Number(shippingEditId.value),
+            label: shippingLabel.value.trim(),
+            price: shippingPrice.value,
+            freeAbove: shippingFreeAbove.value,
+            active: shippingActive.checked,
+          }
+        : {
+            uf: shippingUf.value.trim(),
+            label: shippingLabel.value.trim(),
+            price: shippingPrice.value,
+            freeAbove: shippingFreeAbove.value,
+          };
+      const data = editing
+        ? await api('/api/shipping-rules/update', 'POST', payload)
+        : await api('/api/shipping-rules', 'POST', payload);
+      SHIPPING_RULES = data.shippingRules;
+      const wasEditing = editing;
+      endEditShipping();
+      setShippingMsg(wasEditing ? 'Regra atualizada ✓' : 'Regra criada ✓', 'ok');
+    } catch (err) {
+      setShippingMsg(err.message, 'error');
+    } finally {
+      shippingSubmit.disabled = false;
+    }
+  });
+
   // ---------- site images ----------
   const siteImageList = document.getElementById('siteImageList');
 
@@ -1331,8 +1448,8 @@
       div.className = 'admin-customer-item';
       div.innerHTML = `
         <div class="admin-customer-info">
-          <span class="admin-customer-name">${c.firstName} ${c.lastName}</span>
-          <span class="admin-customer-meta">${c.email} · ${c.phone} · CPF ${c.cpf} · cliente desde ${formatDate(c.createdAt.slice(0, 10))}</span>
+          <span class="admin-customer-name">${escapeHtml(c.firstName)} ${escapeHtml(c.lastName)}</span>
+          <span class="admin-customer-meta">${escapeHtml(c.email)} · ${escapeHtml(c.phone)} · CPF ${escapeHtml(c.cpf)} · cliente desde ${formatDate(c.createdAt.slice(0, 10))}</span>
         </div>
         <div class="admin-customer-actions">
           <span class="admin-customer-badge ${c.marketingOptIn ? '' : 'is-off'}">${c.marketingOptIn ? 'Recebe novidades' : 'Não recebe novidades'}</span>
@@ -1410,14 +1527,14 @@
       return;
     }
     list.forEach((o) => {
-      const itemsText = (o.items || []).map((it) => `${it.qty}x ${it.name}${it.variantLabel ? ` (${it.variantLabel})` : ''}`).join(', ');
+      const itemsText = (o.items || []).map((it) => `${escapeHtml(it.qty)}x ${escapeHtml(it.name)}${it.variantLabel ? ` (${escapeHtml(it.variantLabel)})` : ''}`).join(', ');
       const when = new Date(o.createdAt).toLocaleString('pt-BR');
       const div = document.createElement('div');
       div.className = 'admin-order-item';
       div.innerHTML = `
         <div class="admin-order-info">
-          <span class="admin-order-name">${o.customerName} · ${o.customerPhone}</span>
-          <span class="admin-order-meta">${when}${o.couponCode ? ` · cupom ${o.couponCode}` : ''} · ${o.paymentMethod} · ${o.deliveryMethod}</span>
+          <span class="admin-order-name">${escapeHtml(o.customerName)} · ${escapeHtml(o.customerPhone)}</span>
+          <span class="admin-order-meta">${when}${o.couponCode ? ` · cupom ${escapeHtml(o.couponCode)}` : ''} · ${escapeHtml(o.paymentMethod)} · ${escapeHtml(o.deliveryMethod)}${o.shipping ? ` · frete ${money(o.shipping)}` : ''}</span>
           <p class="admin-order-items">${itemsText}</p>
           <span class="admin-order-total">${money(o.total)}</span>
         </div>
@@ -1444,6 +1561,61 @@
 
   orderSearch.addEventListener('input', renderOrderList);
 
+  // ---------- avaliações (moderação: só remoção, publicação é automática) ----------
+  let REVIEWS = [];
+  const reviewCount = document.getElementById('reviewCount');
+  const reviewSearch = document.getElementById('reviewSearch');
+  const reviewList = document.getElementById('reviewList');
+
+  async function loadReviews() {
+    try {
+      const data = await api('/api/admin/reviews/list', 'POST', {});
+      REVIEWS = data.reviews || [];
+      renderReviewList();
+    } catch (err) {
+      reviewList.innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+    }
+  }
+
+  function renderReviewList() {
+    const term = (reviewSearch.value || '').trim().toLowerCase();
+    const list = term
+      ? REVIEWS.filter((r) => `${r.productName} ${r.customerName}`.toLowerCase().includes(term))
+      : REVIEWS;
+
+    reviewCount.textContent = REVIEWS.length;
+    reviewList.innerHTML = '';
+    if (!list.length) {
+      reviewList.innerHTML = '<p class="admin-empty-block">Nenhuma avaliação encontrada.</p>';
+      return;
+    }
+    list.forEach((r) => {
+      const when = new Date(r.createdAt).toLocaleString('pt-BR');
+      const stars = '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating);
+      const div = document.createElement('div');
+      div.className = 'admin-order-item';
+      div.innerHTML = `
+        <div class="admin-order-info">
+          <span class="admin-order-name">${escapeHtml(r.productName)} · ${stars}</span>
+          <span class="admin-order-meta">${escapeHtml(r.customerName)} · ${when}</span>
+          ${r.comment ? `<p class="admin-order-items">${escapeHtml(r.comment)}</p>` : ''}
+        </div>
+        <div class="admin-order-actions">
+          <button type="button" class="btn btn-outline">Remover</button>
+        </div>
+      `;
+      div.querySelector('button').addEventListener('click', async () => {
+        if (!confirm('Remover essa avaliação?')) return;
+        const data = await api('/api/reviews', 'DELETE', { id: r.id });
+        REVIEWS = data.reviews;
+        renderReviewList();
+      });
+      reviewList.appendChild(div);
+    });
+  }
+
+  reviewSearch.addEventListener('input', renderReviewList);
+
   // ---------- stories (carrossel de vídeo estilo Instagram) ----------
   const storyForm = document.getElementById('storyForm');
   const stVideo = document.getElementById('stVideo');
@@ -1464,7 +1636,7 @@
     const current = stProduct.value;
     stProduct.innerHTML =
       '<option value="">Nenhum (usar link abaixo)</option>' +
-      PRODUCTS.map((p) => `<option value="${p.id}">${p.name}</option>`).join('');
+      PRODUCTS.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
     if (PRODUCTS.some((p) => p.id === current)) stProduct.value = current;
   }
 
@@ -1596,7 +1768,7 @@
           <div class="admin-story-product-edit">
             <select class="admin-story-product-select">
               <option value="">Nenhum produto</option>
-              ${PRODUCTS.map((p) => `<option value="${p.id}" ${p.id === s.productId ? 'selected' : ''}>${p.name}</option>`).join('')}
+              ${PRODUCTS.map((p) => `<option value="${p.id}" ${p.id === s.productId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')}
             </select>
             <button type="button" class="admin-story-product-save">Salvar</button>
           </div>
@@ -1773,6 +1945,10 @@
     'coupon.create': 'criou o cupom',
     'coupon.update': 'editou o cupom',
     'coupon.delete': 'removeu o cupom',
+    'shipping_rule.create': 'criou a regra de frete',
+    'shipping_rule.update': 'editou a regra de frete',
+    'shipping_rule.delete': 'removeu a regra de frete',
+    'review.delete': 'removeu uma avaliação',
     'order.status_update': 'atualizou o status do pedido',
     'customer.delete': 'removeu o cliente',
     'site_image.update': 'trocou a imagem do site',
@@ -1803,19 +1979,29 @@
       div.className = 'admin-activity-item';
       div.innerHTML = `
         <span class="admin-activity-when">${when}</span>
-        <span class="admin-activity-who">${a.adminName}</span>
-        <span class="admin-activity-action">${label}${a.entityId ? ` (${a.entityId})` : ''}</span>
+        <span class="admin-activity-who">${escapeHtml(a.adminName)}</span>
+        <span class="admin-activity-action">${escapeHtml(label)}${a.entityId ? ` (${escapeHtml(a.entityId)})` : ''}</span>
       `;
       activityList.appendChild(div);
     });
   }
 
   // ---------- dashboard + relatórios ----------
+  // Fuso da loja (não o do navegador) — mesmo horário que o servidor usa pra agrupar vendas
+  // por dia, então o range padrão "De/Até" bate com o que o relatório realmente mostra.
+  function isoInStoreTimezone(date) {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Sao_Paulo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(date);
+  }
   function todayISO() {
-    return new Date().toISOString().slice(0, 10);
+    return isoInStoreTimezone(new Date());
   }
   function daysAgoISO(n) {
-    return new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    return isoInStoreTimezone(new Date(Date.now() - n * 24 * 60 * 60 * 1000));
   }
 
   function renderBarList(container, items, valueFormatter) {
@@ -1828,7 +2014,7 @@
       .map(
         (i) => `
       <div class="admin-bar-row">
-        <div class="admin-bar-row-label"><span>${i.label}</span><span>${valueFormatter(i.value)}</span></div>
+        <div class="admin-bar-row-label"><span>${escapeHtml(i.label)}</span><span>${valueFormatter(i.value)}</span></div>
         <div class="admin-bar-track"><div class="admin-bar-fill" style="width:${max > 0 ? (i.value / max) * 100 : 0}%"></div></div>
       </div>`
       )
@@ -1871,7 +2057,7 @@
             (o) => `
           <div class="admin-order-item">
             <div class="admin-order-info">
-              <span class="admin-order-name">${o.customerName}</span>
+              <span class="admin-order-name">${escapeHtml(o.customerName)}</span>
               <span class="admin-order-meta">${new Date(o.createdAt).toLocaleString('pt-BR')} · ${money(o.total)}</span>
             </div>
           </div>`
@@ -1925,7 +2111,7 @@
       renderTable(
         document.getElementById('relProdutosTable'),
         [
-          { label: 'Produto', render: (r) => r.name },
+          { label: 'Produto', render: (r) => escapeHtml(r.name) },
           { label: 'Quantidade', render: (r) => r.qty },
           { label: 'Receita', render: (r) => money(Number(r.revenue)) },
         ],
@@ -1951,7 +2137,7 @@
       renderTable(
         document.getElementById('relCouponsTable'),
         [
-          { label: 'Código', render: (r) => r.code },
+          { label: 'Código', render: (r) => escapeHtml(r.code) },
           { label: 'Usos', render: (r) => r.uses },
           { label: 'Desconto total', render: (r) => money(Number(r.totalDiscount)) },
         ],
@@ -1960,7 +2146,7 @@
       renderTable(
         document.getElementById('relPromotionsTable'),
         [
-          { label: 'Promoção', render: (r) => r.label || r.promoId },
+          { label: 'Promoção', render: (r) => escapeHtml(r.label || r.promoId) },
           { label: 'Usos', render: (r) => r.uses },
           { label: 'Quantidade', render: (r) => r.qty },
           { label: 'Desconto total', render: (r) => money(Number(r.totalDiscount)) },

@@ -112,6 +112,10 @@
             <span class="discount-badge" id="pdpDiscountBadge" hidden></span>
             <span class="low-stock-badge" id="pdpLowStock" hidden>Últimas unidades</span>
           </div>
+          <div class="pdp-rating-row" id="pdpRatingRow" hidden>
+            <span class="pdp-rating-stars" id="pdpRatingStars" aria-hidden="true"></span>
+            <span class="pdp-rating-count" id="pdpRatingCount"></span>
+          </div>
           <div class="color-dot-row" id="pdpColorDots"></div>
           <p class="pdp-desc" id="pdpDesc"></p>
           <div class="variant-picker" id="pdpVariantPicker" hidden></div>
@@ -137,6 +141,34 @@
       <div class="pdp-related" id="pdpRelated" hidden>
         <p class="pdp-related-title">Combine também</p>
         <div class="product-grid" id="pdpRelatedGrid"><!-- gerado via JS --></div>
+      </div>
+
+      <div class="pdp-reviews">
+        <p class="pdp-related-title">Avaliações</p>
+        <div class="pdp-rating-row" id="pdpReviewsSummary" hidden>
+          <span class="pdp-rating-stars" id="pdpReviewsAvgStars" aria-hidden="true"></span>
+          <span class="pdp-rating-count" id="pdpReviewsAvgText"></span>
+        </div>
+
+        <p class="pdp-review-login-hint" id="pdpReviewLoginHint" hidden>
+          <button type="button" class="account-link" id="pdpReviewLoginBtn">Entre na sua conta</button> para avaliar este produto (disponível para quem já comprou).
+        </p>
+
+        <form class="pdp-review-form" id="pdpReviewForm" hidden>
+          <span class="pdp-review-form-label">Sua avaliação</span>
+          <div class="pdp-review-stars-input" id="pdpReviewStarsInput" role="radiogroup" aria-label="Sua nota">
+            <button type="button" data-value="1" aria-label="1 estrela">★</button>
+            <button type="button" data-value="2" aria-label="2 estrelas">★</button>
+            <button type="button" data-value="3" aria-label="3 estrelas">★</button>
+            <button type="button" data-value="4" aria-label="4 estrelas">★</button>
+            <button type="button" data-value="5" aria-label="5 estrelas">★</button>
+          </div>
+          <textarea id="pdpReviewComment" rows="3" maxlength="1000" placeholder="Conte como foi sua experiência (opcional)"></textarea>
+          <button type="submit" class="btn btn-primary" id="pdpReviewSubmit">Enviar avaliação</button>
+          <p class="account-form-msg" id="pdpReviewMsg" hidden></p>
+        </form>
+
+        <div class="pdp-review-list" id="pdpReviewList"></div>
       </div>
     </div>
   </section>
@@ -233,6 +265,10 @@
     <div class="bag-total" id="bagDiscountRow" hidden>
       <span id="bagDiscountLabel">Desconto</span>
       <span id="bagDiscountValue">- R$ 0,00</span>
+    </div>
+    <div class="bag-total" id="bagShippingRow" hidden>
+      <span id="bagShippingLabel">Frete</span>
+      <span id="bagShippingValue">R$ 0,00</span>
     </div>
     <div class="bag-total">
       <span>Total (itens com preço)</span>

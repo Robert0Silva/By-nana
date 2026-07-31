@@ -678,6 +678,30 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 .pdp-accordion-text{margin:10px 0 0;color:var(--ink-soft);font-size:.9rem;line-height:1.6;white-space:pre-line;}
 .pdp-related{margin-top:64px;border-top:1px solid var(--line);padding-top:32px;}
 .pdp-related[hidden]{display:none;}
+
+.pdp-rating-row{display:flex;align-items:center;gap:8px;margin:-4px 0 4px;}
+.pdp-rating-row[hidden]{display:none;}
+.product-rating-row{margin:2px 0;}
+.pdp-rating-stars{color:var(--gold);letter-spacing:1px;font-size:.95rem;}
+.pdp-rating-count{color:var(--ink-soft);font-size:.82rem;}
+
+.pdp-reviews{margin-top:48px;border-top:1px solid var(--line);padding-top:32px;}
+.pdp-review-login-hint{color:var(--ink-soft);font-size:.88rem;margin:0 0 20px;}
+.pdp-review-form{max-width:420px;margin:0 0 28px;display:flex;flex-direction:column;gap:10px;}
+.pdp-review-form[hidden]{display:none;}
+.pdp-review-form-label{font-size:.82rem;color:var(--ink-soft);}
+.pdp-review-stars-input{display:flex;gap:4px;}
+.pdp-review-stars-input button{background:none;border:none;cursor:pointer;font-size:1.4rem;color:var(--line);line-height:1;padding:2px;}
+.pdp-review-stars-input button.is-active{color:var(--gold);}
+.pdp-review-form textarea{font-family:inherit;font-size:.9rem;padding:10px 12px;border:1px solid var(--line);border-radius:8px;resize:vertical;background:var(--cream);}
+.pdp-review-list{display:flex;flex-direction:column;gap:18px;}
+.pdp-review-item{border-bottom:1px solid var(--line);padding-bottom:16px;}
+.pdp-review-item-head{display:flex;align-items:center;gap:10px;margin-bottom:4px;}
+.pdp-review-stars{color:var(--gold);letter-spacing:1px;font-size:.85rem;}
+.pdp-review-author{font-weight:600;font-size:.85rem;}
+.pdp-review-date{color:var(--ink-soft);font-size:.76rem;}
+.pdp-review-comment{color:var(--ink-soft);font-size:.88rem;line-height:1.6;white-space:pre-line;margin:0;}
+.pdp-review-empty{color:var(--ink-soft);font-size:.88rem;}
 @media (max-width:900px){
   .pdp-layout{grid-template-columns:1fr;}
   .pdp-gallery{position:static;}
@@ -705,7 +729,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 .account-form-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
 .account-form label{display:flex;flex-direction:column;gap:6px;font-size:.78rem;color:var(--ink-soft);font-weight:500;}
 .account-form input,.account-form select{
-  padding:11px 14px;border-radius:10px;border:1px solid var(--line);
+  width:100%;min-width:0;padding:11px 14px;border-radius:10px;border:1px solid var(--line);
   font-family:var(--sans);font-size:.9rem;background:var(--cream);color:var(--ink);
 }
 .account-check{

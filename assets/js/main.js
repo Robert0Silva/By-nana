@@ -10,6 +10,7 @@
   let COLLECTIONS = [];
   let PROMOTIONS = [];
   let COUPONS = [];
+  let SHIPPING_RULES = [];
   let CATEGORY_GROUPS = [];
   let CATEGORY_CONTENT = [];
   let STORIES = [];
@@ -17,6 +18,13 @@
 
   const money = (v) =>
     v == null ? 'Sob consulta' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+  // avaliações trazem texto livre digitado por clientes (nome de conta, comentário) — precisa
+  // escapar antes de ir pro innerHTML, ou vira XSS armazenado visível pra qualquer visitante.
+  const ESCAPE_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  function escapeHtml(str) {
+    return String(str == null ? '' : str).replace(/[&<>"']/g, (c) => ESCAPE_MAP[c]);
+  }
 
   // Resolves the price a customer actually pays for a product right now (item/category/collection/site promos).
   function getEffective(p) {
@@ -98,8 +106,8 @@
       .map((c) => {
         const hex = colorToHex(c);
         return hex
-          ? `<span class="color-dot" style="background-color:${hex}" title="${c}"></span>`
-          : `<span class="color-dot color-dot-label" title="${c}">${c.slice(0, 3)}</span>`;
+          ? `<span class="color-dot" style="background-color:${hex}" title="${escapeHtml(c)}"></span>`
+          : `<span class="color-dot color-dot-label" title="${escapeHtml(c)}">${escapeHtml(c.slice(0, 3))}</span>`;
       })
       .join('');
     const extra = colors.length > shown.length ? `<span class="color-dot-more">+${colors.length - shown.length}</span>` : '';
@@ -168,7 +176,7 @@
       const p = PRODUCTS.find((x) => x.id === entry.productId);
       if (!p) return sum;
       const { price } = getEffective(p);
-      return price ? sum + price * entry.qty : sum;
+      return price != null ? sum + price * entry.qty : sum;
     }, 0);
   }
 
@@ -176,7 +184,15 @@
   // (mantém o total previsível: "o melhor desconto é aplicado automaticamente").
   function cartDiscountInfo(keys) {
     const subtotal = cartSubtotal(keys);
-    const itemCount = keys.reduce((sum, key) => sum + (cart[key] ? cart[key].qty : 0), 0);
+    // só itens com preço contam pra faixa de desconto por quantidade — peças "sob consulta"
+    // não entram no subtotal, então não podem empurrar o carrinho pra uma faixa maior.
+    const itemCount = keys.reduce((sum, key) => {
+      const entry = cart[key];
+      if (!entry) return sum;
+      const p = PRODUCTS.find((x) => x.id === entry.productId);
+      const { price } = p ? getEffective(p) : { price: null };
+      return price != null ? sum + entry.qty : sum;
+    }, 0);
     const coupon = activeCoupon();
     return window.PromoEngine.bestDiscount(subtotal, { coupon, itemCount, payment: selectedPayment });
   }
@@ -185,6 +201,21 @@
     const subtotal = cartSubtotal(keys);
     const discount = cartDiscountInfo(keys);
     return discount ? Math.max(0, subtotal - discount.amount) : subtotal;
+  }
+
+  // ---------- frete (tabela por UF cadastrada no admin) ----------
+  // `applicable: false` cobre tanto "retirada em loja" quanto "nenhuma regra configurada/cadastrada
+  // pra essa UF" — em ambos os casos o frete não entra no total nem na mensagem do pedido.
+  function shippingQuote(keys) {
+    if (selectedDelivery !== 'Entrega') return { applicable: false, cost: 0, label: '', free: false };
+    const active = SHIPPING_RULES.filter((r) => r.active);
+    if (!active.length) return { applicable: false, cost: 0, label: '', free: false };
+    const uf = (address.estado || '').trim().toUpperCase();
+    const rule = active.find((r) => r.uf.toUpperCase() === uf) || active.find((r) => r.uf === '*');
+    if (!rule) return { applicable: false, cost: 0, label: '', free: false };
+    const subtotal = cartSubtotal(keys);
+    const free = rule.freeAbove != null && subtotal >= Number(rule.freeAbove);
+    return { applicable: true, cost: free ? 0 : Number(rule.price), label: rule.label || '', free };
   }
 
   const waLink = (text) => `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`;
@@ -259,6 +290,33 @@
   let currentFilter = 'Todos';
   let currentSearch = '';
 
+  // estrelas cheias/vazias pra uma nota 0-5 (ex.: 3.6 -> ★★★★☆, arredondado pro inteiro mais próximo).
+  function starsHtml(rating) {
+    const full = Math.round(rating);
+    return '★'.repeat(full) + '☆'.repeat(5 - full);
+  }
+
+  function isProductSoldOut(p) {
+    const variants = p.variants || [];
+    return !!p.hasVariants && !variants.some((v) => v.stock > 0);
+  }
+
+  function shuffled(list) {
+    return list
+      .map((item) => [Math.random(), item])
+      .sort((a, b) => a[0] - b[0])
+      .map(([, item]) => item);
+  }
+
+  // "Combine também" (PDP): mesma categoria+coleção primeiro (visual mais coerente), depois
+  // mesma categoria em geral; esgotados ficam de fora (não adianta sugerir o que não dá pra comprar).
+  function pickRelatedProducts(p) {
+    const candidates = PRODUCTS.filter((x) => x.id !== p.id && x.category === p.category && !isProductSoldOut(x));
+    const sameCollection = p.collection ? candidates.filter((x) => x.collection === p.collection) : [];
+    const rest = candidates.filter((x) => !sameCollection.includes(x));
+    return [...shuffled(sameCollection), ...shuffled(rest)].slice(0, 4);
+  }
+
   function productCard(p) {
     const div = document.createElement('div');
     div.className = 'product-card';
@@ -283,7 +341,7 @@
       ? `<div class="variant-picker">
           ${variants
             .map(
-              (v) => `<button type="button" class="variant-chip${v.stock <= 0 ? ' is-soldout' : ''}${defaultVariant && v.id === defaultVariant.id ? ' is-active' : ''}" data-variant-id="${v.id}" ${v.stock <= 0 ? 'disabled' : ''}>${variantLabel(v)}</button>`
+              (v) => `<button type="button" class="variant-chip${v.stock <= 0 ? ' is-soldout' : ''}${defaultVariant && v.id === defaultVariant.id ? ' is-active' : ''}" data-variant-id="${v.id}" ${v.stock <= 0 ? 'disabled' : ''}>${escapeHtml(variantLabel(v))}</button>`
             )
             .join('')}
         </div>`
@@ -291,9 +349,9 @@
 
     div.innerHTML = `
       <a class="product-media" href="/produto/${p.id}">
-        <img src="${p.img}" alt="${p.name}" loading="lazy" />
+        <img src="${escapeHtml(p.img)}" alt="${escapeHtml(p.name)}" loading="lazy" />
         <div class="product-badges">
-          <span class="product-tag">${p.tag}</span>
+          <span class="product-tag">${escapeHtml(p.tag)}</span>
           ${promo ? `<span class="discount-badge">-${promo.percent}%</span>` : ''}
           ${soldOut ? `<span class="soldout-badge">Esgotado</span>` : ''}
           ${lowStock ? `<span class="low-stock-badge">Últimas unidades</span>` : ''}
@@ -301,8 +359,9 @@
         <button class="fav-btn ${isFav ? 'is-fav' : ''}" data-id="${p.id}" aria-label="Favoritar">${isFav ? '♥' : '♡'}</button>
       </a>
       <div class="product-body">
-        <span class="product-cat">${p.brand}${p.collection ? ` · ${p.collection}` : ''}</span>
-        <h3 class="product-name">${p.name}</h3>
+        <span class="product-cat">${escapeHtml(p.brand)}${p.collection ? ` · ${escapeHtml(p.collection)}` : ''}</span>
+        <h3 class="product-name">${escapeHtml(p.name)}</h3>
+        ${p.rating ? `<div class="pdp-rating-row product-rating-row"><span class="pdp-rating-stars">${starsHtml(p.rating)}</span><span class="pdp-rating-count">${p.rating.toFixed(1)} (${p.reviewCount})</span></div>` : ''}
         <div class="product-price-row">${priceHtml}</div>
         ${colorDotsHtml(variants)}
         ${variantHtml}
@@ -419,8 +478,8 @@
       .map(
         (f) => `
         <details class="category-faq-item">
-          <summary>${f.question}</summary>
-          <p>${f.answer}</p>
+          <summary>${escapeHtml(f.question)}</summary>
+          <p>${escapeHtml(f.answer)}</p>
         </details>`
       )
       .join('');
@@ -520,7 +579,7 @@
           const swatch = hex
             ? `<span class="color-dot" style="background-color:${hex}"></span>`
             : `<span class="color-dot color-dot-label">${c.slice(0, 3)}</span>`;
-          return `<button type="button" class="color-filter-chip" data-color="${c}" title="${c}">${swatch}</button>`;
+          return `<button type="button" class="color-filter-chip" data-color="${c}" title="${c}" aria-label="Filtrar por cor ${c}">${swatch}</button>`;
         })
         .join('');
     colorFiltersEl.querySelectorAll('[data-color]').forEach((btn) => {
@@ -653,6 +712,9 @@
   const bagDiscountRow = document.getElementById('bagDiscountRow');
   const bagDiscountLabelEl = document.getElementById('bagDiscountLabel');
   const bagDiscountValueEl = document.getElementById('bagDiscountValue');
+  const bagShippingRow = document.getElementById('bagShippingRow');
+  const bagShippingLabelEl = document.getElementById('bagShippingLabel');
+  const bagShippingValueEl = document.getElementById('bagShippingValue');
   const mobileBar = document.getElementById('mobileBar');
   const mobileBarText = document.getElementById('mobileBarText');
   const checkoutBtn = document.getElementById('bagCheckout');
@@ -703,6 +765,7 @@
       updateChipStyles('delivery');
       bagAddress.hidden = selectedDelivery !== 'Entrega';
       bagFormError.hidden = true;
+      renderCart();
     });
   });
 
@@ -735,6 +798,7 @@
       cepStatus.className = 'bag-cep-status is-ok';
       bagAddressFields.hidden = false;
       document.getElementById('addrNumero').focus();
+      renderCart();
     } catch (e) {
       cepStatus.textContent = 'Não foi possível buscar o CEP agora. Preencha o endereço manualmente.';
       cepStatus.className = 'bag-cep-status is-error';
@@ -767,6 +831,7 @@
     document.getElementById(id).addEventListener('input', (e) => {
       address[key] = e.target.value;
       bagFormError.hidden = true;
+      if (key === 'estado') renderCart();
     });
   });
 
@@ -779,6 +844,9 @@
       if (address.cep.replace(/\D/g, '').length !== 8) return 'Informe um CEP válido.';
       if (!address.rua.trim()) return 'Preencha a rua (confira o CEP ou digite manualmente).';
       if (!address.numero.trim()) return 'Informe o número do endereço.';
+      if (SHIPPING_RULES.some((r) => r.active) && !shippingQuote(Object.keys(cart)).applicable) {
+        return 'No momento não entregamos nessa região. Escolha retirada em loja ou fale no WhatsApp.';
+      }
     }
     return '';
   }
@@ -799,13 +867,14 @@
     });
     const subtotal = cartSubtotal(keys);
     const discount = cartDiscountInfo(keys);
-    if (discount) {
-      msg += `\nSubtotal (itens com preço): ${money(subtotal)}`;
-      msg += `\n🏷️ ${discount.label}`;
-      msg += `\nTotal: ${money(cartFinalTotal(keys))}`;
-    } else {
-      msg += `\nTotal (itens com preço): ${money(subtotal)}`;
+    const quote = shippingQuote(keys);
+    const total = cartFinalTotal(keys) + quote.cost;
+    msg += `\nSubtotal (itens com preço): ${money(subtotal)}`;
+    if (discount) msg += `\n🏷️ ${discount.label}`;
+    if (quote.applicable) {
+      msg += `\n🚚 Frete${quote.label ? ` (${quote.label})` : ''}: ${quote.free ? 'Grátis' : money(quote.cost)}`;
     }
+    msg += `\nTotal: ${money(total)}`;
     msg += `\n\n💳 Pagamento: ${selectedPayment}`;
     msg += `\n🚚 Entrega: ${selectedDelivery}`;
     if (bagIsGift.checked) {
@@ -838,13 +907,15 @@
     });
     const coupon = activeCoupon();
     const discount = cartDiscountInfo(keys);
+    const quote = shippingQuote(keys);
     const payload = {
       customerName: bagNameInput.value.trim(),
       customerPhone: bagPhoneInput.value.trim(),
       items,
       subtotal: cartSubtotal(keys),
       discount: discount ? discount.amount : 0,
-      total: cartFinalTotal(keys),
+      shipping: quote.cost,
+      total: cartFinalTotal(keys) + quote.cost,
       couponCode: coupon ? coupon.code : null,
       paymentMethod: selectedPayment,
       deliveryMethod: selectedDelivery,
@@ -863,6 +934,26 @@
     } catch (err) {
       throw err;
     }
+  }
+
+  // Re-sincroniza só os dados de produto/estoque após uma falha de checkout (ex.: estoque
+  // insuficiente) — ao contrário de init(), preserva o filtro/busca/coleção que a cliente
+  // já tinha escolhido em vez de resetar a vitrine para o estado da URL.
+  async function refreshProductData() {
+    try {
+      const res = await fetch('/api/data', { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      PRODUCTS = data.products || [];
+      PROMOTIONS = data.promotions || [];
+      COUPONS = data.coupons || [];
+      SHIPPING_RULES = data.shippingRules || [];
+    } catch {
+      return;
+    }
+    renderCart();
+    if (document.body.dataset.page === 'produto') initProductPage();
+    else if (grid) renderGrid(currentFilter, currentSearch);
   }
 
   checkoutBtn.addEventListener('click', (e) => {
@@ -887,7 +978,7 @@
       bagFormError.hidden = false;
       checkoutBtn.classList.remove('is-loading');
       checkoutBtn.textContent = 'Finalizar no WhatsApp';
-      init();
+      refreshProductData();
     });
   });
 
@@ -969,9 +1060,9 @@
         const row = document.createElement('div');
         row.className = 'bag-item';
         row.innerHTML = `
-          <img src="${p.img}" alt="${p.name}" />
+          <img src="${escapeHtml(p.img)}" alt="${escapeHtml(p.name)}" />
           <div class="bag-item-info">
-            <div class="bag-item-name">${p.name}${variant ? ` <span class="bag-item-variant">(${variantLabel(variant)})</span>` : ''}</div>
+            <div class="bag-item-name">${escapeHtml(p.name)}${variant ? ` <span class="bag-item-variant">(${escapeHtml(variantLabel(variant))})</span>` : ''}</div>
             ${priceHtml}
             <div class="bag-item-qty">
               <button class="qty-btn" data-key="${key}" data-op="dec">−</button>
@@ -987,8 +1078,9 @@
 
     const subtotal = cartSubtotal(keys);
     const discount = cartDiscountInfo(keys);
-    const final = cartFinalTotal(keys);
-    const hasDiscount = !!discount && final < subtotal;
+    const quote = shippingQuote(keys);
+    const final = cartFinalTotal(keys) + quote.cost;
+    const hasDiscount = !!discount && cartFinalTotal(keys) < subtotal;
 
     bagSubtotalRow.hidden = !hasDiscount;
     bagDiscountRow.hidden = !hasDiscount;
@@ -997,7 +1089,12 @@
       bagDiscountLabelEl.textContent = discount.label;
       bagDiscountValueEl.textContent = `- ${money(discount.amount)}`;
     }
-    bagTotalEl.textContent = money(final) === 'Sob consulta' ? 'R$ 0,00' : money(final);
+    bagShippingRow.hidden = !quote.applicable;
+    if (quote.applicable) {
+      bagShippingLabelEl.textContent = quote.label ? `Frete (${quote.label})` : 'Frete';
+      bagShippingValueEl.textContent = quote.free ? 'Grátis' : money(quote.cost);
+    }
+    bagTotalEl.textContent = money(final);
 
     bagDetails.hidden = keys.length === 0;
     if (keys.length === 0) {
@@ -1354,6 +1451,7 @@
     localStorage.setItem(CUSTOMER_KEY, JSON.stringify(customer));
     if (token) localStorage.setItem(CUSTOMER_TOKEN_KEY, token);
     updateAccountButton();
+    refreshPdpReviewGate();
   }
 
   // Mescla os favoritos salvos neste dispositivo (localStorage) com os do servidor assim que
@@ -1385,6 +1483,7 @@
     localStorage.removeItem(CUSTOMER_KEY);
     localStorage.removeItem(CUSTOMER_TOKEN_KEY);
     updateAccountButton();
+    refreshPdpReviewGate();
   }
 
   function openAccountModal() {
@@ -1590,13 +1689,13 @@
     profileOrderList.innerHTML = orders
       .map((o) => {
         const when = new Date(o.createdAt).toLocaleString('pt-BR');
-        const itemsText = (o.items || []).map((it) => `${it.qty}x ${it.name}${it.variantLabel ? ` (${it.variantLabel})` : ''}`).join(', ');
+        const itemsText = (o.items || []).map((it) => `${escapeHtml(it.qty)}x ${escapeHtml(it.name)}${it.variantLabel ? ` (${escapeHtml(it.variantLabel)})` : ''}`).join(', ');
         const statusLabel = PROFILE_ORDER_STATUS_LABELS[o.status] || o.status;
         return `
           <div class="profile-order-item">
             <div class="profile-order-header"><span>${when}</span><span>${money(o.total)}</span></div>
             <p class="profile-order-items">${itemsText}</p>
-            <span class="profile-order-meta">${o.paymentMethod} · ${o.deliveryMethod}${o.couponCode ? ` · cupom ${o.couponCode}` : ''}</span>
+            <span class="profile-order-meta">${escapeHtml(o.paymentMethod)} · ${escapeHtml(o.deliveryMethod)}${o.couponCode ? ` · cupom ${escapeHtml(o.couponCode)}` : ''}${o.shipping ? ` · frete ${money(o.shipping)}` : ''}</span>
             <span class="profile-order-status st-${o.status}">${statusLabel}</span>
           </div>
         `;
@@ -1918,7 +2017,7 @@
     }
 
     document.getElementById('pdpBreadcrumb').innerHTML =
-      `<a href="/">Home</a> / <a href="/#colecao">${p.category}</a> / <span>${p.name}</span>`;
+      `<a href="/">Home</a> / <a href="/#colecao">${escapeHtml(p.category)}</a> / <span>${escapeHtml(p.name)}</span>`;
 
     const images = p.images && p.images.length ? p.images : [p.img];
     const mainImg = document.getElementById('pdpMainImg');
@@ -1953,6 +2052,15 @@
     discountBadge.textContent = promo ? `-${promo.percent}%` : '';
     discountBadge.hidden = !promo;
 
+    const ratingRow = document.getElementById('pdpRatingRow');
+    if (p.rating) {
+      document.getElementById('pdpRatingStars').textContent = starsHtml(p.rating);
+      document.getElementById('pdpRatingCount').textContent = `${p.rating.toFixed(1)} (${p.reviewCount})`;
+      ratingRow.hidden = false;
+    } else {
+      ratingRow.hidden = true;
+    }
+
     document.getElementById('pdpDesc').textContent = p.desc;
 
     const variants = p.variants || [];
@@ -1967,7 +2075,7 @@
       variantPicker.hidden = false;
       variantPicker.innerHTML = variants
         .map(
-          (v) => `<button type="button" class="variant-chip${v.stock <= 0 ? ' is-soldout' : ''}${defaultVariant && v.id === defaultVariant.id ? ' is-active' : ''}" data-variant-id="${v.id}" ${v.stock <= 0 ? 'disabled' : ''}>${variantLabel(v)}</button>`
+          (v) => `<button type="button" class="variant-chip${v.stock <= 0 ? ' is-soldout' : ''}${defaultVariant && v.id === defaultVariant.id ? ' is-active' : ''}" data-variant-id="${v.id}" ${v.stock <= 0 ? 'disabled' : ''}>${escapeHtml(variantLabel(v))}</button>`
         )
         .join('');
     } else {
@@ -2015,15 +2123,143 @@
       compositionBlock.hidden = true;
     }
 
-    const related = PRODUCTS.filter((x) => x.category === p.category && x.id !== p.id).slice(0, 4);
+    const related = pickRelatedProducts(p);
     const relatedGrid = document.getElementById('pdpRelatedGrid');
     relatedGrid.innerHTML = '';
     related.forEach((r) => relatedGrid.appendChild(productCard(r)));
     document.getElementById('pdpRelated').hidden = related.length === 0;
 
+    initProductReviews(p);
+
     layout.hidden = false;
     notFound.hidden = true;
   }
+
+  // ---------- avaliações da página de produto ----------
+  function renderReviewsList(reviews) {
+    const listEl = document.getElementById('pdpReviewList');
+    if (!reviews.length) {
+      listEl.innerHTML = '<p class="pdp-review-empty">Ainda não há avaliações para este produto.</p>';
+      return;
+    }
+    listEl.innerHTML = reviews
+      .map(
+        (r) => `
+          <div class="pdp-review-item">
+            <div class="pdp-review-item-head">
+              <span class="pdp-review-stars">${starsHtml(r.rating)}</span>
+              <span class="pdp-review-author">${escapeHtml(r.customerName)}</span>
+              <span class="pdp-review-date">${new Date(r.createdAt).toLocaleDateString('pt-BR')}</span>
+            </div>
+            ${r.comment ? `<p class="pdp-review-comment">${escapeHtml(r.comment)}</p>` : ''}
+          </div>
+        `
+      )
+      .join('');
+  }
+
+  function renderReviewsSummary(reviews) {
+    const summaryEl = document.getElementById('pdpReviewsSummary');
+    if (!reviews.length) {
+      summaryEl.hidden = true;
+      return;
+    }
+    const avg = reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length;
+    document.getElementById('pdpReviewsAvgStars').textContent = starsHtml(avg);
+    document.getElementById('pdpReviewsAvgText').textContent =
+      `${avg.toFixed(1)} de 5 · ${reviews.length} ${reviews.length === 1 ? 'avaliação' : 'avaliações'}`;
+    summaryEl.hidden = false;
+  }
+
+  // `currentCustomer` só é conhecido de verdade depois do login/cadastro/restauração de sessão,
+  // que rodam bem depois desse carregamento inicial — por isso o gate (esconder form/mostrar aviso
+  // de login) precisa poder ser re-executado a qualquer momento via refreshPdpReviewGate(), chamada
+  // de dentro de setCustomer()/clearCustomer(), não só uma vez aqui dentro de initProductReviews().
+  let pdpReviewProduct = null;
+  let pdpReviewFormWired = false;
+
+  function wireReviewFormOnce() {
+    if (pdpReviewFormWired) return;
+    pdpReviewFormWired = true;
+    const form = document.getElementById('pdpReviewForm');
+    const starsInput = document.getElementById('pdpReviewStarsInput');
+    const commentInput = document.getElementById('pdpReviewComment');
+    const submitBtn = document.getElementById('pdpReviewSubmit');
+    const msgEl = document.getElementById('pdpReviewMsg');
+
+    function setMsg(text, kind) {
+      msgEl.textContent = text;
+      msgEl.className = `account-form-msg ${kind === 'ok' ? 'is-ok' : 'is-error'}`;
+      msgEl.hidden = !text;
+    }
+
+    let selectedRating = 0;
+    starsInput.querySelectorAll('button').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        selectedRating = Number(btn.dataset.value);
+        starsInput.querySelectorAll('button').forEach((b) => b.classList.toggle('is-active', Number(b.dataset.value) <= selectedRating));
+      });
+    });
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      setMsg('', '');
+      if (!pdpReviewProduct) return;
+      if (!selectedRating) {
+        setMsg('Escolha de 1 a 5 estrelas.', 'error');
+        return;
+      }
+      submitBtn.disabled = true;
+      try {
+        const res = await fetch('/api/reviews', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: getCustomerToken(), productId: pdpReviewProduct.id, rating: selectedRating, comment: commentInput.value.trim() }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Não foi possível enviar sua avaliação');
+        const reviews = data.reviews || [];
+        renderReviewsSummary(reviews);
+        renderReviewsList(reviews);
+        form.hidden = true;
+        setMsg('Avaliação enviada ✓ obrigada por compartilhar!', 'ok');
+      } catch (err) {
+        setMsg(err.message, 'error');
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+  }
+
+  function refreshPdpReviewGate() {
+    const loginHint = document.getElementById('pdpReviewLoginHint');
+    const form = document.getElementById('pdpReviewForm');
+    if (!loginHint || !form || !pdpReviewProduct) return;
+    loginHint.hidden = !!currentCustomer;
+    form.hidden = !currentCustomer;
+    if (currentCustomer) wireReviewFormOnce();
+  }
+
+  async function initProductReviews(p) {
+    pdpReviewProduct = p;
+    let reviews = [];
+    try {
+      const res = await fetch('/api/reviews/list', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productId: p.id }),
+      });
+      const data = await res.json();
+      reviews = data.reviews || [];
+    } catch {
+      // sem conexão agora — segue mostrando a lista vazia; o resumo/nota do card já veio do /api/data
+    }
+    renderReviewsSummary(reviews);
+    renderReviewsList(reviews);
+    refreshPdpReviewGate();
+  }
+
+  document.getElementById('pdpReviewLoginBtn')?.addEventListener('click', () => openAccountModal());
 
   async function init() {
     dataError.hidden = true;
@@ -2040,6 +2276,7 @@
       COLLECTIONS = data.collections || [];
       PROMOTIONS = data.promotions || [];
       COUPONS = data.coupons || [];
+      SHIPPING_RULES = data.shippingRules || [];
       CATEGORY_GROUPS = data.categoryGroups || [];
       CATEGORY_CONTENT = data.categoryContent || [];
       STORIES = data.stories || [];

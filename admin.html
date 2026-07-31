@@ -94,6 +94,8 @@
         <div class="admin-tab-submenu" id="submenu-vendas">
           <button type="button" class="admin-tab" data-target="pedidos">Pedidos</button>
           <button type="button" class="admin-tab" data-target="clientes">Clientes</button>
+          <button type="button" class="admin-tab" data-target="frete">Frete</button>
+          <button type="button" class="admin-tab" data-target="avaliacoes">Avaliações</button>
         </div>
       </div>
       <div class="admin-tab-group" data-group="relatorios">
@@ -428,6 +430,46 @@
       </section>
     </section>
 
+    <section class="admin-panel" id="panel-frete" hidden>
+      <section class="admin-card admin-card-wide">
+        <h2 id="shippingFormTitle">Frete por estado</h2>
+        <p class="admin-card-hint">Uma regra por UF (ex: MG, SP). A regra com UF "*" é usada como padrão para qualquer estado sem regra própria — sem ela, clientes de fora das UFs cadastradas não conseguem calcular frete na entrega.</p>
+        <form id="shippingForm" class="admin-product-form">
+          <input type="hidden" id="shippingEditId" value="" />
+          <div class="admin-form-row">
+            <label>
+              UF
+              <input type="text" id="shippingUf" placeholder="Ex: MG ou *" maxlength="2" required />
+            </label>
+            <label>
+              Rótulo (opcional)
+              <input type="text" id="shippingLabel" placeholder="Ex: Sedex Minas Gerais" />
+            </label>
+          </div>
+          <div class="admin-form-row">
+            <label>
+              Valor do frete
+              <input type="number" id="shippingPrice" min="0" step="0.01" placeholder="Ex: 25" required />
+            </label>
+            <label>
+              Frete grátis a partir de (opcional)
+              <input type="number" id="shippingFreeAbove" min="0" step="0.01" placeholder="Ex: 300" />
+            </label>
+          </div>
+          <label class="account-check">
+            <input type="checkbox" id="shippingActive" checked />
+            Regra ativa
+          </label>
+          <div class="admin-form-actions">
+            <button type="submit" class="btn btn-primary" id="shippingSubmit">Adicionar regra</button>
+            <button type="button" class="btn btn-ghost" id="shippingCancelEdit" hidden>Cancelar edição</button>
+          </div>
+          <p class="admin-form-msg" id="shippingMsg" hidden></p>
+        </form>
+        <ul class="admin-tag-list" id="shippingList"></ul>
+      </section>
+    </section>
+
     <section class="admin-panel" id="panel-imagens" hidden>
       <section class="admin-card admin-card-wide">
         <h2>Imagens do site</h2>
@@ -454,6 +496,15 @@
           <button type="button" id="customerExport" class="btn btn-outline">Exportar CSV</button>
         </div>
         <div class="admin-customer-list" id="customerList"></div>
+      </section>
+    </section>
+
+    <section class="admin-panel" id="panel-avaliacoes" hidden>
+      <section class="admin-card admin-card-wide">
+        <h2>Avaliações (<span id="reviewCount">0</span>)</h2>
+        <p class="admin-card-hint">Avaliações ficam visíveis no site assim que enviadas por clientes que compraram o produto. Remova aqui as que forem inadequadas.</p>
+        <input type="search" id="reviewSearch" class="admin-search" placeholder="Buscar por produto ou cliente..." />
+        <div class="admin-order-list" id="reviewList"></div>
       </section>
     </section>
 

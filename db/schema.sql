@@ -218,6 +218,39 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_id);
+
+-- regra de frete por estado (UF). A linha com uf = '*' é o fallback usado quando o estado do
+-- endereço não tem regra específica cadastrada; sem nenhuma regra (nem '*'), o frete fica 0.
+CREATE TABLE IF NOT EXISTS shipping_rules (
+  id         SERIAL PRIMARY KEY,
+  uf         TEXT NOT NULL,
+  label      TEXT NOT NULL DEFAULT '',
+  price      NUMERIC(10, 2) NOT NULL DEFAULT 0,
+  free_above NUMERIC(10, 2),
+  active     BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS shipping_rules_uf_idx ON shipping_rules (upper(uf));
+
+-- avaliação de cliente (estrelas + comentário) para um produto. Só quem tem um pedido não
+-- cancelado contendo esse produto pode avaliar (checado na rota, não aqui); uma avaliação por
+-- cliente por produto — quem quiser mudar a nota edita a mesma linha em vez de duplicar.
+CREATE TABLE IF NOT EXISTS product_reviews (
+  id          UUID PRIMARY KEY,
+  product_id  TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  order_id    TEXT REFERENCES orders(id) ON DELETE SET NULL,
+  rating      INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+  comment     TEXT NOT NULL DEFAULT '',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_reviews_product ON product_reviews(product_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS reviews_product_customer_idx ON product_reviews(product_id, customer_id);
+
+-- valor de frete combinado no checkout (0 quando é retirada em loja); somado ao subtotal-desconto
+-- para compor `total`, que continua sendo o valor final enviado no pedido.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping NUMERIC(10, 2) NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS stories (
   id          TEXT PRIMARY KEY,

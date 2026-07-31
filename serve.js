@@ -131,6 +131,47 @@ async function attachVariants(products) {
   });
 }
 
+// resumo (média + contagem) usado nos cards da vitrine e na página de produto; produto sem
+// nenhuma avaliação fica com rating null (não 0 — 0 pareceria "nota mínima", não "sem avaliação").
+async function attachReviewSummary(products) {
+  if (!products.length) return products;
+  const { rows } = await pool.query(
+    `SELECT product_id AS "productId", ROUND(AVG(rating)::numeric, 1) AS rating, COUNT(*)::int AS "reviewCount"
+     FROM product_reviews GROUP BY product_id`
+  );
+  const byProduct = new Map(rows.map((r) => [r.productId, r]));
+  return products.map((p) => {
+    const summary = byProduct.get(p.id);
+    return { ...p, rating: summary ? Number(summary.rating) : null, reviewCount: summary ? summary.reviewCount : 0 };
+  });
+}
+
+async function getProductReviews(productId) {
+  const { rows } = await pool.query(
+    `SELECT r.id, r.rating, r.comment, r.created_at AS "createdAt",
+            c.first_name || ' ' || left(c.last_name, 1) || '.' AS "customerName"
+     FROM product_reviews r
+     JOIN customers c ON c.id = r.customer_id
+     WHERE r.product_id = $1
+     ORDER BY r.created_at DESC`,
+    [productId]
+  );
+  return rows;
+}
+
+async function getAllReviews() {
+  const { rows } = await pool.query(
+    `SELECT r.id, r.product_id AS "productId", p.name AS "productName", r.rating, r.comment,
+            r.created_at AS "createdAt", c.first_name || ' ' || c.last_name AS "customerName"
+     FROM product_reviews r
+     JOIN customers c ON c.id = r.customer_id
+     JOIN products p ON p.id = r.product_id
+     ORDER BY r.created_at DESC
+     LIMIT 300`
+  );
+  return rows;
+}
+
 async function getProductVariants(productId) {
   const { rows } = await pool.query(
     'SELECT id, size, color, sku, stock, position, measurements FROM product_variants WHERE product_id = $1 ORDER BY position ASC',
@@ -289,7 +330,7 @@ async function getProducts() {
     LEFT JOIN collections col ON col.id = p.collection_id
     ORDER BY p.created_at DESC
   `);
-  return attachImages(await attachVariants(rows));
+  return attachReviewSummary(await attachImages(await attachVariants(rows)));
 }
 
 // Só o necessário pra montar o <head> da página de produto (título/meta/OG) no servidor —
@@ -349,6 +390,15 @@ async function getCoupons() {
   return rows;
 }
 
+async function getShippingRules() {
+  const { rows } = await pool.query(`
+    SELECT id, uf, label, price, free_above AS "freeAbove", active
+    FROM shipping_rules
+    ORDER BY (uf = '*'), uf
+  `);
+  return rows;
+}
+
 // grupos usados só pelo mega-menu da vitrine; não altera o formato de getCategories().
 async function getCategoryGroups() {
   const { rows } = await pool.query('SELECT name, group_name AS "groupName" FROM categories ORDER BY id');
@@ -396,7 +446,7 @@ async function getCustomersForAdmin() {
 async function getOrders() {
   const { rows } = await pool.query(`
     SELECT id, customer_name AS "customerName", customer_phone AS "customerPhone",
-           items, subtotal, discount, total, coupon_code AS "couponCode",
+           items, subtotal, discount, shipping, total, coupon_code AS "couponCode",
            payment_method AS "paymentMethod", delivery_method AS "deliveryMethod",
            address, status, created_at AS "createdAt"
     FROM orders
@@ -408,7 +458,7 @@ async function getOrders() {
 
 async function getCustomerOrders(customerId) {
   const { rows } = await pool.query(
-    `SELECT id, items, subtotal, discount, total, coupon_code AS "couponCode",
+    `SELECT id, items, subtotal, discount, shipping, total, coupon_code AS "couponCode",
             payment_method AS "paymentMethod", delivery_method AS "deliveryMethod",
             status, created_at AS "createdAt"
      FROM orders
@@ -487,6 +537,28 @@ async function readJSONBody(req, maxBytes = 15 * 1024 * 1024) {
   const buf = await readBody(req, maxBytes);
   if (!buf.length) return {};
   return JSON.parse(buf.toString('utf8'));
+}
+
+// ---------- login rate limiting (memória local — reinicia com o processo, suficiente pra
+// coibir tentativa automatizada de senha sem precisar de infra extra) ----------
+const LOGIN_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_ATTEMPT_MAX = 10;
+const loginAttempts = new Map();
+
+function loginRateLimited(req, email) {
+  const key = `${req.socket.remoteAddress}:${email}`;
+  const now = Date.now();
+  const entry = loginAttempts.get(key);
+  if (!entry || now - entry.firstAttemptAt > LOGIN_ATTEMPT_WINDOW_MS) {
+    loginAttempts.set(key, { count: 1, firstAttemptAt: now });
+    return false;
+  }
+  entry.count += 1;
+  return entry.count > LOGIN_ATTEMPT_MAX;
+}
+
+function resetLoginAttempts(req, email) {
+  loginAttempts.delete(`${req.socket.remoteAddress}:${email}`);
 }
 
 // ---------- admin auth (login multiusuário: e-mail+senha, token assinado, papéis) ----------
@@ -570,7 +642,8 @@ async function getSalesSummary(from, to) {
   const { rows } = await pool.query(
     `SELECT COUNT(*)::int AS "orderCount", COALESCE(SUM(total), 0) AS revenue
      FROM orders
-     WHERE status != 'cancelado' AND created_at >= $1::date AND created_at < ($2::date + interval '1 day')`,
+     WHERE status != 'cancelado' AND created_at >= ($1::date)::timestamp AT TIME ZONE 'America/Sao_Paulo'
+       AND created_at < (($2::date + interval '1 day'))::timestamp AT TIME ZONE 'America/Sao_Paulo'`,
     [from, to]
   );
   const { orderCount, revenue } = rows[0];
@@ -579,10 +652,10 @@ async function getSalesSummary(from, to) {
 
 async function getSalesByDay(from, to) {
   const { rows } = await pool.query(
-    `SELECT to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS date,
+    `SELECT to_char(date_trunc('day', created_at AT TIME ZONE 'America/Sao_Paulo'), 'YYYY-MM-DD') AS date,
             COUNT(*)::int AS orders, COALESCE(SUM(total), 0) AS revenue
      FROM orders
-     WHERE status != 'cancelado' AND created_at >= $1::date AND created_at < ($2::date + interval '1 day')
+     WHERE status != 'cancelado' AND created_at >= ($1::date)::timestamp AT TIME ZONE 'America/Sao_Paulo' AND created_at < (($2::date + interval '1 day'))::timestamp AT TIME ZONE 'America/Sao_Paulo'
      GROUP BY 1 ORDER BY 1 ASC`,
     [from, to]
   );
@@ -595,7 +668,7 @@ async function getTopProducts(from, to, limit = 10) {
             SUM((item->>'qty')::int)::int AS qty,
             SUM((item->>'qty')::int * (item->>'price')::numeric) AS revenue
      FROM orders, jsonb_array_elements(items) AS item
-     WHERE status != 'cancelado' AND created_at >= $1::date AND created_at < ($2::date + interval '1 day')
+     WHERE status != 'cancelado' AND created_at >= ($1::date)::timestamp AT TIME ZONE 'America/Sao_Paulo' AND created_at < (($2::date + interval '1 day'))::timestamp AT TIME ZONE 'America/Sao_Paulo'
      GROUP BY item->>'id', item->>'name'
      ORDER BY qty DESC
      LIMIT $3`,
@@ -609,7 +682,7 @@ async function getCouponUsage(from, to) {
     `SELECT coupon_code AS code, COUNT(*)::int AS uses, COALESCE(SUM(discount), 0) AS "totalDiscount"
      FROM orders
      WHERE coupon_code IS NOT NULL AND status != 'cancelado'
-       AND created_at >= $1::date AND created_at < ($2::date + interval '1 day')
+       AND created_at >= ($1::date)::timestamp AT TIME ZONE 'America/Sao_Paulo' AND created_at < (($2::date + interval '1 day'))::timestamp AT TIME ZONE 'America/Sao_Paulo'
      GROUP BY coupon_code
      ORDER BY uses DESC`,
     [from, to]
@@ -627,7 +700,7 @@ async function getPromotionUsage(from, to) {
               SUM(((item->>'listPrice')::numeric - (item->>'price')::numeric) * (item->>'qty')::int) AS total_discount
        FROM orders, jsonb_array_elements(items) AS item
        WHERE item->>'promoId' IS NOT NULL AND status != 'cancelado'
-         AND created_at >= $1::date AND created_at < ($2::date + interval '1 day')
+         AND created_at >= ($1::date)::timestamp AT TIME ZONE 'America/Sao_Paulo' AND created_at < (($2::date + interval '1 day'))::timestamp AT TIME ZONE 'America/Sao_Paulo'
        GROUP BY item->>'promoId'
      ) o
      LEFT JOIN promotions p ON p.id = o.promo_id
@@ -641,7 +714,7 @@ async function getNewCustomers(from, to) {
   const { rows } = await pool.query(
     `SELECT COUNT(*)::int AS "newCustomers", COUNT(*) FILTER (WHERE marketing_opt_in)::int AS "optInCount"
      FROM customers
-     WHERE created_at >= $1::date AND created_at < ($2::date + interval '1 day')`,
+     WHERE created_at >= ($1::date)::timestamp AT TIME ZONE 'America/Sao_Paulo' AND created_at < (($2::date + interval '1 day'))::timestamp AT TIME ZONE 'America/Sao_Paulo'`,
     [from, to]
   );
   return rows[0];
@@ -699,18 +772,19 @@ async function handleApi(req, res, pathname) {
   try {
     // ------ catalog ------
     if (pathname === '/api/data' && req.method === 'GET') {
-      const [products, categories, collections, promotions, coupons, categoryGroups, categoryContent, stories, novidades] = await Promise.all([
+      const [products, categories, collections, promotions, coupons, shippingRules, categoryGroups, categoryContent, stories, novidades] = await Promise.all([
         getProducts(),
         getCategories(),
         getCollections(),
         getPromotions(),
         getCoupons(),
+        getShippingRules(),
         getCategoryGroups(),
         getCategoryContent(),
         getStories(true),
         getNovidades(),
       ]);
-      return sendJSON(res, 200, { products, categories, collections, promotions, coupons, categoryGroups, categoryContent, stories, novidades });
+      return sendJSON(res, 200, { products, categories, collections, promotions, coupons, shippingRules, categoryGroups, categoryContent, stories, novidades });
     }
 
     // ------ admin auth (login multiusuário, papéis, log de atividade) ------
@@ -719,6 +793,9 @@ async function handleApi(req, res, pathname) {
       const email = (body.email || '').trim().toLowerCase();
       const password = body.password || '';
       if (!email || !password) return sendJSON(res, 400, { error: 'Informe e-mail e senha' });
+      if (loginRateLimited(req, email)) {
+        return sendJSON(res, 429, { error: 'Muitas tentativas. Aguarde alguns minutos e tente novamente' });
+      }
 
       const { rows } = await pool.query(
         'SELECT id, name, email, password_hash AS "passwordHash", role, active FROM admin_users WHERE lower(email) = $1',
@@ -728,6 +805,7 @@ async function handleApi(req, res, pathname) {
       if (!row || !row.active || !verifyPassword(password, row.passwordHash)) {
         return sendJSON(res, 401, { error: 'E-mail ou senha inválidos' });
       }
+      resetLoginAttempts(req, email);
       const adminUser = { id: row.id, name: row.name, email: row.email, role: row.role };
       return sendJSON(res, 200, { adminUser, token: signAdminSessionToken(adminUser) });
     }
@@ -1044,6 +1122,9 @@ async function handleApi(req, res, pathname) {
 
       const buffer = decodeImageDataUrl(body.image);
       if (!buffer) return sendJSON(res, 400, { error: 'Imagem inválida' });
+
+      const productExists = await pool.query('SELECT 1 FROM products WHERE id = $1', [body.productId]);
+      if (!productExists.rowCount) return sendJSON(res, 404, { error: 'Produto não encontrado' });
 
       const existing = await getProductGallery(body.productId);
       if (existing.length >= PRODUCT_GALLERY_MAX_EXTRA) {
@@ -1464,6 +1545,7 @@ async function handleApi(req, res, pathname) {
       const body = await readJSONBody(req);
       const admin = await requireAdmin(body);
       if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
       await pool.query('DELETE FROM promotions WHERE id = $1', [body.id]);
       logActivity(admin, 'promotion.delete', 'promotion', body.id, null);
       return sendJSON(res, 200, { promotions: await getPromotions() });
@@ -1516,9 +1598,75 @@ async function handleApi(req, res, pathname) {
       const admin = await requireAdmin(body);
       if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       const code = (body.code || '').trim().toUpperCase();
+      if (!code) return sendJSON(res, 400, { error: 'code é obrigatório' });
       await pool.query('DELETE FROM coupons WHERE code = $1', [code]);
       logActivity(admin, 'coupon.delete', 'coupon', code, null);
       return sendJSON(res, 200, { coupons: await getCoupons() });
+    }
+
+    // ------ shipping rules (frete por UF, usado no checkout do site) ------
+    if (pathname === '/api/shipping-rules' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+
+      const uf = (body.uf || '').trim().toUpperCase();
+      if (uf !== '*' && !/^[A-Z]{2}$/.test(uf)) {
+        return sendJSON(res, 400, { error: 'Informe uma UF válida (2 letras) ou "*" para a regra padrão' });
+      }
+      const price = Number(body.price);
+      if (!Number.isFinite(price) || price < 0) return sendJSON(res, 400, { error: 'Informe um valor de frete válido' });
+      const freeAboveRaw = body.freeAbove === '' || body.freeAbove == null ? null : Number(body.freeAbove);
+      if (freeAboveRaw != null && (!Number.isFinite(freeAboveRaw) || freeAboveRaw < 0)) {
+        return sendJSON(res, 400, { error: 'Informe um valor válido para frete grátis acima de' });
+      }
+      const label = (body.label || '').trim();
+
+      const dup = await pool.query('SELECT 1 FROM shipping_rules WHERE upper(uf) = $1', [uf]);
+      if (dup.rowCount) return sendJSON(res, 409, { error: uf === '*' ? 'Já existe uma regra padrão' : `Já existe uma regra para ${uf}` });
+
+      await pool.query(
+        'INSERT INTO shipping_rules (uf, label, price, free_above) VALUES ($1,$2,$3,$4)',
+        [uf, label, price, freeAboveRaw]
+      );
+      logActivity(admin, 'shipping_rule.create', 'shipping_rule', uf, null);
+      return sendJSON(res, 201, { shippingRules: await getShippingRules() });
+    }
+
+    if (pathname === '/api/shipping-rules/update' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      const id = Number(body.id);
+      if (!id) return sendJSON(res, 400, { error: 'Regra não encontrada' });
+
+      const price = Number(body.price);
+      if (!Number.isFinite(price) || price < 0) return sendJSON(res, 400, { error: 'Informe um valor de frete válido' });
+      const freeAboveRaw = body.freeAbove === '' || body.freeAbove == null ? null : Number(body.freeAbove);
+      if (freeAboveRaw != null && (!Number.isFinite(freeAboveRaw) || freeAboveRaw < 0)) {
+        return sendJSON(res, 400, { error: 'Informe um valor válido para frete grátis acima de' });
+      }
+      const label = (body.label || '').trim();
+      const active = body.active !== false;
+
+      const { rowCount } = await pool.query(
+        'UPDATE shipping_rules SET label=$1, price=$2, free_above=$3, active=$4 WHERE id=$5',
+        [label, price, freeAboveRaw, active, id]
+      );
+      if (!rowCount) return sendJSON(res, 404, { error: 'Regra não encontrada' });
+      logActivity(admin, 'shipping_rule.update', 'shipping_rule', String(id), null);
+      return sendJSON(res, 200, { shippingRules: await getShippingRules() });
+    }
+
+    if (pathname === '/api/shipping-rules' && req.method === 'DELETE') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      const id = Number(body.id);
+      if (!Number.isFinite(id)) return sendJSON(res, 400, { error: 'id é obrigatório' });
+      await pool.query('DELETE FROM shipping_rules WHERE id = $1', [id]);
+      logActivity(admin, 'shipping_rule.delete', 'shipping_rule', String(id), null);
+      return sendJSON(res, 200, { shippingRules: await getShippingRules() });
     }
 
     // ------ orders (pedidos fechados no checkout do site, antes de abrir o WhatsApp) ------
@@ -1534,6 +1682,7 @@ async function handleApi(req, res, pathname) {
       }
       const subtotal = Number(body.subtotal) || 0;
       const discount = Number(body.discount) || 0;
+      const shipping = Number(body.shipping) || 0;
       const total = Number(body.total) || 0;
       const couponCode = (body.couponCode || '').trim().toUpperCase() || null;
       const address = body.address && typeof body.address === 'object' ? body.address : null;
@@ -1579,9 +1728,9 @@ async function handleApi(req, res, pathname) {
           });
         }
         await client.query(
-          `INSERT INTO orders (id, customer_id, customer_name, customer_phone, items, subtotal, discount, total, coupon_code, payment_method, delivery_method, address)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-          [id, customerId, customerName, customerPhone, JSON.stringify(items), subtotal, discount, total, couponCode, paymentMethod, deliveryMethod, address ? JSON.stringify(address) : null]
+          `INSERT INTO orders (id, customer_id, customer_name, customer_phone, items, subtotal, discount, shipping, total, coupon_code, payment_method, delivery_method, address)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+          [id, customerId, customerName, customerPhone, JSON.stringify(items), subtotal, discount, shipping, total, couponCode, paymentMethod, deliveryMethod, address ? JSON.stringify(address) : null]
         );
         await client.query('COMMIT');
       } catch (err) {
@@ -1721,6 +1870,9 @@ async function handleApi(req, res, pathname) {
       const email = (body.email || '').trim().toLowerCase();
       const password = body.password || '';
       if (!email || !password) return sendJSON(res, 400, { error: 'Informe e-mail e senha' });
+      if (loginRateLimited(req, email)) {
+        return sendJSON(res, 429, { error: 'Muitas tentativas. Aguarde alguns minutos e tente novamente' });
+      }
 
       const { rows } = await pool.query(
         'SELECT id, first_name AS "firstName", last_name AS "lastName", email, phone, marketing_opt_in AS "marketingOptIn", password_hash AS "passwordHash" FROM customers WHERE lower(email) = $1',
@@ -1730,6 +1882,7 @@ async function handleApi(req, res, pathname) {
       if (!row || !verifyPassword(password, row.passwordHash)) {
         return sendJSON(res, 401, { error: 'E-mail ou senha inválidos' });
       }
+      resetLoginAttempts(req, email);
       const { passwordHash, ...customer } = row;
       return sendJSON(res, 200, { customer, token: signSessionToken(customer.id) });
     }
@@ -1785,6 +1938,57 @@ async function handleApi(req, res, pathname) {
       const customerId = resolveCustomerId(body);
       if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
       return sendJSON(res, 200, { orders: await getCustomerOrders(customerId) });
+    }
+
+    // ------ avaliações de produto (só quem comprou; visível na hora, sem moderação prévia) ------
+    if (pathname === '/api/reviews/list' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const productId = (body.productId || '').trim();
+      if (!productId) return sendJSON(res, 400, { error: 'productId é obrigatório' });
+      return sendJSON(res, 200, { reviews: await getProductReviews(productId) });
+    }
+
+    if (pathname === '/api/reviews' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const customerId = resolveCustomerId(body);
+      if (!customerId) return sendJSON(res, 401, { error: 'Entre na sua conta para avaliar esse produto' });
+
+      const productId = (body.productId || '').trim();
+      const rating = Math.round(Number(body.rating));
+      const comment = (body.comment || '').trim().slice(0, 1000);
+      if (!productId) return sendJSON(res, 400, { error: 'Produto inválido' });
+      if (!Number.isFinite(rating) || rating < 1 || rating > 5) return sendJSON(res, 400, { error: 'Escolha de 1 a 5 estrelas' });
+
+      const purchase = await pool.query(
+        `SELECT id FROM orders WHERE customer_id = $1 AND status <> 'cancelado' AND items @> $2::jsonb LIMIT 1`,
+        [customerId, JSON.stringify([{ id: productId }])]
+      );
+      if (!purchase.rowCount) return sendJSON(res, 403, { error: 'Você só pode avaliar produtos que já comprou' });
+
+      const dup = await pool.query('SELECT 1 FROM product_reviews WHERE product_id = $1 AND customer_id = $2', [productId, customerId]);
+      if (dup.rowCount) return sendJSON(res, 409, { error: 'Você já avaliou esse produto' });
+
+      await pool.query(
+        'INSERT INTO product_reviews (id, product_id, customer_id, order_id, rating, comment) VALUES ($1,$2,$3,$4,$5,$6)',
+        [crypto.randomUUID(), productId, customerId, purchase.rows[0].id, rating, comment]
+      );
+      return sendJSON(res, 201, { reviews: await getProductReviews(productId) });
+    }
+
+    if (pathname === '/api/admin/reviews/list' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      return sendJSON(res, 200, { reviews: await getAllReviews() });
+    }
+
+    if (pathname === '/api/reviews' && req.method === 'DELETE') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      await pool.query('DELETE FROM product_reviews WHERE id = $1', [body.id]);
+      logActivity(admin, 'review.delete', 'review', body.id, null);
+      return sendJSON(res, 200, { reviews: await getAllReviews() });
     }
 
     // ------ endereços salvos do cliente ------
@@ -2132,6 +2336,16 @@ function serveNotFound(res) {
   });
 }
 
+// Só o que o front realmente precisa buscar por HTTP: as páginas HTML públicas e tudo
+// dentro de assets/. Tudo mais no repo (serve.js, .env, db/, node_modules/, package.json...)
+// nunca deve ser servido como arquivo estático — allowlist em vez de bloquear só ".."
+// porque um arquivo sensível (ex.: .env) pode estar dentro do root sem nenhum ".." envolvido.
+const PUBLIC_STATIC_FILES = new Set(['/index.html', '/admin.html', '/produto.html', '/404.html']);
+
+function isPublicStaticPath(filePath) {
+  return PUBLIC_STATIC_FILES.has(filePath) || filePath.startsWith('/assets/');
+}
+
 function serveStatic(req, res, pathname) {
   let filePath = decodeURIComponent(pathname);
 
@@ -2149,7 +2363,15 @@ function serveStatic(req, res, pathname) {
 
   if (filePath === '/') filePath = '/index.html';
   if (filePath === '/admin') filePath = '/admin.html';
+  if (!isPublicStaticPath(filePath)) {
+    serveNotFound(res);
+    return;
+  }
   const full = path.join(root, filePath);
+  if (full !== root && !full.startsWith(root + path.sep)) {
+    serveNotFound(res);
+    return;
+  }
   fs.readFile(full, (err, data) => {
     if (err) {
       serveNotFound(res);
@@ -2161,14 +2383,22 @@ function serveStatic(req, res, pathname) {
   });
 }
 
-const ROBOTS_TXT = `User-agent: *\nDisallow: /admin\nDisallow: /api/\nSitemap: /sitemap.xml\n`;
+const robotsTxt = (origin) => `User-agent: *\nDisallow: /admin\nDisallow: /api/\nSitemap: ${origin}/sitemap.xml\n`;
+
+// O protocolo de sitemap exige <loc> absoluta (com esquema+host) — sem isso, alguns
+// crawlers rejeitam o arquivo inteiro. Deriva o host do próprio request em vez de fixar um
+// domínio, então funciona igual em localhost e em produção atrás de proxy/CDN.
+function requestOrigin(req) {
+  const proto = req.headers['x-forwarded-proto'] || (req.socket.encrypted ? 'https' : 'http');
+  return `${proto}://${req.headers.host}`;
+}
 
 // dinâmico porque precisa listar /produto/:id de cada produto — antes era uma string fixa
 // com só a home.
-async function buildSitemap() {
+async function buildSitemap(origin) {
   const { rows } = await pool.query('SELECT id FROM products ORDER BY created_at DESC');
   const urls = ['/', ...rows.map((r) => `/produto/${r.id}`)];
-  const items = urls.map((u) => `  <url><loc>${u}</loc></url>`).join('\n');
+  const items = urls.map((u) => `  <url><loc>${origin}${u}</loc></url>`).join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${items}\n</urlset>\n`;
 }
 
@@ -2184,7 +2414,7 @@ function escapeHtml(str) {
 // placeholders de produto.html. O corpo da página continua renderizado no client (main.js),
 // igual ao resto do site; só o título/meta/OG precisam vir prontos na resposta do servidor,
 // pra link compartilhado no WhatsApp e crawler mostrarem a prévia certa.
-async function serveProductPage(res, id) {
+async function serveProductPage(req, res, id) {
   const product = await getProductMeta(id);
   if (!product) {
     serveNotFound(res);
@@ -2195,13 +2425,14 @@ async function serveProductPage(res, id) {
       serveNotFound(res);
       return;
     }
+    const origin = requestOrigin(req);
     const title = `${product.name} — By NaNa`;
     const description = (product.desc || `Confira ${product.name} na By NaNa.`).slice(0, 160);
     const html = template
       .replace(/<!--PRODUCT_TITLE-->/g, escapeHtml(title))
       .replace(/<!--PRODUCT_DESCRIPTION-->/g, escapeHtml(description))
-      .replace(/<!--PRODUCT_OG_IMAGE-->/g, escapeHtml(product.img))
-      .replace(/<!--PRODUCT_CANONICAL-->/g, escapeHtml(`/produto/${product.id}`));
+      .replace(/<!--PRODUCT_OG_IMAGE-->/g, escapeHtml(`${origin}/${product.img}`))
+      .replace(/<!--PRODUCT_CANONICAL-->/g, escapeHtml(`${origin}/produto/${product.id}`));
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
     res.end(html);
   });
@@ -2216,11 +2447,11 @@ http
     }
     if (pathname === '/robots.txt') {
       res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' });
-      res.end(ROBOTS_TXT);
+      res.end(robotsTxt(requestOrigin(req)));
       return;
     }
     if (pathname === '/sitemap.xml') {
-      buildSitemap().then((xml) => {
+      buildSitemap(requestOrigin(req)).then((xml) => {
         res.writeHead(200, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'no-cache' });
         res.end(xml);
       });
@@ -2228,7 +2459,7 @@ http
     }
     if (pathname.startsWith('/produto/')) {
       const id = decodeURIComponent(pathname.slice('/produto/'.length));
-      serveProductPage(res, id);
+      serveProductPage(req, res, id);
       return;
     }
     serveStatic(req, res, pathname);

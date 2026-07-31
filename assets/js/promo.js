@@ -1,7 +1,14 @@
 // Shared promotion/coupon math used by both the storefront (main.js) and the admin panel (admin.js).
 (() => {
+  // Data "de hoje" no fuso da loja (não o fuso do navegador do cliente) — evita que uma
+  // promoção pareça expirar/começar horas antes ou depois do esperado pra quem compra do Brasil.
   function todayISO() {
-    return new Date().toISOString().slice(0, 10);
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Sao_Paulo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
   }
 
   function isPromoActive(promo, todayStr) {
