@@ -267,12 +267,3 @@ CREATE INDEX IF NOT EXISTS idx_stories_position ON stories(position);
 -- vincula o story a um produto real do catálogo; o botão do story vira "Ver produto" quando preenchido.
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS product_id TEXT REFERENCES products(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_stories_product ON stories(product_id);
-
--- e-mail informado no checkout (opcional), usado para mandar confirmação e atualização de status
--- do pedido; não existia antes porque o checkout só terminava no WhatsApp.
-ALTER TABLE orders ADD COLUMN IF NOT EXISTS email TEXT;
-
--- token de recuperação de senha ("esqueci minha senha"); nulo fora de uma solicitação em
--- andamento e limpo assim que a senha é redefinida ou o token expira.
-ALTER TABLE customers ADD COLUMN IF NOT EXISTS reset_token TEXT;
-ALTER TABLE customers ADD COLUMN IF NOT EXISTS reset_token_expires TIMESTAMPTZ;

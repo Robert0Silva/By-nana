@@ -59,6 +59,8 @@
       return;
     }
     adminCurrentUser.textContent = `${CURRENT_ADMIN.name} · ${CURRENT_ADMIN.role === 'owner' ? 'owner' : 'equipe'}`;
+    const greeting = document.getElementById('dashGreetingName');
+    if (greeting) greeting.textContent = CURRENT_ADMIN.name.split(' ')[0];
   }
 
   function applyRoleVisibility() {
@@ -143,15 +145,27 @@
     avaliacoes: () => loadReviews(),
   };
 
-  document.querySelectorAll('.admin-tab').forEach((btn) => {
-    btn.addEventListener('click', () => {
+  function activateAdminPanel(target) {
+      const btn = document.querySelector(`.admin-tab[data-target="${target}"]`);
+      if (!btn) return;
       document.querySelectorAll('.admin-tab').forEach((b) => b.classList.toggle('is-active', b === btn));
       document.querySelectorAll('.admin-panel').forEach((p) => {
-        p.hidden = p.id !== `panel-${btn.dataset.target}`;
+        p.hidden = p.id !== `panel-${target}`;
       });
-      setActiveTabGroupFor(btn.dataset.target);
+      setActiveTabGroupFor(target);
       closeAllTabGroups();
-      if (TAB_LOAD_HANDLERS[btn.dataset.target]) TAB_LOAD_HANDLERS[btn.dataset.target]();
+      if (TAB_LOAD_HANDLERS[target]) TAB_LOAD_HANDLERS[target]();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  document.querySelectorAll('.admin-tab').forEach((btn) => {
+    btn.addEventListener('click', () => activateAdminPanel(btn.dataset.target));
+  });
+
+  document.querySelectorAll('[data-admin-jump]').forEach((button) => {
+    button.addEventListener('click', () => {
+      activateAdminPanel(button.dataset.adminJump);
+      if (button.dataset.newProduct === 'true') endEditProduct(true);
     });
   });
 
@@ -448,6 +462,7 @@
       imageDataUrl = reader.result;
       pPreview.src = imageDataUrl;
       pPreview.hidden = false;
+      updateProductCompletion();
     };
     reader.readAsDataURL(file);
   });
@@ -540,6 +555,31 @@
     const name = document.getElementById('pName').value.trim();
     pReviewTitle.textContent = pEditId.value ? 'Salvar todas as alterações' : 'Produto pronto para publicar?';
     pReviewSummary.textContent = `${name || 'Produto sem nome'} · ${valid.length} tamanho(s) · ${total} unidade(s)`;
+    updateProductCompletion();
+  }
+
+  function updateProductCompletion() {
+    const checks = [
+      !!document.getElementById('pName').value.trim(),
+      !!document.getElementById('pBrand').value.trim(),
+      !!pCategory.value,
+      !!document.getElementById('pDesc').value.trim(),
+      !!pEditId.value || !!imageDataUrl,
+      editorVariants.some((variant) => (variant.size || '').trim()),
+    ];
+    const done = checks.filter(Boolean).length;
+    const percent = Math.round((done / checks.length) * 100);
+    document.getElementById('pCompletionBar').style.width = `${percent}%`;
+    document.getElementById('pCompletionLabel').textContent = `${percent}% preenchido`;
+    const hints = [
+      'Comece pelo nome do produto.',
+      'Informe a marca.',
+      'Escolha uma categoria.',
+      'Adicione uma descrição que ajude na decisão de compra.',
+      'Selecione a foto principal.',
+      'Crie ao menos uma variação de tamanho.',
+    ];
+    document.getElementById('pCompletionHint').textContent = percent === 100 ? 'Tudo certo para revisar e publicar.' : hints[checks.findIndex((value) => !value)];
   }
 
   function renderEditorVariants() {
@@ -603,7 +643,8 @@
     setMsg(added ? `${added} variações adicionadas à grade.` : 'Essa combinação de tamanhos e cor já está na grade.', added ? 'ok' : 'error');
   });
   pAddVariant.addEventListener('click', () => addVariantRow());
-  ['pName', 'pPrice'].forEach((id) => document.getElementById(id).addEventListener('input', updateProductReview));
+  ['pName', 'pBrand', 'pPrice', 'pDesc', 'pTag', 'pComposition'].forEach((id) => document.getElementById(id).addEventListener('input', updateProductReview));
+  [pCategory, pCollection].forEach((field) => field.addEventListener('change', updateProductReview));
 
   async function startEditProduct(p) {
     pEditId.value = p.id;
@@ -753,12 +794,21 @@
   const productList = document.getElementById('productList');
   const productCount = document.getElementById('productCount');
   const productSearch = document.getElementById('productSearch');
+  const productCategoryFilter = document.getElementById('productCategoryFilter');
+  const productSort = document.getElementById('productSort');
 
   function renderProductList() {
+    const selectedCategory = productCategoryFilter.value;
+    productCategoryFilter.innerHTML = '<option value="">Todas as categorias</option>' + CATEGORIES.map((category) => `<option value="${escapeHtml(category)}">${escapeHtml(category)}</option>`).join('');
+    productCategoryFilter.value = selectedCategory;
     const term = (productSearch.value || '').trim().toLowerCase();
-    const list = term
+    let list = term
       ? PRODUCTS.filter((p) => `${p.name} ${p.brand} ${p.category} ${p.collection || ''}`.toLowerCase().includes(term))
-      : PRODUCTS;
+      : [...PRODUCTS];
+    if (productCategoryFilter.value) list = list.filter((product) => product.category === productCategoryFilter.value);
+    if (productSort.value === 'name') list.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+    if (productSort.value === 'stock-low') list.sort((a, b) => Number(a.totalStock || 0) - Number(b.totalStock || 0));
+    if (productSort.value === 'price-high') list.sort((a, b) => Number(b.price || 0) - Number(a.price || 0));
 
     productCount.textContent = PRODUCTS.length;
     productList.innerHTML = '';
@@ -806,6 +856,8 @@
   }
 
   productSearch.addEventListener('input', renderProductList);
+  productCategoryFilter.addEventListener('change', renderProductList);
+  productSort.addEventListener('change', renderProductList);
 
   // ---------- estoque / variação (tamanho, cor) por produto ----------
   async function toggleVariantEditor(productId, container) {

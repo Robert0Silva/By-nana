@@ -1450,6 +1450,13 @@
     accountBtn.title = currentCustomer ? `Olá, ${currentCustomer.firstName}` : 'Minha conta';
     if (currentCustomer) {
       profileName.textContent = currentCustomer.firstName;
+      const profileEmail = document.getElementById('profileEmail');
+      const profileAvatar = document.getElementById('profileAvatar');
+      if (profileEmail) profileEmail.textContent = currentCustomer.email || '';
+      if (profileAvatar) {
+        const initials = `${currentCustomer.firstName || ''} ${currentCustomer.lastName || ''}`.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join('');
+        profileAvatar.textContent = initials.toUpperCase() || 'BN';
+      }
       prefillBagContact();
     }
   }
@@ -2308,7 +2315,8 @@
       SHIPPING_RULES = data.shippingRules || [];
       CATEGORY_GROUPS = data.categoryGroups || [];
       CATEGORY_CONTENT = data.categoryContent || [];
-      STORIES = data.stories || [];
+      // Registros usados durante a configuração do painel não devem aparecer na vitrine pública.
+      STORIES = (data.stories || []).filter((story) => !/^story\s+teste?\b/i.test((story.title || '').trim()));
       NOVIDADES = data.novidades || [];
     } catch (e) {
       loadBar.classList.remove('is-active');

@@ -123,6 +123,18 @@
     </nav>
 
     <section class="admin-panel" id="panel-dashboard">
+      <div class="admin-dashboard-hero">
+        <div>
+          <span class="admin-eyebrow">Visão geral</span>
+          <h2>Bom trabalho, <span id="dashGreetingName">equipe By NaNa</span>.</h2>
+          <p>Acompanhe a loja e acesse rapidamente as tarefas mais importantes do dia.</p>
+        </div>
+        <div class="admin-quick-actions" aria-label="Ações rápidas">
+          <button type="button" class="btn btn-primary" data-admin-jump="produtos" data-new-product="true">＋ Cadastrar produto</button>
+          <button type="button" class="btn btn-ghost" data-admin-jump="pedidos">Ver pedidos</button>
+          <button type="button" class="btn btn-ghost" data-admin-jump="novidades">Organizar novidades</button>
+        </div>
+      </div>
       <div class="admin-stat-grid">
         <div class="admin-stat-card">
           <span class="admin-stat-label">Receita (30 dias)</span>
@@ -188,6 +200,10 @@
             <p class="admin-card-hint">Informações, foto, grade e estoque são salvos juntos.</p>
           </div>
           <button type="button" class="btn btn-ghost" id="pCancelEdit" hidden>Fechar edição</button>
+        </div>
+        <div class="admin-product-progress" aria-live="polite">
+          <div><span id="pCompletionLabel">0% preenchido</span><span id="pCompletionHint">Comece pelo nome e pela categoria.</span></div>
+          <div class="admin-progress-track"><span id="pCompletionBar"></span></div>
         </div>
         <div class="admin-product-steps" aria-label="Etapas do cadastro">
           <span><b>1</b> Informações</span>
@@ -319,7 +335,16 @@
           <div><h2>Produtos no catálogo (<span id="productCount">0</span>)</h2><p class="admin-card-hint">Edite informações, grade e estoque no mesmo lugar.</p></div>
           <button type="button" class="btn btn-primary" id="pNewProduct">＋ Novo produto</button>
         </div>
-        <input type="search" id="productSearch" class="admin-search" placeholder="Buscar por nome, categoria ou coleção..." />
+        <div class="admin-catalog-toolbar">
+          <input type="search" id="productSearch" class="admin-search" placeholder="Buscar por nome, categoria ou coleção..." />
+          <select id="productCategoryFilter" class="admin-select" aria-label="Filtrar produtos por categoria"><option value="">Todas as categorias</option></select>
+          <select id="productSort" class="admin-select" aria-label="Ordenar produtos">
+            <option value="recent">Mais recentes</option>
+            <option value="name">Nome A–Z</option>
+            <option value="stock-low">Menor estoque</option>
+            <option value="price-high">Maior valor</option>
+          </select>
+        </div>
         <div class="admin-product-list" id="productList"></div>
       </section>
     </section>

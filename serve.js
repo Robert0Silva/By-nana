@@ -5,7 +5,6 @@ const path = require('path');
 const crypto = require('crypto');
 const sharp = require('sharp');
 const { Pool, types } = require('pg');
-const { sendEmail } = require('./email');
 
 // numeric -> number, date -> plain 'YYYY-MM-DD' string (avoids timezone drift from Date objects)
 types.setTypeParser(1700, (v) => (v === null ? null : parseFloat(v)));
@@ -319,37 +318,6 @@ async function getInventoryMovements(productId, limit = 40) {
     [productId, limit]
   );
   return rows;
-}
-
-const ORDER_STATUS_LABELS = {
-  novo: 'Recebido',
-  em_andamento: 'Em andamento',
-  concluido: 'Concluído',
-  cancelado: 'Cancelado',
-};
-
-const money = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-
-function buildOrderConfirmationHtml({ id, customerName, items, total, deliveryMethod }) {
-  const rows = items
-    .map((item) => `<li>${item.qty}x ${item.name}${item.variantLabel ? ` (${item.variantLabel})` : ''}</li>`)
-    .join('');
-  return `
-    <p>Olá, ${customerName}!</p>
-    <p>Recebemos seu pedido <strong>${id}</strong> na By NaNa. Aqui está o resumo:</p>
-    <ul>${rows}</ul>
-    <p><strong>Total: ${money(total)}</strong></p>
-    <p>Forma de entrega: ${deliveryMethod}</p>
-    <p>Assim que o status do pedido mudar, avisamos por aqui.</p>
-  `;
-}
-
-function buildOrderStatusHtml({ id, customerName, status }) {
-  const label = ORDER_STATUS_LABELS[status] || status;
-  return `
-    <p>Olá, ${customerName}!</p>
-    <p>O status do seu pedido <strong>${id}</strong> na By NaNa foi atualizado para: <strong>${label}</strong>.</p>
-  `;
 }
 
 async function getProducts() {
@@ -1706,8 +1674,6 @@ async function handleApi(req, res, pathname) {
       const body = await readJSONBody(req);
       const customerName = (body.customerName || '').trim();
       const customerPhone = (body.customerPhone || '').trim();
-      const customerEmailRaw = (body.customerEmail || '').trim();
-      const customerEmail = /^\S+@\S+\.\S+$/.test(customerEmailRaw) ? customerEmailRaw : null;
       const paymentMethod = (body.paymentMethod || '').trim();
       const deliveryMethod = (body.deliveryMethod || '').trim();
       const items = Array.isArray(body.items) ? body.items : [];
@@ -1762,9 +1728,9 @@ async function handleApi(req, res, pathname) {
           });
         }
         await client.query(
-          `INSERT INTO orders (id, customer_id, customer_name, customer_phone, email, items, subtotal, discount, shipping, total, coupon_code, payment_method, delivery_method, address)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-          [id, customerId, customerName, customerPhone, customerEmail, JSON.stringify(items), subtotal, discount, shipping, total, couponCode, paymentMethod, deliveryMethod, address ? JSON.stringify(address) : null]
+          `INSERT INTO orders (id, customer_id, customer_name, customer_phone, items, subtotal, discount, shipping, total, coupon_code, payment_method, delivery_method, address)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+          [id, customerId, customerName, customerPhone, JSON.stringify(items), subtotal, discount, shipping, total, couponCode, paymentMethod, deliveryMethod, address ? JSON.stringify(address) : null]
         );
         await client.query('COMMIT');
       } catch (err) {
@@ -1772,14 +1738,6 @@ async function handleApi(req, res, pathname) {
         throw err;
       } finally {
         client.release();
-      }
-
-      if (customerEmail) {
-        await sendEmail({
-          to: customerEmail,
-          subject: `Pedido ${id} confirmado — By NaNa`,
-          html: buildOrderConfirmationHtml({ id, customerName, items, total, deliveryMethod }),
-        });
       }
 
       return sendJSON(res, 201, { orderId: id });
@@ -1804,16 +1762,12 @@ async function handleApi(req, res, pathname) {
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
-        const orderResult = await client.query(
-          'SELECT status, items, email, customer_name AS "customerName" FROM orders WHERE id=$1 FOR UPDATE',
-          [body.id]
-        );
+        const orderResult = await client.query('SELECT status, items FROM orders WHERE id=$1 FOR UPDATE', [body.id]);
         if (!orderResult.rowCount) {
           await client.query('ROLLBACK');
           return sendJSON(res, 404, { error: 'Pedido não encontrado' });
         }
         const order = orderResult.rows[0];
-        const statusChanged = order.status !== status;
         const items = Array.isArray(order.items) ? order.items : [];
         if (order.status !== 'cancelado' && status === 'cancelado') {
           for (const item of items) {
@@ -1857,13 +1811,6 @@ async function handleApi(req, res, pathname) {
         client.release();
       }
       logActivity(admin, 'order.status_update', 'order', body.id, { status });
-      if (statusChanged && order.email) {
-        await sendEmail({
-          to: order.email,
-          subject: `Pedido ${body.id} atualizado — By NaNa`,
-          html: buildOrderStatusHtml({ id: body.id, customerName: order.customerName, status }),
-        });
-      }
       return sendJSON(res, 200, { orders: await getOrders() });
     }
 
@@ -1983,57 +1930,6 @@ async function handleApi(req, res, pathname) {
         return sendJSON(res, 401, { error: 'Senha atual incorreta' });
       }
       await pool.query('UPDATE customers SET password_hash = $1 WHERE id = $2', [hashPassword(newPassword), customerId]);
-      return sendJSON(res, 200, { ok: true });
-    }
-
-    // "Esqueci minha senha": resposta sempre genérica (não revela se o e-mail existe), token
-    // aleatório com validade curta gravado no próprio cliente — sem tabela extra.
-    if (pathname === '/api/customers/forgot-password' && req.method === 'POST') {
-      const body = await readJSONBody(req);
-      const email = (body.email || '').trim().toLowerCase();
-      if (email && loginRateLimited(req, `forgot:${email}`)) {
-        return sendJSON(res, 429, { error: 'Muitas tentativas. Aguarde alguns minutos e tente novamente' });
-      }
-      if (email) {
-        const { rows } = await pool.query(
-          'SELECT id, first_name AS "firstName" FROM customers WHERE lower(email) = $1',
-          [email]
-        );
-        const customer = rows[0];
-        if (customer) {
-          const token = crypto.randomBytes(32).toString('hex');
-          await pool.query(
-            `UPDATE customers SET reset_token = $1, reset_token_expires = now() + interval '1 hour' WHERE id = $2`,
-            [token, customer.id]
-          );
-          const link = `${requestOrigin(req)}/redefinir-senha.html?token=${token}`;
-          await sendEmail({
-            to: email,
-            subject: 'Redefinição de senha — By NaNa',
-            html: `<p>Olá, ${customer.firstName}!</p><p>Clique no link abaixo para definir uma nova senha. Ele expira em 1 hora.</p><p><a href="${link}">${link}</a></p><p>Se você não pediu isso, ignore este e-mail.</p>`,
-          });
-        }
-      }
-      return sendJSON(res, 200, { ok: true });
-    }
-
-    if (pathname === '/api/customers/reset-password' && req.method === 'POST') {
-      const body = await readJSONBody(req);
-      const token = (body.token || '').trim();
-      const newPassword = body.newPassword || '';
-      if (!token) return sendJSON(res, 400, { error: 'Token inválido' });
-      if (newPassword.length < 6) return sendJSON(res, 400, { error: 'A nova senha deve ter ao menos 6 caracteres' });
-
-      const { rows } = await pool.query(
-        `SELECT id FROM customers WHERE reset_token = $1 AND reset_token_expires > now()`,
-        [token]
-      );
-      if (!rows[0]) return sendJSON(res, 400, { error: 'Link inválido ou expirado. Solicite a redefinição novamente.' });
-
-      await pool.query(
-        'UPDATE customers SET password_hash = $1, reset_token = NULL, reset_token_expires = NULL WHERE id = $2',
-        [hashPassword(newPassword), rows[0].id]
-      );
       return sendJSON(res, 200, { ok: true });
     }
 
@@ -2458,7 +2354,7 @@ function serveBadRequest(res) {
 // dentro de assets/. Tudo mais no repo (serve.js, .env, db/, node_modules/, package.json...)
 // nunca deve ser servido como arquivo estático — allowlist em vez de bloquear só ".."
 // porque um arquivo sensível (ex.: .env) pode estar dentro do root sem nenhum ".." envolvido.
-const PUBLIC_STATIC_FILES = new Set(['/index.html', '/admin.html', '/produto.html', '/404.html', '/redefinir-senha.html']);
+const PUBLIC_STATIC_FILES = new Set(['/index.html', '/admin.html', '/produto.html', '/404.html']);
 
 function isPublicStaticPath(filePath) {
   return PUBLIC_STATIC_FILES.has(filePath) || filePath.startsWith('/assets/');
