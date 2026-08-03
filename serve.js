@@ -6,12 +6,16 @@ const crypto = require('crypto');
 const sharp = require('sharp');
 const { Pool, types } = require('pg');
 const { sendEmail } = require('./email');
+const PromoEngine = require('./assets/js/promo.js');
 
 // numeric -> number, date -> plain 'YYYY-MM-DD' string (avoids timezone drift from Date objects)
 types.setTypeParser(1700, (v) => (v === null ? null : parseFloat(v)));
 types.setTypeParser(1082, (v) => v);
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// Sem este listener, um erro num client ocioso do pool (ex.: o Neon derrubando a conexão por
+// inatividade) vira uncaughtException e derruba o processo inteiro — não só a request atual.
+pool.on('error', (err) => console.error('[pg pool] erro em client ocioso:', err.message));
 
 const root = __dirname;
 const port = Number(process.env.PORT) || 8787;
@@ -287,12 +291,16 @@ async function syncProductVariants(client, productId, variants, adminUserId) {
   }
 
   const removed = current.filter((variant) => !retainedIds.has(variant.id));
-  for (const variant of removed) {
-    const history = await client.query('SELECT COUNT(*)::int AS count FROM inventory_movements WHERE variant_id=$1', [variant.id]);
-    if (history.rows[0].count > 0) {
+  if (removed.length) {
+    const removedIds = removed.map((variant) => variant.id);
+    const { rows: history } = await client.query(
+      'SELECT variant_id AS "variantId", COUNT(*)::int AS count FROM inventory_movements WHERE variant_id = ANY($1) GROUP BY variant_id',
+      [removedIds]
+    );
+    if (history.some((row) => row.count > 0)) {
       throw new Error('Uma variação removida possui histórico. Mantenha-a na grade com estoque zero');
     }
-    await client.query('DELETE FROM product_variants WHERE id=$1', [variant.id]);
+    await client.query('DELETE FROM product_variants WHERE id = ANY($1)', [removedIds]);
   }
 }
 
@@ -362,7 +370,18 @@ async function getProducts() {
     LEFT JOIN collections col ON col.id = p.collection_id
     ORDER BY p.created_at DESC
   `);
-  return attachReviewSummary(await attachImages(await attachVariants(rows)));
+  if (!rows.length) return rows;
+  // attachVariants/attachImages/attachReviewSummary só dependem das linhas originais (por id),
+  // não umas das outras — rodar em série (como antes) soma 3 round-trips ao Neon à toa.
+  const [withVariants, withImages, withReviews] = await Promise.all([
+    attachVariants(rows),
+    attachImages(rows),
+    attachReviewSummary(rows),
+  ]);
+  const variantsById = new Map(withVariants.map((p) => [p.id, { variants: p.variants, hasVariants: p.hasVariants, totalStock: p.totalStock }]));
+  const imagesById = new Map(withImages.map((p) => [p.id, { images: p.images }]));
+  const reviewsById = new Map(withReviews.map((p) => [p.id, { rating: p.rating, reviewCount: p.reviewCount }]));
+  return rows.map((p) => ({ ...p, ...variantsById.get(p.id), ...imagesById.get(p.id), ...reviewsById.get(p.id) }));
 }
 
 // Só o necessário pra montar o <head> da página de produto (título/meta/OG) no servidor —
@@ -532,7 +551,7 @@ function resolveCustomerId(body) {
 async function getStories(onlyActive) {
   const { rows } = await pool.query(`
     SELECT id, title, video, cover, link_url AS "linkUrl", link_label AS "linkLabel",
-           product_id AS "productId", active
+           product_id AS "productId", active, position
     FROM stories
     ${onlyActive ? 'WHERE active = true' : ''}
     ORDER BY position ASC, created_at ASC
@@ -577,8 +596,17 @@ const LOGIN_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_ATTEMPT_MAX = 10;
 const loginAttempts = new Map();
 
+// Mesmo raciocínio do requestOrigin() (abaixo): atrás de proxy/CDN, req.socket.remoteAddress
+// é sempre o IP do proxy — sem olhar X-Forwarded-For, o rate limit vira "por e-mail" (todo
+// mundo cai no mesmo balde) e uma pessoa consegue bloquear o login de outra.
+function clientIp(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (forwarded) return forwarded.split(',')[0].trim();
+  return req.socket.remoteAddress;
+}
+
 function loginRateLimited(req, email) {
-  const key = `${req.socket.remoteAddress}:${email}`;
+  const key = `${clientIp(req)}:${email}`;
   const now = Date.now();
   const entry = loginAttempts.get(key);
   if (!entry || now - entry.firstAttemptAt > LOGIN_ATTEMPT_WINDOW_MS) {
@@ -590,7 +618,7 @@ function loginRateLimited(req, email) {
 }
 
 function resetLoginAttempts(req, email) {
-  loginAttempts.delete(`${req.socket.remoteAddress}:${email}`);
+  loginAttempts.delete(`${clientIp(req)}:${email}`);
 }
 
 // ---------- admin auth (login multiusuário: e-mail+senha, token assinado, papéis) ----------
@@ -1201,12 +1229,14 @@ async function handleApi(req, res, pathname) {
       if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
 
+      let updated;
       if (body.featured) {
         const { rows } = await pool.query('SELECT COALESCE(MAX(featured_position), -1) AS max FROM products WHERE is_featured = true');
-        await pool.query('UPDATE products SET is_featured = true, featured_position = $1 WHERE id = $2', [rows[0].max + 1, body.id]);
+        updated = await pool.query('UPDATE products SET is_featured = true, featured_position = $1 WHERE id = $2', [rows[0].max + 1, body.id]);
       } else {
-        await pool.query('UPDATE products SET is_featured = false, featured_position = NULL WHERE id = $1', [body.id]);
+        updated = await pool.query('UPDATE products SET is_featured = false, featured_position = NULL WHERE id = $1', [body.id]);
       }
+      if (!updated.rowCount) return sendJSON(res, 404, { error: 'Produto não encontrado' });
       return sendJSON(res, 200, { products: await getProducts(), novidades: await getNovidades() });
     }
 
@@ -1710,15 +1740,11 @@ async function handleApi(req, res, pathname) {
       const customerEmail = /^\S+@\S+\.\S+$/.test(customerEmailRaw) ? customerEmailRaw : null;
       const paymentMethod = (body.paymentMethod || '').trim();
       const deliveryMethod = (body.deliveryMethod || '').trim();
-      const items = Array.isArray(body.items) ? body.items : [];
-      if (!customerName || !customerPhone || !paymentMethod || !deliveryMethod || !items.length) {
+      const rawItems = Array.isArray(body.items) ? body.items : [];
+      if (!customerName || !customerPhone || !paymentMethod || !deliveryMethod || !rawItems.length) {
         return sendJSON(res, 400, { error: 'Dados do pedido incompletos' });
       }
-      const subtotal = Number(body.subtotal) || 0;
-      const discount = Number(body.discount) || 0;
-      const shipping = Number(body.shipping) || 0;
-      const total = Number(body.total) || 0;
-      const couponCode = (body.couponCode || '').trim().toUpperCase() || null;
+      const couponCodeInput = (body.couponCode || '').trim().toUpperCase() || null;
       const address = body.address && typeof body.address === 'object' ? body.address : null;
 
       let customerId = null;
@@ -1727,19 +1753,36 @@ async function handleApi(req, res, pathname) {
         if (payload) customerId = payload.id;
       }
 
+      // Preço, cupom, frete e total nunca são aceitos do navegador — sempre recalculados aqui a
+      // partir do preço/promoção vigentes no banco, com a mesma regra de negócio do front
+      // (assets/js/promo.js), pra um pedido não poder ser fechado com desconto/total desatualizado
+      // ou manipulado no cliente.
+      const [promotions, coupons, shippingRules] = await Promise.all([getPromotions(), getCoupons(), getShippingRules()]);
+      const coupon = PromoEngine.findCoupon(coupons, couponCodeInput);
+
       const id = `pedido-${Date.now().toString(36)}`;
       const client = await pool.connect();
+      let items;
+      let subtotal;
+      let discountAmount;
+      let shippingCost;
+      let total;
       try {
         await client.query('BEGIN');
-        for (const item of items) {
+        items = [];
+        for (const item of rawItems) {
           const qty = Math.max(0, Math.floor(Number(item.qty) || 0));
           if (!item.variantId || !qty) {
             await client.query('ROLLBACK');
             return sendJSON(res, 400, { error: `Escolha um tamanho válido para ${item.name || 'o produto'}` });
           }
           const locked = await client.query(
-            `SELECT v.id, v.stock, v.size, p.id AS "productId", p.name
-               FROM product_variants v JOIN products p ON p.id = v.product_id
+            `SELECT v.id, v.stock, v.size, p.id AS "productId", p.name, p.price,
+                    c.name AS category, COALESCE(col.name, '') AS collection
+               FROM product_variants v
+               JOIN products p ON p.id = v.product_id
+               JOIN categories c ON c.id = p.category_id
+               LEFT JOIN collections col ON col.id = p.collection_id
               WHERE v.id = $1 FOR UPDATE OF v`,
             [item.variantId]
           );
@@ -1760,11 +1803,43 @@ async function handleApi(req, res, pathname) {
             variantId: variant.id, type: 'sale', quantity: -qty, stockAfter, orderId: id,
             note: `Reserva do pedido ${id}`,
           });
+
+          const best = variant.price != null && promotions.length
+            ? PromoEngine.bestPromoForProduct({ id: variant.productId, price: variant.price, category: variant.category, collection: variant.collection }, promotions)
+            : null;
+          items.push({
+            id: variant.productId,
+            name: variant.name,
+            qty,
+            price: variant.price == null ? null : (best ? best.price : variant.price),
+            listPrice: variant.price,
+            promoId: best ? best.promo.id : null,
+            variantId: variant.id,
+            variantLabel: typeof item.variantLabel === 'string' ? item.variantLabel : null,
+          });
         }
+
+        const itemCount = items.reduce((sum, it) => sum + (it.price != null ? it.qty : 0), 0);
+        subtotal = items.reduce((sum, it) => sum + (it.price != null ? it.price * it.qty : 0), 0);
+        const discountInfo = PromoEngine.bestDiscount(subtotal, { coupon, itemCount, payment: paymentMethod });
+        discountAmount = discountInfo ? discountInfo.amount : 0;
+
+        shippingCost = 0;
+        if (deliveryMethod === 'Entrega') {
+          const activeRules = shippingRules.filter((r) => r.active);
+          const uf = ((address && address.estado) || '').trim().toUpperCase();
+          const rule = activeRules.find((r) => r.uf.toUpperCase() === uf) || activeRules.find((r) => r.uf === '*');
+          if (rule) {
+            const free = rule.freeAbove != null && subtotal >= Number(rule.freeAbove);
+            shippingCost = free ? 0 : Number(rule.price);
+          }
+        }
+        total = Math.max(0, subtotal - discountAmount) + shippingCost;
+
         await client.query(
           `INSERT INTO orders (id, customer_id, customer_name, customer_phone, email, items, subtotal, discount, shipping, total, coupon_code, payment_method, delivery_method, address)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-          [id, customerId, customerName, customerPhone, customerEmail, JSON.stringify(items), subtotal, discount, shipping, total, couponCode, paymentMethod, deliveryMethod, address ? JSON.stringify(address) : null]
+          [id, customerId, customerName, customerPhone, customerEmail, JSON.stringify(items), subtotal, discountAmount, shippingCost, total, coupon ? coupon.code : null, paymentMethod, deliveryMethod, address ? JSON.stringify(address) : null]
         );
         await client.query('COMMIT');
       } catch (err) {
@@ -1802,6 +1877,8 @@ async function handleApi(req, res, pathname) {
       }
       if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
       const client = await pool.connect();
+      let order;
+      let statusChanged;
       try {
         await client.query('BEGIN');
         const orderResult = await client.query(
@@ -1812,8 +1889,8 @@ async function handleApi(req, res, pathname) {
           await client.query('ROLLBACK');
           return sendJSON(res, 404, { error: 'Pedido não encontrado' });
         }
-        const order = orderResult.rows[0];
-        const statusChanged = order.status !== status;
+        order = orderResult.rows[0];
+        statusChanged = order.status !== status;
         const items = Array.isArray(order.items) ? order.items : [];
         if (order.status !== 'cancelado' && status === 'cancelado') {
           for (const item of items) {
@@ -2223,10 +2300,12 @@ async function handleApi(req, res, pathname) {
       if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
       const productIds = Array.isArray(body.productIds) ? body.productIds.filter((id) => typeof id === 'string' && id) : [];
 
-      for (const productId of productIds) {
+      if (productIds.length) {
         await pool.query(
-          'INSERT INTO customer_favorites (customer_id, product_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
-          [customerId, productId]
+          `INSERT INTO customer_favorites (customer_id, product_id)
+           SELECT $1, unnest($2::text[])
+           ON CONFLICT DO NOTHING`,
+          [customerId, productIds]
         );
       }
       return sendJSON(res, 200, { favorites: await getCustomerFavorites(customerId) });
@@ -2346,12 +2425,8 @@ async function handleApi(req, res, pathname) {
 
       const a = all[idx];
       const b = all[swapIdx];
-      const [{ position: posA }, { position: posB }] = await Promise.all([
-        pool.query('SELECT position FROM stories WHERE id = $1', [a.id]).then((r) => r.rows[0]),
-        pool.query('SELECT position FROM stories WHERE id = $1', [b.id]).then((r) => r.rows[0]),
-      ]);
-      await pool.query('UPDATE stories SET position = $1 WHERE id = $2', [posB, a.id]);
-      await pool.query('UPDATE stories SET position = $1 WHERE id = $2', [posA, b.id]);
+      await pool.query('UPDATE stories SET position = $1 WHERE id = $2', [b.position, a.id]);
+      await pool.query('UPDATE stories SET position = $1 WHERE id = $2', [a.position, b.id]);
       return sendJSON(res, 200, { stories: await getStories(false) });
     }
 
