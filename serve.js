@@ -1736,8 +1736,6 @@ async function handleApi(req, res, pathname) {
       const body = await readJSONBody(req);
       const customerName = (body.customerName || '').trim();
       const customerPhone = (body.customerPhone || '').trim();
-      const customerEmailRaw = (body.customerEmail || '').trim();
-      const customerEmail = /^\S+@\S+\.\S+$/.test(customerEmailRaw) ? customerEmailRaw : null;
       const paymentMethod = (body.paymentMethod || '').trim();
       const deliveryMethod = (body.deliveryMethod || '').trim();
       const rawItems = Array.isArray(body.items) ? body.items : [];
