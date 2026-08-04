@@ -15,6 +15,7 @@
   let CATEGORY_CONTENT = [];
   let STORIES = [];
   let NOVIDADES = [];
+  let UPSELL_PRODUCTS = [];
 
   const money = (v) =>
     v == null ? 'Sob consulta' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -706,6 +707,7 @@
 
   const bagCount = document.getElementById('bagCount');
   const bagItemsEl = document.getElementById('bagItems');
+  const bagUpsellEl = document.getElementById('bagUpsell');
   const bagTotalEl = document.getElementById('bagTotal');
   const bagSubtotalRow = document.getElementById('bagSubtotalRow');
   const bagSubtotalEl = document.getElementById('bagSubtotal');
@@ -1107,6 +1109,47 @@
 
     showCouponStatus();
     syncAddButtons();
+    renderCartUpsell(keys);
+  }
+
+  // "Leve também": sugestões de menor ticket, não relacionadas ao produto e sim à sacola —
+  // exclui o que já está no carrinho e o que está esgotado; nunca mostra se a sacola está vazia.
+  function renderCartUpsell(keys) {
+    if (!bagUpsellEl) return;
+    if (keys.length === 0) {
+      bagUpsellEl.hidden = true;
+      bagUpsellEl.innerHTML = '';
+      return;
+    }
+    const cartProductIds = new Set(keys.map((key) => cart[key].productId));
+    const candidates = UPSELL_PRODUCTS.filter((p) => !cartProductIds.has(p.id) && !isProductSoldOut(p)).slice(0, 4);
+    if (!candidates.length) {
+      bagUpsellEl.hidden = true;
+      bagUpsellEl.innerHTML = '';
+      return;
+    }
+    bagUpsellEl.hidden = false;
+    bagUpsellEl.innerHTML = `
+      <span class="bag-upsell-title">Leve também</span>
+      <div class="bag-upsell-scroll">
+        ${candidates
+          .map((p) => {
+            const variants = p.variants || [];
+            const defaultVariant = variants.filter((v) => v.stock > 0)[0] || null;
+            const { price } = getEffective(p);
+            const priceLabel = p.price == null ? 'Sob consulta' : money(price);
+            return `
+              <div class="bag-upsell-item">
+                <a href="/produto/${p.id}" class="bag-upsell-media"><img src="${escapeHtml(p.img)}" alt="${escapeHtml(p.name)}" loading="lazy" /></a>
+                <span class="bag-upsell-name">${escapeHtml(p.name)}</span>
+                <span class="bag-upsell-price">${priceLabel}</span>
+                <button type="button" class="bag-upsell-add" data-id="${p.id}" ${defaultVariant ? `data-variant-id="${defaultVariant.id}"` : ''} aria-label="Adicionar ${escapeHtml(p.name)} à sacola">+</button>
+              </div>
+            `;
+          })
+          .join('')}
+      </div>
+    `;
   }
 
   const cartAnnouncer = document.getElementById('cartAnnouncer');
@@ -1116,7 +1159,20 @@
 
   function addToCart(productId, variantId) {
     const product = PRODUCTS.find((p) => p.id === productId);
-    const variant = product && variantId ? (product.variants || []).find((v) => v.id === variantId) : null;
+    if (!product) return false;
+
+    // produto sem nenhuma variação cadastrada não tem tamanho pra escolher — adiciona direto,
+    // sem checagem de estoque por variação (ver cartKey acima).
+    if (!product.hasVariants) {
+      const key = cartKey(productId, null);
+      if (cart[key]) cart[key].qty += 1;
+      else cart[key] = { productId, variantId: null, qty: 1 };
+      saveCart();
+      announce(`${product.name} adicionada à sacola.`);
+      return true;
+    }
+
+    const variant = variantId ? (product.variants || []).find((v) => v.id === variantId) : null;
     if (!variant) {
       announce('Escolha um tamanho disponível.');
       return false;
@@ -1129,7 +1185,7 @@
     if (cart[key]) cart[key].qty += 1;
     else cart[key] = { productId, variantId: variantId || null, qty: 1 };
     saveCart();
-    announce(product ? `${product.name} adicionada à sacola.` : 'Peça adicionada à sacola.');
+    announce(`${product.name} adicionada à sacola.`);
     return true;
   }
 
@@ -1152,12 +1208,27 @@
         addBtnForChip.dataset.variantId = chip.dataset.variantId;
         syncAddButton(addBtnForChip);
       }
+      if (picker.id === 'pdpVariantPicker') {
+        const buyBarAdd = document.getElementById('pdpBuyBarAdd');
+        if (buyBarAdd) {
+          buyBarAdd.dataset.variantId = chip.dataset.variantId;
+          syncAddButton(buyBarAdd);
+        }
+      }
       return;
     }
     const addBtn = e.target.closest('.add-btn');
     if (addBtn) {
       if (addBtn.disabled) return;
       if (addToCart(addBtn.dataset.id, addBtn.dataset.variantId || null)) openBag();
+      return;
+    }
+    // botão "+" da faixa "Leve também" dentro da própria sacola — não usa .add-btn de propósito:
+    // syncAddButtons() reescreveria o texto do botão pro padrão "Adicionar à sacola"/"Adicionado ✓",
+    // que não cabe no card compacto. O item some da faixa assim que entra na sacola (renderCart).
+    const upsellAddBtn = e.target.closest('.bag-upsell-add');
+    if (upsellAddBtn) {
+      addToCart(upsellAddBtn.dataset.id, upsellAddBtn.dataset.variantId || null);
       return;
     }
     const qtyBtn = e.target.closest('.qty-btn');
@@ -2014,10 +2085,15 @@
       closeAccountModal();
       closeStoryViewer();
       closeBag();
+      closePdpLightbox();
     }
     if (storyViewer.classList.contains('is-open')) {
       if (e.key === 'ArrowRight') nextStory();
       else if (e.key === 'ArrowLeft') prevStory();
+    }
+    if (pdpLightbox && pdpLightbox.classList.contains('is-open')) {
+      if (e.key === 'ArrowRight') nextPdpLightboxSlide();
+      else if (e.key === 'ArrowLeft') prevPdpLightboxSlide();
     }
   });
 
@@ -2036,6 +2112,124 @@
   const loadBar = document.getElementById('loadBar');
   const dataError = document.getElementById('dataError');
   const dataErrorRetry = document.getElementById('dataErrorRetry');
+
+  // ---------- galeria com zoom + lightbox (produto.html) ----------
+  const pdpGalleryMain = document.getElementById('pdpGalleryMain');
+  const pdpMainImg = document.getElementById('pdpMainImg');
+  const pdpZoomPane = document.getElementById('pdpZoomPane');
+  const pdpZoomHint = document.getElementById('pdpZoomHint');
+  const pdpLightboxOverlay = document.getElementById('pdpLightboxOverlay');
+  const pdpLightbox = document.getElementById('pdpLightbox');
+  const pdpLightboxImg = document.getElementById('pdpLightboxImg');
+  const pdpLightboxClose = document.getElementById('pdpLightboxClose');
+  const pdpLightboxPrev = document.getElementById('pdpLightboxPrev');
+  const pdpLightboxNext = document.getElementById('pdpLightboxNext');
+  const pdpLightboxCounter = document.getElementById('pdpLightboxCounter');
+  let pdpGalleryImages = [];
+  let pdpLightboxIndex = 0;
+
+  function setPdpMainImage(url) {
+    pdpMainImg.src = url;
+    pdpZoomPane.style.backgroundImage = `url("${url}")`;
+  }
+
+  function pdpLightboxIndexFor(url) {
+    // pdpMainImg.src sempre vem resolvido em absoluto pelo getter — resolve os caminhos de
+    // pdpGalleryImages (que ficam relativos, como vêm da API) antes de comparar. Usa
+    // document.baseURI (não location.href) porque a página tem <base href="/">.
+    const resolved = new URL(url, document.baseURI).href;
+    const idx = pdpGalleryImages.findIndex((u) => new URL(u, document.baseURI).href === resolved);
+    return idx === -1 ? 0 : idx;
+  }
+
+  function renderPdpLightboxSlide() {
+    pdpLightboxImg.src = pdpGalleryImages[pdpLightboxIndex];
+    const multi = pdpGalleryImages.length > 1;
+    pdpLightboxCounter.hidden = !multi;
+    pdpLightboxCounter.textContent = `${pdpLightboxIndex + 1}/${pdpGalleryImages.length}`;
+    pdpLightboxPrev.hidden = !multi;
+    pdpLightboxNext.hidden = !multi;
+  }
+
+  function openPdpLightbox(index) {
+    if (!pdpGalleryImages.length) return;
+    pdpLightboxIndex = index;
+    renderPdpLightboxSlide();
+    pdpLightboxOverlay.classList.add('is-open');
+    pdpLightbox.classList.add('is-open');
+    openModalFocus(pdpLightbox);
+  }
+
+  function closePdpLightbox() {
+    if (!pdpLightbox || !pdpLightbox.classList.contains('is-open')) return;
+    pdpLightboxOverlay.classList.remove('is-open');
+    pdpLightbox.classList.remove('is-open');
+    closeModalFocus(pdpLightbox);
+  }
+
+  function nextPdpLightboxSlide() {
+    pdpLightboxIndex = (pdpLightboxIndex + 1) % pdpGalleryImages.length;
+    renderPdpLightboxSlide();
+  }
+
+  function prevPdpLightboxSlide() {
+    pdpLightboxIndex = (pdpLightboxIndex - 1 + pdpGalleryImages.length) % pdpGalleryImages.length;
+    renderPdpLightboxSlide();
+  }
+
+  if (pdpGalleryMain) {
+    pdpGalleryMain.addEventListener('mouseenter', () => pdpGalleryMain.classList.add('is-zooming'));
+    pdpGalleryMain.addEventListener('mouseleave', () => pdpGalleryMain.classList.remove('is-zooming'));
+    pdpGalleryMain.addEventListener('mousemove', (e) => {
+      const rect = pdpGalleryMain.getBoundingClientRect();
+      const x = ((e.clientX - rect.left) / rect.width) * 100;
+      const y = ((e.clientY - rect.top) / rect.height) * 100;
+      pdpZoomPane.style.backgroundPosition = `${x}% ${y}%`;
+    });
+    pdpGalleryMain.addEventListener('click', () => openPdpLightbox(pdpLightboxIndexFor(pdpMainImg.src)));
+  }
+  if (pdpZoomHint) {
+    pdpZoomHint.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openPdpLightbox(pdpLightboxIndexFor(pdpMainImg.src));
+    });
+  }
+  if (pdpLightboxClose) pdpLightboxClose.addEventListener('click', closePdpLightbox);
+  if (pdpLightboxOverlay) pdpLightboxOverlay.addEventListener('click', closePdpLightbox);
+  if (pdpLightboxNext) pdpLightboxNext.addEventListener('click', nextPdpLightboxSlide);
+  if (pdpLightboxPrev) pdpLightboxPrev.addEventListener('click', prevPdpLightboxSlide);
+  if (pdpLightbox) {
+    let pdpTouchStartX = 0;
+    pdpLightbox.addEventListener('touchstart', (e) => { pdpTouchStartX = e.changedTouches[0].clientX; }, { passive: true });
+    pdpLightbox.addEventListener('touchend', (e) => {
+      const dx = e.changedTouches[0].clientX - pdpTouchStartX;
+      if (Math.abs(dx) < 40) return;
+      if (dx < 0) nextPdpLightboxSlide();
+      else prevPdpLightboxSlide();
+    }, { passive: true });
+  }
+
+  // ---------- barra fixa de compra (produto.html) ----------
+  const pdpBuyBar = document.getElementById('pdpBuyBar');
+  const pdpBuyBarImg = document.getElementById('pdpBuyBarImg');
+  const pdpBuyBarName = document.getElementById('pdpBuyBarName');
+  const pdpBuyBarPrice = document.getElementById('pdpBuyBarPrice');
+  const pdpBuyBarAdd = document.getElementById('pdpBuyBarAdd');
+  if (pdpBuyBar) {
+    const buyBarObserver = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        // só mostra a barra quando o botão original já rolou para cima da tela —
+        // evita mostrar a barra logo de cara, antes da cliente rolar a página
+        const shouldShow = !entry.isIntersecting && entry.boundingClientRect.top < 0;
+        pdpBuyBar.classList.toggle('is-visible', shouldShow);
+        document.body.classList.toggle('pdp-buy-bar-open', shouldShow);
+      },
+      { threshold: 0 }
+    );
+    const productActionsEl = document.querySelector('.product-actions');
+    if (productActionsEl) buyBarObserver.observe(productActionsEl);
+  }
 
   // ---------- página de produto (produto.html) ----------
   // Reaproveita os mesmos helpers da vitrine (getEffective, money, colorDotsHtml,
@@ -2056,10 +2250,10 @@
       `<a href="/">Home</a> / <a href="/#colecao">${escapeHtml(p.category)}</a> / <span>${escapeHtml(p.name)}</span>`;
 
     const images = p.images && p.images.length ? p.images : [p.img];
-    const mainImg = document.getElementById('pdpMainImg');
+    pdpGalleryImages = images;
     const thumbs = document.getElementById('pdpThumbs');
-    mainImg.src = images[0];
-    mainImg.alt = p.name;
+    setPdpMainImage(images[0]);
+    pdpMainImg.alt = p.name;
     thumbs.innerHTML = images
       .map(
         (url, i) => `<button type="button" class="pdp-thumb${i === 0 ? ' is-active' : ''}" data-src="${url}"><img src="${url}" alt="" /></button>`
@@ -2068,10 +2262,13 @@
     thumbs.hidden = images.length <= 1;
     thumbs.querySelectorAll('.pdp-thumb').forEach((btn) => {
       btn.addEventListener('click', () => {
-        mainImg.src = btn.dataset.src;
+        setPdpMainImage(btn.dataset.src);
         thumbs.querySelectorAll('.pdp-thumb').forEach((b) => b.classList.toggle('is-active', b === btn));
       });
     });
+
+    if (pdpBuyBarImg) pdpBuyBarImg.src = images[0];
+    if (pdpBuyBarName) pdpBuyBarName.textContent = p.name;
 
     document.getElementById('pdpBrand').textContent = `${p.brand}${p.collection ? ` · ${p.collection}` : ''}`;
     document.getElementById('pdpName').textContent = p.name;
@@ -2087,6 +2284,7 @@
     priceOldEl.hidden = !promo;
     discountBadge.textContent = promo ? `-${promo.percent}%` : '';
     discountBadge.hidden = !promo;
+    if (pdpBuyBarPrice) pdpBuyBarPrice.textContent = priceEl.textContent;
 
     const ratingRow = document.getElementById('pdpRatingRow');
     if (p.rating) {
@@ -2127,6 +2325,16 @@
     addBtn.disabled = soldOut;
     if (soldOut) addBtn.textContent = 'Esgotado';
     else syncAddButton(addBtn);
+
+    if (pdpBuyBarAdd) {
+      pdpBuyBarAdd.dataset.id = p.id;
+      if (defaultVariant) pdpBuyBarAdd.dataset.variantId = defaultVariant.id;
+      else delete pdpBuyBarAdd.dataset.variantId;
+      pdpBuyBarAdd.classList.toggle('is-soldout', soldOut);
+      pdpBuyBarAdd.disabled = soldOut;
+      if (soldOut) pdpBuyBarAdd.textContent = 'Esgotado';
+      else syncAddButton(pdpBuyBarAdd);
+    }
 
     document.getElementById('pdpAsk').href = waLink(
       `Olá! Tenho interesse na peça "${p.name}" que vi no catálogo By NaNa. Pode me passar mais detalhes?`
@@ -2318,6 +2526,7 @@
       // Registros usados durante a configuração do painel não devem aparecer na vitrine pública.
       STORIES = (data.stories || []).filter((story) => !/^story\s+teste?\b/i.test((story.title || '').trim()));
       NOVIDADES = data.novidades || [];
+      UPSELL_PRODUCTS = data.upsell || [];
     } catch (e) {
       loadBar.classList.remove('is-active');
       if (grid) grid.innerHTML = '';

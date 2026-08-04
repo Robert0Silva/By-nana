@@ -38,6 +38,12 @@ ALTER TABLE products ADD COLUMN IF NOT EXISTS is_featured BOOLEAN NOT NULL DEFAU
 ALTER TABLE products ADD COLUMN IF NOT EXISTS featured_position INTEGER;
 CREATE INDEX IF NOT EXISTS idx_products_featured ON products(featured_position) WHERE is_featured = true;
 
+-- curadoria manual da faixa "Leve também" na sacola; sem nenhum produto marcado, o site cai
+-- automaticamente nos de menor preço em estoque (ver getUpsellSuggestions() em serve.js).
+ALTER TABLE products ADD COLUMN IF NOT EXISTS is_upsell BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS upsell_position INTEGER;
+CREATE INDEX IF NOT EXISTS idx_products_upsell ON products(upsell_position) WHERE is_upsell = true;
+
 -- composição do material (texto livre, ex. "Cabedal: couro\nForro: poliéster") — exibida na
 -- página de produto; não é estruturado porque é conteúdo descritivo, não é filtrado/consultado.
 ALTER TABLE products ADD COLUMN IF NOT EXISTS composition TEXT;

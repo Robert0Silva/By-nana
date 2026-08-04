@@ -364,7 +364,8 @@ async function getProducts() {
   const { rows } = await pool.query(`
     SELECT p.id, p.name, p.brand, c.name AS category, COALESCE(col.name, '') AS collection,
            p.tag, p.price, p.img, p.description AS desc, p.composition,
-           p.is_featured AS "isFeatured", p.featured_position AS "featuredPosition"
+           p.is_featured AS "isFeatured", p.featured_position AS "featuredPosition",
+           p.is_upsell AS "isUpsell", p.upsell_position AS "upsellPosition"
     FROM products p
     JOIN categories c ON c.id = p.category_id
     LEFT JOIN collections col ON col.id = p.collection_id
@@ -412,6 +413,38 @@ async function getNovidades() {
     JOIN categories c ON c.id = p.category_id
     LEFT JOIN collections col ON col.id = p.collection_id
     ORDER BY p.created_at DESC
+    LIMIT 8
+  `);
+  return attachVariants(fallback.rows);
+}
+
+// "Leve também" na sacola: curadoria manual (is_upsell) se existir alguma; senão, cai
+// automaticamente nas peças de menor preço — a faixa nunca fica vazia por falta de curadoria.
+// A curadoria manual não filtra esgotados aqui (mesmo padrão de getNovidades — o cliente
+// esconde na hora de renderizar, junto com o que já está na sacola); já o fallback automático
+// só considera peças compráveis agora, senão o "menor preço" pode cair inteiro em itens sem
+// estoque e a faixa fica vazia à toa mesmo tendo opções mais caras disponíveis.
+async function getUpsellSuggestions() {
+  const curated = await pool.query(`
+    SELECT p.id, p.name, p.brand, c.name AS category, COALESCE(col.name, '') AS collection,
+           p.tag, p.price, p.img, p.description AS desc
+    FROM products p
+    JOIN categories c ON c.id = p.category_id
+    LEFT JOIN collections col ON col.id = p.collection_id
+    WHERE p.is_upsell = true
+    ORDER BY p.upsell_position ASC
+  `);
+  if (curated.rowCount) return attachVariants(curated.rows);
+
+  const fallback = await pool.query(`
+    SELECT p.id, p.name, p.brand, c.name AS category, COALESCE(col.name, '') AS collection,
+           p.tag, p.price, p.img, p.description AS desc
+    FROM products p
+    JOIN categories c ON c.id = p.category_id
+    LEFT JOIN collections col ON col.id = p.collection_id
+    WHERE NOT EXISTS (SELECT 1 FROM product_variants pv WHERE pv.product_id = p.id)
+       OR EXISTS (SELECT 1 FROM product_variants pv WHERE pv.product_id = p.id AND pv.stock > 0)
+    ORDER BY p.price ASC NULLS LAST
     LIMIT 8
   `);
   return attachVariants(fallback.rows);
@@ -832,7 +865,7 @@ async function handleApi(req, res, pathname) {
   try {
     // ------ catalog ------
     if (pathname === '/api/data' && req.method === 'GET') {
-      const [products, categories, collections, promotions, coupons, shippingRules, categoryGroups, categoryContent, stories, novidades] = await Promise.all([
+      const [products, categories, collections, promotions, coupons, shippingRules, categoryGroups, categoryContent, stories, novidades, upsell] = await Promise.all([
         getProducts(),
         getCategories(),
         getCollections(),
@@ -843,8 +876,9 @@ async function handleApi(req, res, pathname) {
         getCategoryContent(),
         getStories(true),
         getNovidades(),
+        getUpsellSuggestions(),
       ]);
-      return sendJSON(res, 200, { products, categories, collections, promotions, coupons, shippingRules, categoryGroups, categoryContent, stories, novidades });
+      return sendJSON(res, 200, { products, categories, collections, promotions, coupons, shippingRules, categoryGroups, categoryContent, stories, novidades, upsell });
     }
 
     // ------ admin auth (login multiusuário, papéis, log de atividade) ------
@@ -1262,6 +1296,47 @@ async function handleApi(req, res, pathname) {
       await pool.query('UPDATE products SET featured_position = $1 WHERE id = $2', [b.featuredPosition, a.id]);
       await pool.query('UPDATE products SET featured_position = $1 WHERE id = $2', [a.featuredPosition, b.id]);
       return sendJSON(res, 200, { products: await getProducts(), novidades: await getNovidades() });
+    }
+
+    if (pathname === '/api/products/upsell' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
+
+      let updated;
+      if (body.upsell) {
+        const { rows } = await pool.query('SELECT COALESCE(MAX(upsell_position), -1) AS max FROM products WHERE is_upsell = true');
+        updated = await pool.query('UPDATE products SET is_upsell = true, upsell_position = $1 WHERE id = $2', [rows[0].max + 1, body.id]);
+      } else {
+        updated = await pool.query('UPDATE products SET is_upsell = false, upsell_position = NULL WHERE id = $1', [body.id]);
+      }
+      if (!updated.rowCount) return sendJSON(res, 404, { error: 'Produto não encontrado' });
+      return sendJSON(res, 200, { products: await getProducts(), upsell: await getUpsellSuggestions() });
+    }
+
+    if (pathname === '/api/products/upsell/reorder' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      const direction = body.direction === 'up' ? 'up' : body.direction === 'down' ? 'down' : null;
+      if (!body.id || !direction) return sendJSON(res, 400, { error: 'id e direção são obrigatórios' });
+
+      const { rows: upsell } = await pool.query(
+        'SELECT id, upsell_position AS "upsellPosition" FROM products WHERE is_upsell = true ORDER BY upsell_position ASC'
+      );
+      const idx = upsell.findIndex((p) => p.id === body.id);
+      if (idx === -1) return sendJSON(res, 404, { error: 'Produto não está em Leve também' });
+      const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+      if (swapIdx < 0 || swapIdx >= upsell.length) {
+        return sendJSON(res, 200, { products: await getProducts(), upsell: await getUpsellSuggestions() });
+      }
+
+      const a = upsell[idx];
+      const b = upsell[swapIdx];
+      await pool.query('UPDATE products SET upsell_position = $1 WHERE id = $2', [b.upsellPosition, a.id]);
+      await pool.query('UPDATE products SET upsell_position = $1 WHERE id = $2', [a.upsellPosition, b.id]);
+      return sendJSON(res, 200, { products: await getProducts(), upsell: await getUpsellSuggestions() });
     }
 
     // ------ estoque/variação (tamanho, cor) — isolado do contrato de /api/products ------

@@ -97,8 +97,12 @@
 
       <div class="pdp-layout" id="pdpLayout">
         <div class="pdp-gallery">
-          <div class="pdp-gallery-main">
+          <div class="pdp-gallery-main" id="pdpGalleryMain">
             <img id="pdpMainImg" src="" alt="" />
+            <div class="pdp-zoom-pane" id="pdpZoomPane" aria-hidden="true"></div>
+            <button type="button" class="pdp-zoom-hint" id="pdpZoomHint" aria-label="Ampliar imagem">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6M8 11h6"/></svg>
+            </button>
           </div>
           <div class="pdp-gallery-thumbs" id="pdpThumbs"><!-- gerado via JS --></div>
         </div>
@@ -196,6 +200,8 @@
   </div>
   <div class="bag-scroll">
     <div class="bag-items" id="bagItems"><!-- gerado via JS --></div>
+
+    <div class="bag-upsell" id="bagUpsell" hidden><!-- gerado via JS --></div>
 
     <div class="bag-details" id="bagDetails" hidden>
       <div class="bag-field-group">
@@ -457,6 +463,34 @@
 <div class="mobile-bar" id="mobileBar">
   <span id="mobileBarText">1 peça na sacola</span>
   <button class="btn btn-primary" id="mobileBarBtn">Ver sacola</button>
+</div>
+
+<div class="pdp-lightbox-overlay" id="pdpLightboxOverlay"></div>
+<div class="pdp-lightbox" id="pdpLightbox" role="dialog" aria-modal="true" aria-label="Galeria de imagens do produto">
+  <button class="icon-btn pdp-lightbox-close" id="pdpLightboxClose" aria-label="Fechar">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 5l14 14M19 5 5 19"/></svg>
+  </button>
+  <button type="button" class="pdp-lightbox-nav pdp-lightbox-prev" id="pdpLightboxPrev" aria-label="Imagem anterior">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
+  </button>
+  <div class="pdp-lightbox-stage">
+    <img id="pdpLightboxImg" src="" alt="" />
+  </div>
+  <button type="button" class="pdp-lightbox-nav pdp-lightbox-next" id="pdpLightboxNext" aria-label="Próxima imagem">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>
+  </button>
+  <span class="pdp-lightbox-counter" id="pdpLightboxCounter"></span>
+</div>
+
+<div class="pdp-buy-bar" id="pdpBuyBar" hidden>
+  <div class="pdp-buy-bar-info">
+    <img id="pdpBuyBarImg" src="" alt="" />
+    <div class="pdp-buy-bar-text">
+      <span class="pdp-buy-bar-name" id="pdpBuyBarName"></span>
+      <span class="pdp-buy-bar-price" id="pdpBuyBarPrice"></span>
+    </div>
+  </div>
+  <button class="add-btn" id="pdpBuyBarAdd">Adicionar à sacola</button>
 </div>
 
 <script src="/assets/js/promo.js"></script>

@@ -85,6 +85,7 @@
     renderCollectionSelect();
     renderProductList();
     renderFeaturedList();
+    renderUpsellList();
     renderPromoTargetOptions();
     renderStoryProductSelect();
     renderPromoList();
@@ -778,6 +779,7 @@
       renderPromoTargetOptions();
       renderStoryProductSelect();
       renderFeaturedList();
+      renderUpsellList();
 
       const wasEditing = editing;
       endEditProduct();
@@ -847,6 +849,7 @@
           renderPromoTargetOptions();
           renderStoryProductSelect();
           renderFeaturedList();
+          renderUpsellList();
         } catch (err) {
           alert(err.message);
         }
@@ -1057,6 +1060,65 @@
   }
 
   featuredSearch.addEventListener('input', renderFeaturedList);
+
+  // ---------- leve também (curadoria manual da sacola) ----------
+  const upsellList = document.getElementById('upsellList');
+  const upsellSearch = document.getElementById('upsellSearch');
+
+  function renderUpsellList() {
+    const term = (upsellSearch.value || '').trim().toLowerCase();
+    const list = term ? PRODUCTS.filter((p) => p.name.toLowerCase().includes(term)) : PRODUCTS;
+
+    const upsell = list.filter((p) => p.isUpsell).sort((a, b) => a.upsellPosition - b.upsellPosition);
+    const rest = list.filter((p) => !p.isUpsell);
+    const ordered = [...upsell, ...rest];
+
+    upsellList.innerHTML = '';
+    if (!ordered.length) {
+      upsellList.innerHTML = '<p class="admin-empty-block">Nenhum produto encontrado.</p>';
+      return;
+    }
+    ordered.forEach((p) => {
+      const div = document.createElement('div');
+      div.className = `admin-featured-item${p.isUpsell ? ' is-featured' : ''}`;
+      const idx = upsell.findIndex((f) => f.id === p.id);
+      div.innerHTML = `
+        <div class="admin-featured-thumb"><img src="${escapeHtml(p.img)}" alt="${escapeHtml(p.name)}" /></div>
+        <div class="admin-featured-info">
+          <span class="admin-featured-name">${escapeHtml(p.name)}</span>
+          <span class="admin-featured-meta">${escapeHtml(p.category)}${p.collection ? ` · ${escapeHtml(p.collection)}` : ''}</span>
+        </div>
+        <div class="admin-featured-actions">
+          <button type="button" class="admin-featured-move" data-dir="up" aria-label="Mover para cima" ${!p.isUpsell || idx === 0 ? 'disabled' : ''}>↑</button>
+          <button type="button" class="admin-featured-move" data-dir="down" aria-label="Mover para baixo" ${!p.isUpsell || idx === upsell.length - 1 ? 'disabled' : ''}>↓</button>
+          <button type="button" class="admin-featured-badge ${p.isUpsell ? 'is-on' : ''}">${p.isUpsell ? 'Marcado' : 'Marcar'}</button>
+        </div>
+      `;
+      div.querySelector('.admin-featured-badge').addEventListener('click', async () => {
+        try {
+          const data = await api('/api/products/upsell', 'POST', { id: p.id, upsell: !p.isUpsell });
+          PRODUCTS = data.products;
+          renderUpsellList();
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+      div.querySelectorAll('.admin-featured-move').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          try {
+            const data = await api('/api/products/upsell/reorder', 'POST', { id: p.id, direction: btn.dataset.dir });
+            PRODUCTS = data.products;
+            renderUpsellList();
+          } catch (err) {
+            alert(err.message);
+          }
+        });
+      });
+      upsellList.appendChild(div);
+    });
+  }
+
+  upsellSearch.addEventListener('input', renderUpsellList);
 
   // ---------- promotions ----------
   const promoForm = document.getElementById('promoForm');
