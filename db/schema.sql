@@ -282,3 +282,21 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS email TEXT;
 -- andamento e limpo assim que a senha é redefinida ou o token expira.
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS reset_token TEXT;
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS reset_token_expires TIMESTAMPTZ;
+
+-- contato capturado fora de uma compra (rodapé/pop-up "avise-me"), pra campanha de e-mail/WhatsApp.
+-- Distinto de customers: aqui a pessoa só deixou um contato, não criou conta nem comprou nada.
+CREATE TABLE IF NOT EXISTS newsletter_subscribers (
+  id         UUID PRIMARY KEY,
+  contact    TEXT NOT NULL,
+  channel    TEXT NOT NULL CHECK (channel IN ('email', 'whatsapp')),
+  source     TEXT NOT NULL DEFAULT 'site',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS newsletter_contact_idx ON newsletter_subscribers (lower(contact));
+
+-- status do pagamento em si, separado de orders.status (que é o andamento operacional do
+-- pedido — separação, embalagem etc). Hoje todo pedido nasce 'manual' porque o pagamento é
+-- combinado no WhatsApp; quando um gateway online for plugado (ver lib/payment-provider.js),
+-- passa a nascer 'pending' e é atualizado pra 'paid'/'failed' via webhook do provedor.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'manual'
+  CHECK (payment_status IN ('manual', 'pending', 'paid', 'failed', 'refunded'));

@@ -144,6 +144,7 @@
     'rel-promocoes': () => loadPromotionsReport(),
     'rel-clientes': () => loadCustomersReport(),
     avaliacoes: () => loadReviews(),
+    newsletter: () => loadNewsletter(),
   };
 
   function activateAdminPanel(target) {
@@ -1611,6 +1612,62 @@
     URL.revokeObjectURL(url);
   });
 
+  // ---------- newsletter (contatos captados no rodapé do site, fora de uma compra) ----------
+  let NEWSLETTER_SUBSCRIBERS = [];
+  const newsletterList = document.getElementById('newsletterList');
+  const newsletterCount = document.getElementById('newsletterCount');
+
+  async function loadNewsletter() {
+    try {
+      const data = await api('/api/newsletter/list', 'POST', {});
+      NEWSLETTER_SUBSCRIBERS = data.subscribers || [];
+      renderNewsletterList();
+    } catch (err) {
+      newsletterList.innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+    }
+  }
+
+  function renderNewsletterList() {
+    newsletterCount.textContent = NEWSLETTER_SUBSCRIBERS.length;
+    newsletterList.innerHTML = '';
+    if (!NEWSLETTER_SUBSCRIBERS.length) {
+      newsletterList.innerHTML = '<p class="admin-empty-block">Nenhum contato captado ainda.</p>';
+      return;
+    }
+    NEWSLETTER_SUBSCRIBERS.forEach((s) => {
+      const div = document.createElement('div');
+      div.className = 'admin-customer-item';
+      div.innerHTML = `
+        <div class="admin-customer-info">
+          <span class="admin-customer-name">${escapeHtml(s.contact)}</span>
+          <span class="admin-customer-meta">${s.channel === 'whatsapp' ? 'WhatsApp' : 'E-mail'} · captado em ${formatDate(s.createdAt.slice(0, 10))}</span>
+        </div>
+      `;
+      newsletterList.appendChild(div);
+    });
+  }
+
+  const newsletterExportBtn = document.getElementById('newsletterExport');
+  if (newsletterExportBtn) {
+    newsletterExportBtn.addEventListener('click', () => {
+      if (!NEWSLETTER_SUBSCRIBERS.length) {
+        alert('Não há contatos para exportar.');
+        return;
+      }
+      const header = ['Contato', 'Canal', 'Captado em'];
+      const csvEscape = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+      const rows = NEWSLETTER_SUBSCRIBERS.map((s) => [s.contact, s.channel, formatDate(s.createdAt.slice(0, 10))]);
+      const csv = [header, ...rows].map((r) => r.map(csvEscape).join(';')).join('\r\n');
+      const blob = new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `newsletter-bynana-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  }
+
   // ---------- pedidos (fechados no checkout do site) ----------
   const orderList = document.getElementById('orderList');
   const orderCount = document.getElementById('orderCount');
@@ -1643,11 +1700,14 @@
     list.forEach((o) => {
       const itemsText = (o.items || []).map((it) => `${escapeHtml(it.qty)}x ${escapeHtml(it.name)}${it.variantLabel ? ` (${escapeHtml(it.variantLabel)})` : ''}`).join(', ');
       const when = new Date(o.createdAt).toLocaleString('pt-BR');
+      // pedido "novo" há mais de 2h sem virar em_andamento provavelmente não recebeu retorno
+      // no WhatsApp ainda — sinalizado aqui pra não passar batido numa loja de poucas vendas/dia.
+      const isStale = o.status === 'novo' && Date.now() - new Date(o.createdAt).getTime() > 2 * 60 * 60 * 1000;
       const div = document.createElement('div');
       div.className = 'admin-order-item';
       div.innerHTML = `
         <div class="admin-order-info">
-          <span class="admin-order-name">${escapeHtml(o.customerName)} · ${escapeHtml(o.customerPhone)}</span>
+          <span class="admin-order-name">${escapeHtml(o.customerName)} · ${escapeHtml(o.customerPhone)}${isStale ? ' <span class="admin-order-stale-badge" title="Sem retorno há mais de 2h">⏰ Aguardando retorno</span>' : ''}</span>
           <span class="admin-order-meta">${when}${o.couponCode ? ` · cupom ${escapeHtml(o.couponCode)}` : ''} · ${escapeHtml(o.paymentMethod)} · ${escapeHtml(o.deliveryMethod)}${o.shipping ? ` · frete ${money(o.shipping)}` : ''}</span>
           <p class="admin-order-items">${itemsText}</p>
           <span class="admin-order-total">${money(o.total)}</span>

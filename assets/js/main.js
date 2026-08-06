@@ -226,6 +226,45 @@
     el.href = waLink('Olá! Vim pelo site da By NaNa e queria saber mais sobre as peças 💛');
   });
 
+  // ---------- newsletter (captura de contato no rodapé) ----------
+  const newsletterForm = document.getElementById('newsletterForm');
+  if (newsletterForm) {
+    const newsletterInput = document.getElementById('newsletterInput');
+    const newsletterMsg = document.getElementById('newsletterMsg');
+    newsletterForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const raw = newsletterInput.value.trim();
+      const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw);
+      const digits = raw.replace(/\D/g, '');
+      const channel = isEmail ? 'email' : digits.length >= 10 ? 'whatsapp' : null;
+      newsletterMsg.hidden = false;
+      if (!channel) {
+        newsletterMsg.textContent = 'Informe um e-mail ou WhatsApp válido.';
+        newsletterMsg.className = 'newsletter-msg is-error';
+        return;
+      }
+      const submitBtn = newsletterForm.querySelector('button');
+      submitBtn.disabled = true;
+      try {
+        const res = await fetch('/api/newsletter', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contact: channel === 'whatsapp' ? digits : raw, channel }),
+        });
+        if (!res.ok) throw new Error();
+        newsletterMsg.textContent = 'Prontinho! Você vai receber nossas novidades. 💛';
+        newsletterMsg.className = 'newsletter-msg is-ok';
+        newsletterForm.reset();
+        window.byNanaAnalytics?.trackLead('newsletter_footer');
+      } catch {
+        newsletterMsg.textContent = 'Não deu pra cadastrar agora. Tenta de novo em instantes.';
+        newsletterMsg.className = 'newsletter-msg is-error';
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+  }
+
   // ---------- cart (sacola) ----------
   const CART_KEY = 'bynana_cart';
   let cart = JSON.parse(localStorage.getItem(CART_KEY) || '{}');
@@ -974,7 +1013,15 @@
     bagFormError.hidden = true;
     checkoutBtn.classList.add('is-loading');
     checkoutBtn.textContent = 'Enviando...';
-    persistOrder(ids).then(() => {
+    const checkoutTotal = cartFinalTotal(ids) + shippingQuote(ids).cost;
+    window.byNanaAnalytics?.trackBeginCheckout(checkoutTotal);
+    const checkoutItems = ids.map((key) => {
+      const entry = cart[key];
+      const p = entry ? PRODUCTS.find((x) => x.id === entry.productId) : null;
+      return p ? { id: p.id, name: p.name, qty: entry.qty, price: getEffective(p).price } : null;
+    }).filter(Boolean);
+    persistOrder(ids).then((orderId) => {
+      window.byNanaAnalytics?.trackPurchase(orderId, checkoutTotal, checkoutItems);
       window.open(waLink(buildOrderMessage(ids)), '_blank', 'noopener');
       checkoutBtn.classList.remove('is-loading');
       checkoutBtn.textContent = 'Finalizar no WhatsApp';
@@ -1169,6 +1216,7 @@
       else cart[key] = { productId, variantId: null, qty: 1 };
       saveCart();
       announce(`${product.name} adicionada à sacola.`);
+      window.byNanaAnalytics?.trackAddToCart(product, null);
       return true;
     }
 
@@ -1186,6 +1234,7 @@
     else cart[key] = { productId, variantId: variantId || null, qty: 1 };
     saveCart();
     announce(`${product.name} adicionada à sacola.`);
+    window.byNanaAnalytics?.trackAddToCart(product, variant);
     return true;
   }
 
@@ -2245,6 +2294,8 @@
       notFound.hidden = false;
       return;
     }
+
+    window.byNanaAnalytics?.trackViewItem(p);
 
     document.getElementById('pdpBreadcrumb').innerHTML =
       `<a href="/">Home</a> / <a href="/#colecao">${escapeHtml(p.category)}</a> / <span>${escapeHtml(p.name)}</span>`;

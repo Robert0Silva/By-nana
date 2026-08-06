@@ -75,6 +75,7 @@
         <div class="admin-tab-submenu" id="submenu-marketing">
           <button type="button" class="admin-tab" data-target="promocoes">Promoções</button>
           <button type="button" class="admin-tab" data-target="cupons">Cupons</button>
+          <button type="button" class="admin-tab" data-target="newsletter">Newsletter</button>
         </div>
       </div>
       <div class="admin-tab-group" data-group="conteudo">
@@ -531,6 +532,17 @@
           <button type="button" id="customerExport" class="btn btn-outline">Exportar CSV</button>
         </div>
         <div class="admin-customer-list" id="customerList"></div>
+      </section>
+    </section>
+
+    <section class="admin-panel" id="panel-newsletter" hidden>
+      <section class="admin-card admin-card-wide">
+        <h2>Contatos captados (<span id="newsletterCount">0</span>)</h2>
+        <p class="admin-card-hint">E-mails e WhatsApp deixados no rodapé do site (fora de uma compra) — use pra campanhas de novidades e promoções.</p>
+        <div class="admin-toolbar-row">
+          <button type="button" id="newsletterExport" class="btn btn-outline">Exportar CSV</button>
+        </div>
+        <div class="admin-customer-list" id="newsletterList"></div>
       </section>
     </section>
 

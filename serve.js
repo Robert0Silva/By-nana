@@ -7,6 +7,7 @@ const sharp = require('sharp');
 const { Pool, types } = require('pg');
 const { sendEmail } = require('./email');
 const PromoEngine = require('./assets/js/promo.js');
+const { getActiveProvider } = require('./payment-provider');
 
 // numeric -> number, date -> plain 'YYYY-MM-DD' string (avoids timezone drift from Date objects)
 types.setTypeParser(1700, (v) => (v === null ? null : parseFloat(v)));
@@ -385,11 +386,62 @@ async function getProducts() {
   return rows.map((p) => ({ ...p, ...variantsById.get(p.id), ...imagesById.get(p.id), ...reviewsById.get(p.id) }));
 }
 
-// Só o necessário pra montar o <head> da página de produto (título/meta/OG) no servidor —
-// não passa por attachVariants/attachImages, que são caros demais pra uma checagem de rota.
+// Só o necessário pra montar o <head> da página de produto (título/meta/OG/JSON-LD) no
+// servidor — não passa por attachVariants/attachImages completos (caros demais pra uma
+// checagem de rota), só a soma de estoque e o resumo de avaliação que o JSON-LD precisa.
 async function getProductMeta(id) {
-  const { rows } = await pool.query('SELECT id, name, price, img, description AS desc FROM products WHERE id = $1', [id]);
+  const { rows } = await pool.query(
+    `SELECT p.id, p.name, p.price, p.img, p.description AS desc,
+            COALESCE(v.variant_count, 0) > 0 AS "hasVariants",
+            COALESCE(v.total_stock, 0) AS "totalStock",
+            r.rating, r.review_count AS "reviewCount"
+       FROM products p
+       LEFT JOIN (
+         SELECT product_id, COUNT(*) AS variant_count, SUM(stock) AS total_stock
+         FROM product_variants GROUP BY product_id
+       ) v ON v.product_id = p.id
+       LEFT JOIN (
+         SELECT product_id, ROUND(AVG(rating)::numeric, 1) AS rating, COUNT(*)::int AS review_count
+         FROM product_reviews GROUP BY product_id
+       ) r ON r.product_id = p.id
+      WHERE p.id = $1`,
+    [id]
+  );
   return rows[0] || null;
+}
+
+// schema.org Product/Offer/AggregateRating — permite rich snippet (preço, disponibilidade,
+// estrelas) direto no resultado de busca do Google, sem depender de nenhuma lib externa.
+function buildProductJsonLd(product, { origin, canonical }) {
+  const soldOut = product.hasVariants && Number(product.totalStock) <= 0;
+  const data = {
+    '@context': 'https://schema.org',
+    '@type': 'Product',
+    name: product.name,
+    description: (product.desc || '').slice(0, 5000) || undefined,
+    image: [`${origin}/${product.img}`],
+    brand: { '@type': 'Brand', name: 'By NaNa' },
+  };
+  // "Sob consulta" (preço combinado no WhatsApp, sem valor cadastrado) não tem preço real pra
+  // declarar — omitir o Offer é mais correto pro Google do que anunciar price:"0.00", que o
+  // rich snippet mostraria como "grátis".
+  if (product.price != null) {
+    data.offers = {
+      '@type': 'Offer',
+      url: canonical,
+      priceCurrency: 'BRL',
+      price: Number(product.price).toFixed(2),
+      availability: soldOut ? 'https://schema.org/OutOfStock' : 'https://schema.org/InStock',
+    };
+  }
+  if (product.rating && product.reviewCount) {
+    data.aggregateRating = {
+      '@type': 'AggregateRating',
+      ratingValue: Number(product.rating),
+      reviewCount: Number(product.reviewCount),
+    };
+  }
+  return JSON.stringify(data);
 }
 
 // "Novidades" da home: curadoria manual (is_featured) se existir alguma; senão, cai automaticamente
@@ -404,7 +456,7 @@ async function getNovidades() {
     WHERE p.is_featured = true
     ORDER BY p.featured_position ASC
   `);
-  if (featured.rowCount) return attachVariants(featured.rows);
+  if (featured.rowCount) return attachReviewSummary(await attachVariants(featured.rows));
 
   const fallback = await pool.query(`
     SELECT p.id, p.name, p.brand, c.name AS category, COALESCE(col.name, '') AS collection,
@@ -415,7 +467,7 @@ async function getNovidades() {
     ORDER BY p.created_at DESC
     LIMIT 8
   `);
-  return attachVariants(fallback.rows);
+  return attachReviewSummary(await attachVariants(fallback.rows));
 }
 
 // "Leve também" na sacola: curadoria manual (is_upsell) se existir alguma; senão, cai
@@ -434,7 +486,7 @@ async function getUpsellSuggestions() {
     WHERE p.is_upsell = true
     ORDER BY p.upsell_position ASC
   `);
-  if (curated.rowCount) return attachVariants(curated.rows);
+  if (curated.rowCount) return attachReviewSummary(await attachVariants(curated.rows));
 
   const fallback = await pool.query(`
     SELECT p.id, p.name, p.brand, c.name AS category, COALESCE(col.name, '') AS collection,
@@ -447,7 +499,7 @@ async function getUpsellSuggestions() {
     ORDER BY p.price ASC NULLS LAST
     LIMIT 8
   `);
-  return attachVariants(fallback.rows);
+  return attachReviewSummary(await attachVariants(fallback.rows));
 }
 
 async function getPromotions() {
@@ -863,6 +915,47 @@ function validateDiscount(body) {
 // ---------- API ----------
 async function handleApi(req, res, pathname) {
   try {
+    // config pública lida pelo front (analytics.js) — nunca inclui segredo, só os IDs de
+    // rastreamento (públicos por natureza: aparecem no HTML de qualquer site que os usa).
+    // Sem as env vars configuradas (cliente ainda não tem conta no Google/Meta), volta string
+    // vazia e o front simplesmente não carrega nenhum script de tracking.
+    if (pathname === '/api/public-config' && req.method === 'GET') {
+      return sendJSON(res, 200, {
+        ga4MeasurementId: process.env.GA4_MEASUREMENT_ID || '',
+        metaPixelId: process.env.META_PIXEL_ID || '',
+      });
+    }
+
+    // ------ newsletter (captura de contato fora de uma compra, pra campanha de e-mail/WhatsApp) ------
+    if (pathname === '/api/newsletter' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const contact = String(body.contact || '').trim();
+      const channel = body.channel === 'whatsapp' ? 'whatsapp' : body.channel === 'email' ? 'email' : null;
+      if (!channel) return sendJSON(res, 400, { error: 'Canal inválido' });
+      if (channel === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)) {
+        return sendJSON(res, 400, { error: 'Informe um e-mail válido' });
+      }
+      if (channel === 'whatsapp' && contact.replace(/\D/g, '').length < 10) {
+        return sendJSON(res, 400, { error: 'Informe um WhatsApp válido' });
+      }
+      await pool.query(
+        `INSERT INTO newsletter_subscribers (id, contact, channel) VALUES ($1,$2,$3)
+         ON CONFLICT (lower(contact)) DO NOTHING`,
+        [crypto.randomUUID(), contact, channel]
+      );
+      return sendJSON(res, 201, { ok: true });
+    }
+
+    if (pathname === '/api/newsletter/list' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      const { rows } = await pool.query(
+        'SELECT id, contact, channel, source, created_at AS "createdAt" FROM newsletter_subscribers ORDER BY created_at DESC'
+      );
+      return sendJSON(res, 200, { subscribers: rows });
+    }
+
     // ------ catalog ------
     if (pathname === '/api/data' && req.method === 'GET') {
       const [products, categories, collections, promotions, coupons, shippingRules, categoryGroups, categoryContent, stories, novidades, upsell] = await Promise.all([
@@ -1909,10 +2002,16 @@ async function handleApi(req, res, pathname) {
         }
         total = Math.max(0, subtotal - discountAmount) + shippingCost;
 
+        // Sem provedor configurado (caso de hoje — cliente ainda não escolheu gateway), o pedido
+        // nasce 'manual' e o pagamento segue combinado no WhatsApp, como sempre foi. Quando um
+        // gateway for plugado (ver payment-provider.js), passa a nascer 'pending' aqui.
+        const paymentProvider = getActiveProvider();
+        const paymentStatus = paymentProvider ? 'pending' : 'manual';
+
         await client.query(
-          `INSERT INTO orders (id, customer_id, customer_name, customer_phone, email, items, subtotal, discount, shipping, total, coupon_code, payment_method, delivery_method, address)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-          [id, customerId, customerName, customerPhone, customerEmail, JSON.stringify(items), subtotal, discountAmount, shippingCost, total, coupon ? coupon.code : null, paymentMethod, deliveryMethod, address ? JSON.stringify(address) : null]
+          `INSERT INTO orders (id, customer_id, customer_name, customer_phone, email, items, subtotal, discount, shipping, total, coupon_code, payment_method, delivery_method, address, payment_status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+          [id, customerId, customerName, customerPhone, customerEmail, JSON.stringify(items), subtotal, discountAmount, shippingCost, total, coupon ? coupon.code : null, paymentMethod, deliveryMethod, address ? JSON.stringify(address) : null, paymentStatus]
         );
         await client.query('COMMIT');
       } catch (err) {
@@ -2698,18 +2797,56 @@ async function serveProductPage(req, res, id) {
     const origin = requestOrigin(req);
     const title = `${product.name} — By NaNa`;
     const description = (product.desc || `Confira ${product.name} na By NaNa.`).slice(0, 160);
+    const canonical = `${origin}/produto/${product.id}`;
+    const jsonLd = buildProductJsonLd(product, { origin, canonical });
     const html = template
       .replace(/<!--PRODUCT_TITLE-->/g, escapeHtml(title))
       .replace(/<!--PRODUCT_DESCRIPTION-->/g, escapeHtml(description))
       .replace(/<!--PRODUCT_OG_IMAGE-->/g, escapeHtml(`${origin}/${product.img}`))
-      .replace(/<!--PRODUCT_CANONICAL-->/g, escapeHtml(`${origin}/produto/${product.id}`));
+      .replace(/<!--PRODUCT_CANONICAL-->/g, escapeHtml(canonical))
+      // JSON-LD não passa por escapeHtml (quebraria a sintaxe JSON); JSON.stringify já escapa
+      // aspas, e "<" vira "<" abaixo pra um valor de produto nunca poder fechar a tag <script>.
+      .replace('<!--PRODUCT_JSONLD-->', jsonLd.replace(/</g, '\\u003c'));
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
     res.end(html);
   });
 }
 
+// CSP restrita a 'self' + só os domínios de terceiro que o site realmente usa (Google Fonts,
+// GA4, Meta Pixel — os dois últimos só são efetivamente chamados quando configurados, ver
+// /api/public-config, mas ficam liberados aqui desde já pra não exigir mexer nisso de novo
+// quando a cliente criar as contas). script-src sem 'unsafe-inline': todo <script> do site é
+// arquivo externo (ver redefinir-senha.js) — só style-src precisa de 'unsafe-inline', porque
+// o layout usa atributos style="" inline em alguns pontos (posições de callout, JS que anima
+// elementos). frame-ancestors 'none' bloqueia o site inteiro (inclusive /admin) de ser
+// carregado dentro de um <iframe> de outro site — a defesa moderna contra clickjacking.
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self' https://www.googletagmanager.com https://connect.facebook.net",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com",
+  "img-src 'self' data: https://www.facebook.com https://www.google-analytics.com",
+  "media-src 'self' data:",
+  "connect-src 'self' https://www.google-analytics.com https://*.google-analytics.com https://www.facebook.com https://connect.facebook.net",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join('; ');
+
+function applySecurityHeaders(res) {
+  res.setHeader('Content-Security-Policy', CSP);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'geolocation=(), camera=(), microphone=(), payment=()');
+  // Browsers só levam HSTS a sério quando a resposta veio por HTTPS — inofensivo em dev/HTTP local.
+  res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+}
+
 http
   .createServer((req, res) => {
+    applySecurityHeaders(res);
     const pathname = req.url.split('?')[0];
     if (pathname.startsWith('/api/')) {
       handleApi(req, res, pathname);

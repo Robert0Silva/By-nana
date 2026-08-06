@@ -394,6 +394,10 @@
 }
 .admin-order-info{display:flex;flex-direction:column;gap:4px;min-width:220px;flex:1;}
 .admin-order-name{font-size:.9rem;font-weight:600;}
+.admin-order-stale-badge{
+  display:inline-block;margin-left:6px;padding:2px 9px;border-radius:999px;
+  background:#f7e3d8;color:var(--wine);font-size:.68rem;font-weight:600;vertical-align:middle;
+}
 .admin-order-meta{font-size:.76rem;color:var(--ink-soft);}
 .admin-order-items{font-size:.78rem;color:var(--ink-soft);margin:2px 0 0;}
 .admin-order-total{font-size:.88rem;font-weight:700;color:var(--ink);}
