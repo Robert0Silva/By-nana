@@ -1,8 +1,12 @@
 {
   "name": "by-nana",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "serve.js",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
+    "start": "node serve.js",
     "test": "node --test test/routes.test.js"
   },
   "keywords": [],

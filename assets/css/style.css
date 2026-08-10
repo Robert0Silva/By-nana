@@ -499,6 +499,8 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 .product-price.consult{color:var(--ink-soft);font-weight:500;font-style:italic;font-size:.85rem;}
 .product-price.is-promo{color:var(--wine);}
 .product-price-old{font-size:.8rem;color:var(--ink-soft);text-decoration:line-through;}
+.installments{margin:2px 0 0;font-size:.74rem;color:var(--ink-soft);}
+.pdp-info .installments{font-size:.82rem;margin:-4px 0 2px;}
 .product-actions{display:flex;gap:8px;margin-top:6px;}
 .add-btn{
   flex:1;padding:11px 12px;border-radius:999px;border:1px solid var(--ink);
@@ -532,6 +534,40 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
   background:var(--camel);color:#fff;font-size:.68rem;letter-spacing:.05em;text-transform:uppercase;
   font-weight:700;padding:5px 10px;border-radius:999px;
 }
+
+/* ---------- aviso de cupom de boas-vindas (após cadastro de conta) ---------- */
+.welcome-coupon-msg{
+  margin:10px 0 0;padding:10px 14px;border-radius:var(--radius-sm);background:var(--cream-dark);
+  color:var(--ink);font-size:.82rem;text-align:center;
+}
+
+/* ---------- "avise-me quando chegar" (PDP, variação esgotada) ---------- */
+.pdp-restock{margin:2px 0 4px;}
+.pdp-restock-form{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;}
+.pdp-restock-form select{
+  border:1px solid var(--line);border-radius:999px;padding:10px 14px;font-family:var(--sans);
+  font-size:.8rem;background:var(--white);color:var(--ink);
+}
+.pdp-restock-form input{
+  flex:1;min-width:180px;border:1px solid var(--line);border-radius:999px;padding:10px 16px;
+  font-family:var(--sans);font-size:.8rem;background:var(--white);color:var(--ink);
+}
+.pdp-restock-form .btn{padding:10px 16px;font-size:.8rem;}
+.pdp-restock-msg{font-size:.78rem;margin:8px 0 0;}
+.pdp-restock-msg.is-ok{color:#2f7d4f;}
+.pdp-restock-msg.is-error{color:var(--wine);}
+
+/* ---------- barra de progresso de frete grátis (sacola) ---------- */
+.bag-shipping-progress{margin-bottom:16px;}
+.bag-shipping-progress-text{margin:0 0 8px;font-size:.78rem;color:var(--ink-soft);}
+.bag-shipping-progress-text strong{color:var(--ink);font-weight:600;}
+.bag-shipping-progress.is-complete .bag-shipping-progress-text{color:var(--camel);font-weight:600;}
+.bag-shipping-progress-track{height:6px;border-radius:999px;background:var(--card);overflow:hidden;}
+.bag-shipping-progress-track span{
+  display:block;height:100%;border-radius:999px;background:var(--gold);
+  transition:width .35s ease;
+}
+.bag-shipping-progress.is-complete .bag-shipping-progress-track span{background:var(--camel);}
 
 /* ---------- bolinhas de cor (vitrine e página de produto) ---------- */
 .color-dot-row{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:-2px 0 2px;}

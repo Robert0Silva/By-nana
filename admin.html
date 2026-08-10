@@ -76,6 +76,7 @@
           <button type="button" class="admin-tab" data-target="promocoes">Promoções</button>
           <button type="button" class="admin-tab" data-target="cupons">Cupons</button>
           <button type="button" class="admin-tab" data-target="newsletter">Newsletter</button>
+          <button type="button" class="admin-tab" data-target="avise-me">Avise-me quando chegar</button>
         </div>
       </div>
       <div class="admin-tab-group" data-group="conteudo">
@@ -456,6 +457,10 @@
               <input type="date" id="couponEnd" />
             </label>
           </div>
+          <label class="account-check">
+            <input type="checkbox" id="couponFirstPurchaseOnly" />
+            Válido só na 1ª compra (bloqueado pra quem já tem pedido)
+          </label>
           <div class="admin-form-actions">
             <button type="submit" class="btn btn-primary" id="couponSubmit">Criar cupom</button>
             <button type="button" class="btn btn-ghost" id="couponCancelEdit" hidden>Cancelar edição</button>
@@ -543,6 +548,14 @@
           <button type="button" id="newsletterExport" class="btn btn-outline">Exportar CSV</button>
         </div>
         <div class="admin-customer-list" id="newsletterList"></div>
+      </section>
+    </section>
+
+    <section class="admin-panel" id="panel-avise-me" hidden>
+      <section class="admin-card admin-card-wide">
+        <h2>Avise-me quando chegar (<span id="stockNotifyCount">0</span>)</h2>
+        <p class="admin-card-hint">Clientes que pediram aviso de reposição para um tamanho/cor esgotado. Pedidos por e-mail são avisados automaticamente assim que você atualizar o estoque da variação; pedidos por WhatsApp precisam ser chamados manualmente — marque como contatado depois.</p>
+        <div class="admin-customer-list" id="stockNotifyList"></div>
       </section>
     </section>
 

@@ -131,6 +131,10 @@ CREATE TABLE IF NOT EXISTS coupons (
   active         BOOLEAN NOT NULL DEFAULT true,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- restringe o cupom a quem ainda não tem nenhum pedido não-cancelado (checado por
+-- customer_id quando logada, ou por telefone no checkout como visitante) — pra um cupom
+-- "de boas-vindas" não virar desconto recorrente pra quem já é cliente.
+ALTER TABLE coupons ADD COLUMN IF NOT EXISTS first_purchase_only BOOLEAN NOT NULL DEFAULT false;
 
 -- usuários do painel admin (login multiusuário — substitui a senha única compartilhada).
 CREATE TABLE IF NOT EXISTS admin_users (
@@ -293,6 +297,46 @@ CREATE TABLE IF NOT EXISTS newsletter_subscribers (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS newsletter_contact_idx ON newsletter_subscribers (lower(contact));
+
+-- pedido de aviso quando uma variação esgotada (tamanho/cor) voltar ao estoque ("avise-me
+-- quando chegar"). Só o canal 'email' é notificado automaticamente (via Resend) quando o
+-- estoque da variação sai de 0 pra >0; pedidos por 'whatsapp' ficam pendentes (notified_at
+-- nulo) na lista do painel pra loja chamar manualmente, já que não há integração com a API
+-- oficial do WhatsApp. Índice único parcial evita pedido duplicado da mesma pessoa enquanto
+-- o pedido anterior dela ainda está pendente (depois de notificada, pode pedir de novo).
+CREATE TABLE IF NOT EXISTS stock_notifications (
+  id          UUID PRIMARY KEY,
+  variant_id  TEXT NOT NULL REFERENCES product_variants(id) ON DELETE CASCADE,
+  contact     TEXT NOT NULL,
+  channel     TEXT NOT NULL CHECK (channel IN ('email', 'whatsapp')),
+  notified_at TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_stock_notifications_pending ON stock_notifications(variant_id) WHERE notified_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS stock_notifications_variant_contact_idx
+  ON stock_notifications (variant_id, lower(contact)) WHERE notified_at IS NULL;
+
+-- sacola com e-mail preenchido no checkout mas sem pedido concluído ("carrinho abandonado").
+-- Uma linha "aberta" (reminded_at e converted_at nulos) por e-mail — cada nova atividade da
+-- mesma pessoa atualiza a mesma linha (ver índice único abaixo) em vez de acumular duplicata.
+-- Varredura periódica (ver sweepAbandonedCarts em serve.js) manda um lembrete simples (sem
+-- cupom) pra quem ficou "aberta" por tempo demais; converted_at é marcado quando o pedido
+-- com esse e-mail é concluído, pra não mandar lembrete de compra que já aconteceu.
+CREATE TABLE IF NOT EXISTS abandoned_carts (
+  id            UUID PRIMARY KEY,
+  contact_email TEXT NOT NULL,
+  customer_name TEXT,
+  items         JSONB NOT NULL,
+  subtotal      NUMERIC(10, 2) NOT NULL,
+  reminded_at   TIMESTAMPTZ,
+  converted_at  TIMESTAMPTZ,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS abandoned_carts_open_email_idx
+  ON abandoned_carts (lower(contact_email)) WHERE reminded_at IS NULL AND converted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_abandoned_carts_sweep ON abandoned_carts(updated_at)
+  WHERE reminded_at IS NULL AND converted_at IS NULL;
 
 -- status do pagamento em si, separado de orders.status (que é o andamento operacional do
 -- pedido — separação, embalagem etc). Hoje todo pedido nasce 'manual' porque o pagamento é

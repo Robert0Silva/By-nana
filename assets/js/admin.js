@@ -145,6 +145,7 @@
     'rel-clientes': () => loadCustomersReport(),
     avaliacoes: () => loadReviews(),
     newsletter: () => loadNewsletter(),
+    'avise-me': () => loadStockNotifications(),
   };
 
   function activateAdminPanel(target) {
@@ -1283,6 +1284,7 @@
   const couponType = document.getElementById('couponType');
   const couponValue = document.getElementById('couponValue');
   const couponEnd = document.getElementById('couponEnd');
+  const couponFirstPurchaseOnly = document.getElementById('couponFirstPurchaseOnly');
   const couponSubmit = document.getElementById('couponSubmit');
   const couponCancelEdit = document.getElementById('couponCancelEdit');
   const couponFormTitle = document.getElementById('couponFormTitle');
@@ -1304,8 +1306,9 @@
     COUPONS.forEach((c) => {
       const discountText = c.type === 'percent' ? `${c.value}% OFF` : `${money(c.value)} OFF`;
       const validity = c.endDate ? ` · válido até ${formatDate(c.endDate)}` : '';
+      const firstPurchaseTag = c.firstPurchaseOnly ? ' · só 1ª compra' : '';
       const li = document.createElement('li');
-      li.innerHTML = `<span>${c.code} — ${discountText}${validity}</span><button type="button" class="admin-coupon-edit" aria-label="Editar">✎</button><button type="button" aria-label="Remover">✕</button>`;
+      li.innerHTML = `<span>${c.code} — ${discountText}${validity}${firstPurchaseTag}</span><button type="button" class="admin-coupon-edit" aria-label="Editar">✎</button><button type="button" aria-label="Remover">✕</button>`;
       li.querySelector('.admin-coupon-edit').addEventListener('click', () => startEditCoupon(c));
       li.querySelector('button:not(.admin-coupon-edit)').addEventListener('click', async () => {
         if (!confirm(`Remover o cupom "${c.code}"?`)) return;
@@ -1325,6 +1328,7 @@
     couponType.value = c.type;
     couponValue.value = c.value;
     couponEnd.value = c.endDate || '';
+    couponFirstPurchaseOnly.checked = !!c.firstPurchaseOnly;
     couponFormTitle.textContent = `Editando cupom "${c.code}"`;
     couponSubmit.textContent = 'Salvar alterações';
     couponCancelEdit.hidden = false;
@@ -1355,6 +1359,7 @@
         type: couponType.value,
         value: couponValue.value,
         endDate: couponEnd.value,
+        firstPurchaseOnly: couponFirstPurchaseOnly.checked,
       };
       const data = editing
         ? await api('/api/coupons/update', 'POST', payload)
@@ -1644,6 +1649,56 @@
         </div>
       `;
       newsletterList.appendChild(div);
+    });
+  }
+
+  // ---------- avise-me quando chegar (pedidos de aviso de reposição, por variação esgotada) ----------
+  let STOCK_NOTIFICATIONS = [];
+  const stockNotifyList = document.getElementById('stockNotifyList');
+  const stockNotifyCount = document.getElementById('stockNotifyCount');
+
+  async function loadStockNotifications() {
+    try {
+      const data = await api('/api/admin/stock-notifications/list', 'POST', {});
+      STOCK_NOTIFICATIONS = data.stockNotifications || [];
+      renderStockNotifications();
+    } catch (err) {
+      stockNotifyList.innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+    }
+  }
+
+  function renderStockNotifications() {
+    stockNotifyCount.textContent = STOCK_NOTIFICATIONS.length;
+    stockNotifyList.innerHTML = '';
+    if (!STOCK_NOTIFICATIONS.length) {
+      stockNotifyList.innerHTML = '<p class="admin-empty-block">Nenhum pedido de aviso pendente.</p>';
+      return;
+    }
+    STOCK_NOTIFICATIONS.forEach((n) => {
+      const variantLabel = [n.size, n.color].filter(Boolean).join(' / ');
+      const div = document.createElement('div');
+      div.className = 'admin-customer-item';
+      div.innerHTML = `
+        <div class="admin-customer-info">
+          <span class="admin-customer-name">${escapeHtml(n.productName)}${variantLabel ? ` — ${escapeHtml(variantLabel)}` : ''}</span>
+          <span class="admin-customer-meta">${escapeHtml(n.contact)} · ${n.channel === 'whatsapp' ? 'WhatsApp' : 'E-mail'} · pedido em ${formatDate(n.createdAt.slice(0, 10))}${n.stock > 0 ? ' · estoque já disponível' : ''}</span>
+        </div>
+        ${n.channel === 'whatsapp' ? `<button type="button" class="btn btn-outline btn-sm" data-id="${n.id}">Marcar como contatado</button>` : ''}
+      `;
+      const btn = div.querySelector('button[data-id]');
+      if (btn) {
+        btn.addEventListener('click', async () => {
+          btn.disabled = true;
+          try {
+            await api('/api/admin/stock-notifications/mark-contacted', 'POST', { id: n.id });
+            loadStockNotifications();
+          } catch (err) {
+            alert(err.message);
+            btn.disabled = false;
+          }
+        });
+      }
+      stockNotifyList.appendChild(div);
     });
   }
 

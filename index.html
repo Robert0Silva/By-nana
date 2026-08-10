@@ -155,6 +155,16 @@
     </div>
   </section>
 
+  <section class="novidades" id="recentlyViewedSection" hidden>
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Pra você</p>
+        <h2>Vistos recentemente</h2>
+      </div>
+      <div class="product-grid" id="recentlyViewedGrid"><!-- gerado via JS a partir do histórico local --></div>
+    </div>
+  </section>
+
   <section class="novidades" id="novidades">
     <div class="wrap">
       <div class="section-head">
@@ -338,6 +348,10 @@
     </button>
   </div>
   <div class="bag-scroll">
+    <div class="bag-shipping-progress" id="bagShippingProgress" hidden>
+      <p class="bag-shipping-progress-text" id="bagShippingProgressText"></p>
+      <div class="bag-shipping-progress-track"><span id="bagShippingProgressFill"></span></div>
+    </div>
     <div class="bag-items" id="bagItems"><!-- gerado via JS --></div>
 
     <div class="bag-upsell" id="bagUpsell" hidden><!-- gerado via JS --></div>
@@ -507,6 +521,7 @@
       <span class="profile-avatar" id="profileAvatar">BN</span>
       <div><p>Minha conta</p><h3>Olá, <span id="profileName"></span>!</h3><span id="profileEmail"></span></div>
     </header>
+    <p class="welcome-coupon-msg" id="welcomeCouponMsg" hidden>🎉 Use o cupom <strong>BEMVINDA10</strong> e ganhe 10% na sua primeira compra!</p>
 
     <div class="profile-workspace">
       <nav class="profile-subnav" id="profileSubnav">

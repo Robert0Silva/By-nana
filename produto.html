@@ -117,6 +117,7 @@
             <span class="discount-badge" id="pdpDiscountBadge" hidden></span>
             <span class="low-stock-badge" id="pdpLowStock" hidden>Últimas unidades</span>
           </div>
+          <p class="installments" id="pdpInstallments" hidden></p>
           <div class="pdp-rating-row" id="pdpRatingRow" hidden>
             <span class="pdp-rating-stars" id="pdpRatingStars" aria-hidden="true"></span>
             <span class="pdp-rating-count" id="pdpRatingCount"></span>
@@ -124,6 +125,15 @@
           <div class="color-dot-row" id="pdpColorDots"></div>
           <p class="pdp-desc" id="pdpDesc"></p>
           <div class="variant-picker" id="pdpVariantPicker" hidden></div>
+          <div class="pdp-restock" id="pdpRestock" hidden>
+            <button type="button" class="text-link" id="pdpRestockToggle">Não achou seu tamanho? Avise-me quando chegar</button>
+            <form class="pdp-restock-form" id="pdpRestockForm" hidden>
+              <select id="pdpRestockVariant" aria-label="Tamanho/cor esgotado"></select>
+              <input type="text" id="pdpRestockContact" placeholder="Seu e-mail ou WhatsApp" aria-label="Seu e-mail ou WhatsApp" />
+              <button type="submit" class="btn btn-ghost">Avisar</button>
+            </form>
+            <p class="pdp-restock-msg" id="pdpRestockMsg" hidden></p>
+          </div>
           <div class="product-actions">
             <button class="add-btn" id="pdpAdd">Adicionar à sacola</button>
             <a class="ask-btn" id="pdpAsk" target="_blank" rel="noopener" aria-label="Perguntar no WhatsApp">
@@ -146,6 +156,11 @@
       <div class="pdp-related" id="pdpRelated" hidden>
         <p class="pdp-related-title">Combine também</p>
         <div class="product-grid" id="pdpRelatedGrid"><!-- gerado via JS --></div>
+      </div>
+
+      <div class="pdp-related" id="recentlyViewedSection" hidden>
+        <p class="pdp-related-title">Vistos recentemente</p>
+        <div class="product-grid" id="recentlyViewedGrid"><!-- gerado via JS a partir do histórico local --></div>
       </div>
 
       <div class="pdp-reviews">
@@ -200,6 +215,10 @@
     </button>
   </div>
   <div class="bag-scroll">
+    <div class="bag-shipping-progress" id="bagShippingProgress" hidden>
+      <p class="bag-shipping-progress-text" id="bagShippingProgressText"></p>
+      <div class="bag-shipping-progress-track"><span id="bagShippingProgressFill"></span></div>
+    </div>
     <div class="bag-items" id="bagItems"><!-- gerado via JS --></div>
 
     <div class="bag-upsell" id="bagUpsell" hidden><!-- gerado via JS --></div>
@@ -366,6 +385,7 @@
 
   <div class="account-view" id="accountViewProfile" hidden>
     <h3>Olá, <span id="profileName"></span>!</h3>
+    <p class="welcome-coupon-msg" id="welcomeCouponMsg" hidden>🎉 Use o cupom <strong>BEMVINDA10</strong> e ganhe 10% na sua primeira compra!</p>
 
     <nav class="profile-subnav" id="profileSubnav">
       <button type="button" class="profile-subnav-btn is-active" data-ptab="dados">Meus dados</button>

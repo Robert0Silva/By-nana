@@ -361,6 +361,56 @@ function buildOrderStatusHtml({ id, customerName, status }) {
   `;
 }
 
+function buildBackInStockHtml({ productName, variantLabel, url }) {
+  return `
+    <p>Boa notícia! 💛</p>
+    <p><strong>${productName}${variantLabel ? ` (${variantLabel})` : ''}</strong> voltou ao estoque na By NaNa.</p>
+    <p><a href="${url}">Ver a peça no site</a></p>
+    <p>Como o estoque é limitado, corre lá antes que esgote de novo!</p>
+  `;
+}
+
+function buildAbandonedCartHtml({ customerName, items, subtotal, origin }) {
+  const rows = items.map((item) => `<li>${item.qty}x ${item.name}</li>`).join('');
+  return `
+    <p>Oi${customerName ? `, ${customerName}` : ''}!</p>
+    <p>Você deixou algumas peças na sacola da By NaNa:</p>
+    <ul>${rows}</ul>
+    <p><strong>Subtotal: ${money(subtotal)}</strong></p>
+    <p><a href="${origin}/">Voltar pra sacola</a></p>
+  `;
+}
+
+// Chamado depois que uma variação sai de esgotada (stock 0) para disponível (stock > 0).
+// Só o canal 'email' é avisado automaticamente aqui; pedidos por WhatsApp ficam pendentes
+// (ver /api/admin/stock-notifications/list) pra loja chamar manualmente.
+async function notifyBackInStock(variantId, origin) {
+  try {
+    const { rows } = await pool.query(
+      `SELECT sn.id, sn.contact, p.id AS "productId", p.name AS "productName", pv.size, pv.color
+       FROM stock_notifications sn
+       JOIN product_variants pv ON pv.id = sn.variant_id
+       JOIN products p ON p.id = pv.product_id
+       WHERE sn.variant_id = $1 AND sn.channel = 'email' AND sn.notified_at IS NULL`,
+      [variantId]
+    );
+    if (!rows.length) return;
+    const label = [rows[0].size, rows[0].color].filter(Boolean).join(' / ');
+    const url = `${origin}/produto/${rows[0].productId}`;
+    for (const row of rows) {
+      await sendEmail({
+        to: row.contact,
+        subject: `${row.productName} voltou ao estoque — By NaNa`,
+        html: buildBackInStockHtml({ productName: row.productName, variantLabel: label, url }),
+      });
+      await pool.query('UPDATE stock_notifications SET notified_at = now() WHERE id = $1', [row.id]);
+    }
+  } catch (err) {
+    // aviso de reposição nunca deve derrubar a atualização de estoque em si.
+    console.error('[stock-notify] falha ao notificar reposição:', err.message);
+  }
+}
+
 async function getProducts() {
   const { rows } = await pool.query(`
     SELECT p.id, p.name, p.brand, c.name AS category, COALESCE(col.name, '') AS collection,
@@ -519,7 +569,8 @@ async function getPromotions() {
 async function getCoupons() {
   const { rows } = await pool.query(`
     SELECT code, discount_type AS type, discount_value AS value,
-           start_date AS "startDate", end_date AS "endDate", active
+           start_date AS "startDate", end_date AS "endDate", active,
+           first_purchase_only AS "firstPurchaseOnly"
     FROM coupons
     ORDER BY created_at DESC
   `);
@@ -954,6 +1005,78 @@ async function handleApi(req, res, pathname) {
         'SELECT id, contact, channel, source, created_at AS "createdAt" FROM newsletter_subscribers ORDER BY created_at DESC'
       );
       return sendJSON(res, 200, { subscribers: rows });
+    }
+
+    // ------ "avise-me quando chegar" (pedido de aviso de reposição por variação esgotada) ------
+    if (pathname === '/api/stock-notify' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const variantId = String(body.variantId || '').trim();
+      const contact = String(body.contact || '').trim();
+      const channel = body.channel === 'whatsapp' ? 'whatsapp' : body.channel === 'email' ? 'email' : null;
+      if (!variantId) return sendJSON(res, 400, { error: 'Variação inválida' });
+      if (!channel) return sendJSON(res, 400, { error: 'Canal inválido' });
+      if (channel === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)) {
+        return sendJSON(res, 400, { error: 'Informe um e-mail válido' });
+      }
+      if (channel === 'whatsapp' && contact.replace(/\D/g, '').length < 10) {
+        return sendJSON(res, 400, { error: 'Informe um WhatsApp válido' });
+      }
+      const { rows: variantRows } = await pool.query('SELECT id, stock FROM product_variants WHERE id = $1', [variantId]);
+      if (!variantRows.length) return sendJSON(res, 404, { error: 'Variação não encontrada' });
+      if (variantRows[0].stock > 0) return sendJSON(res, 400, { error: 'Essa variação já está disponível' });
+      await pool.query(
+        `INSERT INTO stock_notifications (id, variant_id, contact, channel) VALUES ($1,$2,$3,$4)
+         ON CONFLICT (variant_id, lower(contact)) WHERE notified_at IS NULL DO NOTHING`,
+        [crypto.randomUUID(), variantId, contact, channel]
+      );
+      return sendJSON(res, 201, { ok: true });
+    }
+
+    if (pathname === '/api/admin/stock-notifications/list' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      const { rows } = await pool.query(
+        `SELECT sn.id, sn.contact, sn.channel, sn.created_at AS "createdAt", p.id AS "productId", p.name AS "productName",
+                pv.size, pv.color, pv.stock
+         FROM stock_notifications sn
+         JOIN product_variants pv ON pv.id = sn.variant_id
+         JOIN products p ON p.id = pv.product_id
+         WHERE sn.notified_at IS NULL
+         ORDER BY sn.created_at ASC`
+      );
+      return sendJSON(res, 200, { stockNotifications: rows });
+    }
+
+    // Pra pedidos por WhatsApp (sem envio automático — ver notifyBackInStock em serve.js), a
+    // loja chama a cliente manualmente e marca aqui como contatada pra sumir da lista.
+    if (pathname === '/api/admin/stock-notifications/mark-contacted' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
+      await pool.query('UPDATE stock_notifications SET notified_at = now() WHERE id = $1', [body.id]);
+      return sendJSON(res, 200, { ok: true });
+    }
+
+    // ------ carrinho abandonado (captura silenciosa pro lembrete por e-mail — ver sweepAbandonedCarts) ------
+    if (pathname === '/api/cart-activity' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const email = String(body.email || '').trim().toLowerCase();
+      const items = Array.isArray(body.items) ? body.items.slice(0, 50) : [];
+      const subtotal = Number(body.subtotal);
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !items.length || !Number.isFinite(subtotal)) {
+        return sendJSON(res, 400, { error: 'Dados inválidos' });
+      }
+      const name = String(body.name || '').trim().slice(0, 120) || null;
+      await pool.query(
+        `INSERT INTO abandoned_carts (id, contact_email, customer_name, items, subtotal)
+         VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (lower(contact_email)) WHERE reminded_at IS NULL AND converted_at IS NULL
+         DO UPDATE SET customer_name = $3, items = $4, subtotal = $5, updated_at = now()`,
+        [crypto.randomUUID(), email, name, JSON.stringify(items), subtotal]
+      );
+      return sendJSON(res, 201, { ok: true });
     }
 
     // ------ catalog ------
@@ -1511,6 +1634,7 @@ async function handleApi(req, res, pathname) {
       try {
         const client = await pool.connect();
         let result;
+        let wasOutOfStock = false;
         try {
           await client.query('BEGIN');
           const current = await client.query('SELECT stock FROM product_variants WHERE id=$1 FOR UPDATE', [body.id]);
@@ -1518,6 +1642,7 @@ async function handleApi(req, res, pathname) {
             await client.query('ROLLBACK');
             return sendJSON(res, 404, { error: 'Variação não encontrada' });
           }
+          wasOutOfStock = current.rows[0].stock <= 0;
           result = await client.query(
             'UPDATE product_variants SET size=$1, color=$2, sku=$3, stock=$4 WHERE id=$5 RETURNING product_id AS "productId"',
             [size, color, sku, stock, body.id]
@@ -1534,6 +1659,7 @@ async function handleApi(req, res, pathname) {
           client.release();
         }
         logActivity(admin, 'variant.update', 'product_variant', body.id, { size, color, stock });
+        if (wasOutOfStock && stock > 0) notifyBackInStock(body.id, requestOrigin(req));
         return sendJSON(res, 200, {
           variants: await getProductVariants(result.rows[0].productId),
           movements: await getInventoryMovements(result.rows[0].productId),
@@ -1792,13 +1918,14 @@ async function handleApi(req, res, pathname) {
       const discount = validateDiscount(body);
       if (discount.error) return sendJSON(res, 400, { error: discount.error });
       const endDate = (body.endDate || '').trim() || null;
+      const firstPurchaseOnly = !!body.firstPurchaseOnly;
 
       const dup = await pool.query('SELECT 1 FROM coupons WHERE code = $1', [code]);
       if (dup.rowCount) return sendJSON(res, 409, { error: 'Já existe um cupom com esse código' });
 
       await pool.query(
-        'INSERT INTO coupons (code, discount_type, discount_value, end_date) VALUES ($1,$2,$3,$4)',
-        [code, discount.type, discount.value, endDate]
+        'INSERT INTO coupons (code, discount_type, discount_value, end_date, first_purchase_only) VALUES ($1,$2,$3,$4,$5)',
+        [code, discount.type, discount.value, endDate, firstPurchaseOnly]
       );
       logActivity(admin, 'coupon.create', 'coupon', code, null);
       return sendJSON(res, 201, { coupons: await getCoupons() });
@@ -1813,10 +1940,11 @@ async function handleApi(req, res, pathname) {
       const discount = validateDiscount(body);
       if (discount.error) return sendJSON(res, 400, { error: discount.error });
       const endDate = (body.endDate || '').trim() || null;
+      const firstPurchaseOnly = !!body.firstPurchaseOnly;
 
       const { rowCount } = await pool.query(
-        'UPDATE coupons SET discount_type=$1, discount_value=$2, end_date=$3 WHERE code=$4',
-        [discount.type, discount.value, endDate, code]
+        'UPDATE coupons SET discount_type=$1, discount_value=$2, end_date=$3, first_purchase_only=$4 WHERE code=$5',
+        [discount.type, discount.value, endDate, firstPurchaseOnly, code]
       );
       if (!rowCount) return sendJSON(res, 404, { error: 'Cupom não encontrado' });
       logActivity(admin, 'coupon.update', 'coupon', code, null);
@@ -1904,6 +2032,8 @@ async function handleApi(req, res, pathname) {
       const body = await readJSONBody(req);
       const customerName = (body.customerName || '').trim();
       const customerPhone = (body.customerPhone || '').trim();
+      const customerEmailRaw = (body.customerEmail || '').trim();
+      const customerEmail = /^\S+@\S+\.\S+$/.test(customerEmailRaw) ? customerEmailRaw : null;
       const paymentMethod = (body.paymentMethod || '').trim();
       const deliveryMethod = (body.deliveryMethod || '').trim();
       const rawItems = Array.isArray(body.items) ? body.items : [];
@@ -1924,7 +2054,18 @@ async function handleApi(req, res, pathname) {
       // (assets/js/promo.js), pra um pedido não poder ser fechado com desconto/total desatualizado
       // ou manipulado no cliente.
       const [promotions, coupons, shippingRules] = await Promise.all([getPromotions(), getCoupons(), getShippingRules()]);
-      const coupon = PromoEngine.findCoupon(coupons, couponCodeInput);
+      let coupon = PromoEngine.findCoupon(coupons, couponCodeInput);
+
+      // cupom "só 1ª compra": vale pra quem nunca teve um pedido não-cancelado — por
+      // customer_id quando logada, senão pelo telefone informado (visitante). Em vez de
+      // rejeitar o pedido inteiro, só descarta o cupom (mesmo tratamento de "cupom expirou"
+      // que o carrinho já faz) pra não travar o fechamento por causa de um desconto extra.
+      if (coupon && coupon.firstPurchaseOnly) {
+        const priorOrder = customerId
+          ? await pool.query("SELECT 1 FROM orders WHERE customer_id = $1 AND status != 'cancelado' LIMIT 1", [customerId])
+          : await pool.query("SELECT 1 FROM orders WHERE customer_phone = $1 AND status != 'cancelado' LIMIT 1", [customerPhone]);
+        if (priorOrder.rowCount) coupon = null;
+      }
 
       const id = `pedido-${Date.now().toString(36)}`;
       const client = await pool.connect();
@@ -2027,6 +2168,12 @@ async function handleApi(req, res, pathname) {
           subject: `Pedido ${id} confirmado — By NaNa`,
           html: buildOrderConfirmationHtml({ id, customerName, items, total, deliveryMethod }),
         });
+        // pedido concluído com esse e-mail: encerra a linha de carrinho abandonado (se houver)
+        // pra não mandar lembrete de uma compra que já aconteceu.
+        pool.query(
+          "UPDATE abandoned_carts SET converted_at = now() WHERE lower(contact_email) = lower($1) AND converted_at IS NULL",
+          [customerEmail]
+        ).catch((err) => console.error('[abandoned-carts] falha ao marcar conversão:', err.message));
       }
 
       return sendJSON(res, 201, { orderId: id });
@@ -2876,3 +3023,35 @@ http
     serveStatic(req, res, pathname);
   })
   .listen(port, host, () => console.log(`Serving on http://${host}:${port}`));
+
+// ---------- lembrete de carrinho abandonado (varredura periódica, sem cupom) ----------
+// Processo único e sempre ativo (sem worker/cron externo) — um setInterval aqui já cobre o
+// caso de uso. SITE_URL precisa estar configurada em produção pro link do e-mail apontar pro
+// domínio certo (sem ela, cai num link relativo que só funciona clicado dentro do próprio site).
+const ABANDONED_CART_DELAY_MS = 2 * 60 * 60 * 1000; // 2h sem atividade
+const ABANDONED_CART_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
+
+async function sweepAbandonedCarts() {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, contact_email, customer_name, items, subtotal FROM abandoned_carts
+       WHERE reminded_at IS NULL AND converted_at IS NULL AND updated_at < now() - make_interval(secs => $1)
+       ORDER BY updated_at ASC LIMIT 50`,
+      [ABANDONED_CART_DELAY_MS / 1000]
+    );
+    if (!rows.length) return;
+    const origin = (process.env.SITE_URL || '').replace(/\/$/, '');
+    for (const row of rows) {
+      await sendEmail({
+        to: row.contact_email,
+        subject: 'Você esqueceu itens na sua sacola — By NaNa',
+        html: buildAbandonedCartHtml({ customerName: row.customer_name, items: row.items, subtotal: row.subtotal, origin }),
+      });
+      await pool.query('UPDATE abandoned_carts SET reminded_at = now() WHERE id = $1', [row.id]);
+    }
+  } catch (err) {
+    console.error('[abandoned-carts] falha na varredura:', err.message);
+  }
+}
+
+setInterval(sweepAbandonedCarts, ABANDONED_CART_SWEEP_INTERVAL_MS);

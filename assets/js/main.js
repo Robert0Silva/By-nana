@@ -20,6 +20,13 @@
   const money = (v) =>
     v == null ? 'Sob consulta' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
+  // parcelamento no cartão exibido junto ao preço — a loja parcela em até 6x sem juros
+  // (combinado no WhatsApp no fechamento do pedido; aqui é só a exibição informativa).
+  const INSTALLMENT_COUNT = 6;
+  function installmentText(price) {
+    return price == null ? '' : `ou ${INSTALLMENT_COUNT}x de ${money(price / INSTALLMENT_COUNT)} sem juros`;
+  }
+
   // avaliações trazem texto livre digitado por clientes (nome de conta, comentário) — precisa
   // escapar antes de ir pro innerHTML, ou vira XSS armazenado visível pra qualquer visitante.
   const ESCAPE_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -219,6 +226,22 @@
     return { applicable: true, cost: free ? 0 : Number(rule.price), label: rule.label || '', free };
   }
 
+  // Antes de a cliente escolher UF (ou de escolher "Entrega"), usa o menor valor de freeAbove
+  // entre as regras ativas como estimativa — assim que o CEP/UF é preenchido, passa a usar a
+  // regra específica daquela UF (ou o fallback '*'), que pode ser diferente da estimativa inicial.
+  function freeShippingInfo(keys) {
+    const active = SHIPPING_RULES.filter((r) => r.active && r.freeAbove != null);
+    if (!active.length) return null;
+    const uf = (address.estado || '').trim().toUpperCase();
+    const specific = selectedDelivery === 'Entrega' && uf
+      ? active.find((r) => r.uf.toUpperCase() === uf) || active.find((r) => r.uf === '*')
+      : null;
+    const target = Number(specific ? specific.freeAbove : Math.min(...active.map((r) => Number(r.freeAbove))));
+    if (!Number.isFinite(target) || target <= 0) return null;
+    const subtotal = cartSubtotal(keys);
+    return { target, subtotal, remaining: Math.max(0, target - subtotal), reached: subtotal >= target };
+  }
+
   const waLink = (text) => `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`;
 
   // basic greeting links used across the page
@@ -252,13 +275,77 @@
           body: JSON.stringify({ contact: channel === 'whatsapp' ? digits : raw, channel }),
         });
         if (!res.ok) throw new Error();
-        newsletterMsg.textContent = 'Prontinho! Você vai receber nossas novidades. 💛';
+        newsletterMsg.textContent = 'Prontinho! Use o cupom BEMVINDA10 e ganhe 10% na sua primeira compra 💛';
         newsletterMsg.className = 'newsletter-msg is-ok';
         newsletterForm.reset();
         window.byNanaAnalytics?.trackLead('newsletter_footer');
       } catch {
         newsletterMsg.textContent = 'Não deu pra cadastrar agora. Tenta de novo em instantes.';
         newsletterMsg.className = 'newsletter-msg is-error';
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+  }
+
+  // ---------- "avise-me quando chegar" (PDP, variação esgotada) ----------
+  const pdpRestockBlock = document.getElementById('pdpRestock');
+  const pdpRestockToggle = document.getElementById('pdpRestockToggle');
+  const pdpRestockForm = document.getElementById('pdpRestockForm');
+  const pdpRestockSelect = document.getElementById('pdpRestockVariant');
+  const pdpRestockContact = document.getElementById('pdpRestockContact');
+  const pdpRestockMsg = document.getElementById('pdpRestockMsg');
+
+  // Chamado a cada render da PDP (initProductPage) com as variações esgotadas do produto —
+  // o <select> é refeito do zero pra nunca ficar com opções de um produto anterior.
+  function setupRestockNotify(soldOutVariants) {
+    if (!pdpRestockBlock) return;
+    pdpRestockBlock.hidden = soldOutVariants.length === 0;
+    pdpRestockForm.hidden = true;
+    pdpRestockMsg.hidden = true;
+    pdpRestockSelect.innerHTML = soldOutVariants
+      .map((v) => `<option value="${v.id}">${escapeHtml(variantLabel(v))}</option>`)
+      .join('');
+  }
+
+  if (pdpRestockToggle) {
+    pdpRestockToggle.addEventListener('click', () => {
+      pdpRestockForm.hidden = !pdpRestockForm.hidden;
+      pdpRestockMsg.hidden = true;
+    });
+  }
+
+  if (pdpRestockForm) {
+    pdpRestockForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const variantId = pdpRestockSelect.value;
+      const raw = pdpRestockContact.value.trim();
+      const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw);
+      const digits = raw.replace(/\D/g, '');
+      const channel = isEmail ? 'email' : digits.length >= 10 ? 'whatsapp' : null;
+      pdpRestockMsg.hidden = false;
+      if (!variantId || !channel) {
+        pdpRestockMsg.textContent = 'Informe um e-mail ou WhatsApp válido.';
+        pdpRestockMsg.className = 'pdp-restock-msg is-error';
+        return;
+      }
+      const submitBtn = pdpRestockForm.querySelector('button[type="submit"]');
+      submitBtn.disabled = true;
+      try {
+        const res = await fetch('/api/stock-notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ variantId, contact: channel === 'whatsapp' ? digits : raw, channel }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Não foi possível registrar o aviso.');
+        pdpRestockMsg.textContent = 'Prontinho! Avisamos você assim que chegar. 💛';
+        pdpRestockMsg.className = 'pdp-restock-msg is-ok';
+        pdpRestockForm.reset();
+        pdpRestockForm.hidden = true;
+      } catch (err) {
+        pdpRestockMsg.textContent = err.message;
+        pdpRestockMsg.className = 'pdp-restock-msg is-error';
       } finally {
         submitBtn.disabled = false;
       }
@@ -403,6 +490,7 @@
         <h3 class="product-name">${escapeHtml(p.name)}</h3>
         ${p.rating ? `<div class="pdp-rating-row product-rating-row"><span class="pdp-rating-stars">${starsHtml(p.rating)}</span><span class="pdp-rating-count">${p.rating.toFixed(1)} (${p.reviewCount})</span></div>` : ''}
         <div class="product-price-row">${priceHtml}</div>
+        ${p.price != null ? `<p class="installments">${installmentText(price)}</p>` : ''}
         ${colorDotsHtml(variants)}
         ${variantHtml}
         <div class="product-actions">
@@ -414,6 +502,42 @@
       </div>
     `;
     return div;
+  }
+
+  // ---------- vistos recentemente (histórico local, sem conta necessária) ----------
+  const RECENT_KEY = 'bynana_recent';
+  const RECENT_MAX = 10;
+
+  function trackRecentlyViewed(id) {
+    let ids = [];
+    try {
+      ids = JSON.parse(localStorage.getItem(RECENT_KEY)) || [];
+    } catch {
+      ids = [];
+    }
+    ids = [id, ...ids.filter((x) => x !== id)].slice(0, RECENT_MAX);
+    localStorage.setItem(RECENT_KEY, JSON.stringify(ids));
+  }
+
+  // excludeId: na página de produto, não mostra o próprio produto na lista.
+  function renderRecentlyViewed(excludeId) {
+    const section = document.getElementById('recentlyViewedSection');
+    const grid = document.getElementById('recentlyViewedGrid');
+    if (!section || !grid) return;
+    let ids = [];
+    try {
+      ids = JSON.parse(localStorage.getItem(RECENT_KEY)) || [];
+    } catch {
+      ids = [];
+    }
+    const items = ids
+      .filter((id) => id !== excludeId)
+      .map((id) => PRODUCTS.find((p) => p.id === id))
+      .filter(Boolean)
+      .slice(0, 8);
+    section.hidden = items.length === 0;
+    grid.innerHTML = '';
+    items.forEach((p) => grid.appendChild(productCard(p)));
   }
 
   function matchesSearch(p, term) {
@@ -745,6 +869,9 @@
   });
 
   const bagCount = document.getElementById('bagCount');
+  const bagShippingProgressEl = document.getElementById('bagShippingProgress');
+  const bagShippingProgressTextEl = document.getElementById('bagShippingProgressText');
+  const bagShippingProgressFillEl = document.getElementById('bagShippingProgressFill');
   const bagItemsEl = document.getElementById('bagItems');
   const bagUpsellEl = document.getElementById('bagUpsell');
   const bagTotalEl = document.getElementById('bagTotal');
@@ -1087,6 +1214,17 @@
     const keys = Object.keys(cart);
     const totalQty = keys.reduce((sum, key) => sum + cart[key].qty, 0);
     bagCount.textContent = totalQty;
+
+    const shipInfo = totalQty > 0 ? freeShippingInfo(keys) : null;
+    bagShippingProgressEl.hidden = !shipInfo;
+    if (shipInfo) {
+      const pct = Math.min(100, (shipInfo.subtotal / shipInfo.target) * 100);
+      bagShippingProgressFillEl.style.width = `${pct}%`;
+      bagShippingProgressEl.classList.toggle('is-complete', shipInfo.reached);
+      bagShippingProgressTextEl.innerHTML = shipInfo.reached
+        ? '🎉 Você garantiu <strong>frete grátis</strong>!'
+        : `Faltam <strong>${money(shipInfo.remaining)}</strong> para o frete grátis`;
+    }
 
     if (totalQty === 0) {
       mobileBar.classList.remove('is-visible');
@@ -1536,6 +1674,28 @@
   const bagPhoneInput = document.getElementById('bagPhone');
   const bagEmailInput = document.getElementById('bagEmail');
 
+  // Dispara quando a cliente sai do campo de e-mail com a sacola preenchida — não em cada
+  // tecla digitada — pra registrar a atividade que alimenta o lembrete de carrinho abandonado
+  // (ver /api/cart-activity e sweepAbandonedCarts em serve.js). Silencioso: falha aqui nunca
+  // deve incomodar quem só está preenchendo o checkout.
+  bagEmailInput.addEventListener('blur', () => {
+    const email = bagEmailInput.value.trim();
+    const keys = Object.keys(cart);
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || keys.length === 0) return;
+    const items = keys
+      .map((key) => {
+        const entry = cart[key];
+        const p = PRODUCTS.find((x) => x.id === entry.productId);
+        return p ? { qty: entry.qty, name: p.name } : null;
+      })
+      .filter(Boolean);
+    fetch('/api/cart-activity', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, name: bagNameInput.value.trim(), items, subtotal: cartSubtotal(keys) }),
+    }).catch(() => {});
+  });
+
   let currentCustomer = JSON.parse(localStorage.getItem(CUSTOMER_KEY) || 'null');
 
   function setFormMsg(el, text, kind) {
@@ -1638,6 +1798,8 @@
     accountOverlay.classList.remove('is-open');
     accountModal.classList.remove('is-open');
     closeModalFocus(accountModal);
+    const welcomeCouponMsg = document.getElementById('welcomeCouponMsg');
+    if (welcomeCouponMsg) welcomeCouponMsg.hidden = true;
   }
 
   accountBtn.addEventListener('click', openAccountModal);
@@ -1733,6 +1895,8 @@
       showAccountView('profile');
       fillProfileDataForm();
       showProfileTab('dados');
+      const welcomeCouponMsg = document.getElementById('welcomeCouponMsg');
+      if (welcomeCouponMsg) welcomeCouponMsg.hidden = false;
     } catch (err) {
       setFormMsg(signupMsg, err.message, 'error');
     }
@@ -2296,6 +2460,7 @@
     }
 
     window.byNanaAnalytics?.trackViewItem(p);
+    trackRecentlyViewed(p.id);
 
     document.getElementById('pdpBreadcrumb').innerHTML =
       `<a href="/">Home</a> / <a href="/#colecao">${escapeHtml(p.category)}</a> / <span>${escapeHtml(p.name)}</span>`;
@@ -2336,6 +2501,9 @@
     discountBadge.textContent = promo ? `-${promo.percent}%` : '';
     discountBadge.hidden = !promo;
     if (pdpBuyBarPrice) pdpBuyBarPrice.textContent = priceEl.textContent;
+    const installmentsEl = document.getElementById('pdpInstallments');
+    installmentsEl.textContent = installmentText(price);
+    installmentsEl.hidden = p.price == null;
 
     const ratingRow = document.getElementById('pdpRatingRow');
     if (p.rating) {
@@ -2367,6 +2535,8 @@
       variantPicker.hidden = true;
       variantPicker.innerHTML = '';
     }
+
+    setupRestockNotify(variants.filter((v) => v.stock <= 0));
 
     const addBtn = document.getElementById('pdpAdd');
     addBtn.dataset.id = p.id;
@@ -2423,6 +2593,7 @@
     relatedGrid.innerHTML = '';
     related.forEach((r) => relatedGrid.appendChild(productCard(r)));
     document.getElementById('pdpRelated').hidden = related.length === 0;
+    renderRecentlyViewed(p.id);
 
     initProductReviews(p);
 
@@ -2607,6 +2778,7 @@
       renderGrid(initialCategory, initialSearch);
       filtersEl.querySelectorAll('.filter-chip').forEach((c) => c.classList.toggle('is-active', c.dataset.filter === initialCategory));
       renderNovidades();
+      renderRecentlyViewed();
       renderStoriesRail();
     }
   }
