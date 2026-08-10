@@ -24,7 +24,11 @@
 <p class="data-error-banner" id="dataError" hidden>
   Não foi possível carregar o catálogo agora. <button type="button" id="dataErrorRetry" class="data-error-retry">Tentar de novo</button>
 </p>
-<div class="topbar">Peças exclusivas, atendimento por WhatsApp 💌 &nbsp;|&nbsp; Entrega combinada na hora do pedido</div>
+<div class="topbar">
+  <span>Curadoria independente</span>
+  <span class="topbar-divider" aria-hidden="true"></span>
+  <span>Atendimento personalizado pelo WhatsApp</span>
+</div>
 
 <header class="site-header" id="topo">
   <div class="wrap header-row-top">
@@ -66,44 +70,32 @@
           </button>
           <div class="mega-menu" id="megaMenu"><!-- gerado via JS a partir das categorias/grupos cadastrados --></div>
         </div>
-        <a href="#novidades"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 2v8M12 22v-6M4 12h4M16 12h4"/></svg>Novidades</a>
-        <a href="#colecao"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4h16v16H4z"/><path d="M4 9h16"/></svg>Coleção</a>
-        <a href="#sobre"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>Sobre</a>
-        <a href="#contato"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5Z"/></svg>Contato</a>
+        <a href="#novidades">Novidades</a>
+        <a href="#colecao">Coleção</a>
+        <a href="#inspire-se">Inspire-se</a>
+        <a href="#sobre">A marca</a>
+        <a href="#contato">Atendimento</a>
       </nav>
     </div>
   </div>
 </header>
 
-<section class="stories-rail-wrap" id="storiesSection" hidden>
-  <div class="wrap">
-    <div class="stories-rail" id="storiesRail"><!-- gerado via JS a partir dos stories cadastrados --></div>
-  </div>
-</section>
-
 <main>
 
-  <section class="hero">
-    <div class="hero-bg"></div>
+  <section class="hero" aria-labelledby="heroTitle">
+    <img class="hero-image" src="assets/img/processed/site-hero-1.jpg" alt="Look feminino em alfaiataria off-white com bolsa caramelo" />
+    <div class="hero-shade" aria-hidden="true"></div>
     <div class="wrap hero-inner">
       <div class="hero-copy">
-        <p class="eyebrow">Curadoria de moda · Loja &amp; atelier</p>
-        <h1>Peças com <span>assinatura</span>,<br/>estilo com identidade.</h1>
-        <p class="hero-text">Seleção de roupas, calçados, bolsas e acessórios femininos e masculinos, escolhidos a dedo. Cada peça, um look. Cada pedido, no seu ritmo — direto pelo WhatsApp.</p>
+        <p class="eyebrow">Curadoria By NaNa · 2026</p>
+        <h1 id="heroTitle">Estilo que<br><em>fala por você.</em></h1>
+        <p class="hero-text">Uma seleção autoral de roupas, calçados e acessórios para vestir seus melhores momentos.</p>
         <div class="hero-ctas">
-          <a href="#colecao" class="btn btn-primary">Ver coleção</a>
-          <a href="https://www.instagram.com/bynanaloja/" target="_blank" rel="noopener" class="btn btn-ghost">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2.2c2.7 0 3 .01 4.1.06 1.05.05 1.62.22 2 .37.5.2.86.43 1.24.8.37.38.6.74.8 1.24.15.38.32.95.37 2 .05 1.1.06 1.4.06 4.1s-.01 3-.06 4.1c-.05 1.05-.22 1.62-.37 2-.2.5-.43.86-.8 1.24-.38.37-.74.6-1.24.8-.38.15-.95.32-2 .37-1.1.05-1.4.06-4.1.06s-3-.01-4.1-.06c-1.05-.05-1.62-.22-2-.37a3.3 3.3 0 0 1-1.24-.8 3.3 3.3 0 0 1-.8-1.24c-.15-.38-.32-.95-.37-2-.05-1.1-.06-1.4-.06-4.1s.01-3 .06-4.1c.05-1.05.22-1.62.37-2 .2-.5.43-.86.8-1.24.38-.37.74-.6 1.24-.8.38-.15.95-.32 2-.37 1.1-.05 1.4-.06 4.1-.06M12 0C9.25 0 8.9.01 7.8.06c-1.1.05-1.85.23-2.5.48-.68.26-1.26.62-1.83 1.19A4.9 4.9 0 0 0 2.28 3.6c-.25.65-.43 1.4-.48 2.5C1.75 7.2 1.74 7.55 1.74 10.3v3.4c0 2.75.01 3.1.06 4.2.05 1.1.23 1.85.48 2.5.26.68.62 1.26 1.19 1.83.57.57 1.15.93 1.83 1.19.65.25 1.4.43 2.5.48 1.1.05 1.45.06 4.2.06s3.1-.01 4.2-.06c1.1-.05 1.85-.23 2.5-.48a4.9 4.9 0 0 0 1.83-1.19 4.9 4.9 0 0 0 1.19-1.83c.25-.65.43-1.4.48-2.5.05-1.1.06-1.45.06-4.2v-3.4c0-2.75-.01-3.1-.06-4.2-.05-1.1-.23-1.85-.48-2.5A4.9 4.9 0 0 0 20.9 1.7 4.9 4.9 0 0 0 19.06.53c-.65-.25-1.4-.43-2.5-.48C15.46.01 15.1 0 12.35 0H12Z"/><path d="M12 5.84A6.16 6.16 0 1 0 12 18.16 6.16 6.16 0 0 0 12 5.84Zm0 10.16a4 4 0 1 1 0-8 4 4 0 0 1 0 8Z"/><circle cx="18.4" cy="5.6" r="1.44"/></svg>
-            @bynanaloja
-          </a>
+          <a href="#novidades" class="btn btn-primary">Comprar novidades</a>
+          <a href="#colecao" class="btn btn-light">Explorar coleção</a>
         </div>
       </div>
-
-      <div class="hero-gallery" aria-hidden="true">
-        <img src="assets/img/processed/site-hero-1.jpg" alt="" class="hg hg-1" />
-        <img src="assets/img/processed/site-hero-2.jpg" alt="" class="hg hg-2" />
-        <img src="assets/img/processed/site-hero-3.jpg" alt="" class="hg hg-3" />
-      </div>
+      <p class="hero-caption"><span>01</span> Alfaiataria leve<br>para todos os dias</p>
     </div>
   </section>
 
@@ -111,15 +103,15 @@
     <div class="wrap benefits-inner">
       <div class="benefit">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12.02 2C6.5 2 2 6.48 2 12c0 1.85.5 3.58 1.38 5.07L2 22l5.1-1.34A9.94 9.94 0 0 0 12.02 22C17.5 22 22 17.52 22 12S17.5 2 12.02 2Z"/></svg>
-        <span>Atendimento direto pelo WhatsApp</span>
+        <span><strong>Atendimento humano</strong> pelo WhatsApp</span>
       </div>
       <div class="benefit">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 21s-7-4.5-9.5-9C.5 8 2 4 6 4c2 0 3.5 1 4 2.5C10.5 5 12 4 14 4c4 0 5.5 4 3.5 8-2.5 4.5-9.5 9-9.5 9Z"/></svg>
-        <span>Peças exclusivas, escolhidas a dedo</span>
+        <span><strong>Curadoria exclusiva</strong> de cada peça</span>
       </div>
       <div class="benefit">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7h13v10H3zM16 10h3l2 3v4h-5z"/><circle cx="7.5" cy="18.5" r="1.5"/><circle cx="17.5" cy="18.5" r="1.5"/></svg>
-        <span>Entrega combinada direto com você</span>
+        <span><strong>Entrega ou retirada</strong> combinada com você</span>
       </div>
     </div>
   </div>
@@ -127,10 +119,10 @@
   <section class="spotlight" id="destaque">
     <div class="wrap spotlight-inner">
       <div class="spotlight-copy">
-        <p class="eyebrow">Peça da vez</p>
-        <h2>Conjunto Alfaiataria <span>Off White</span></h2>
+        <p class="eyebrow">Edit da semana · 01</p>
+        <h2>Alfaiataria em <span>novo ritmo</span></h2>
         <p class="spotlight-text">Colete alfaiataria com fechamento em botões, combinado com calça pantalona no mesmo tom. Um look leve e sofisticado, ótimo para o trabalho ou um evento de dia.</p>
-        <a href="#colecao" class="btn btn-primary" id="spotlightCta">Ver esse look</a>
+        <a href="#colecao" class="text-link" id="spotlightCta">Descobrir este look <span aria-hidden="true">→</span></a>
       </div>
       <div class="spotlight-media">
         <img src="assets/img/processed/look-alfaiataria-off-white.jpg" alt="Conjunto Alfaiataria Off White" />
@@ -152,16 +144,33 @@
 
   <section class="categorias" id="categorias">
     <div class="wrap">
+      <div class="section-head section-head-split">
+        <div>
+          <p class="eyebrow">Encontre o seu estilo</p>
+          <h2>Curadoria por categoria</h2>
+        </div>
+        <p>Escolhas versáteis para diferentes estilos, ocasiões e momentos.</p>
+      </div>
       <div class="cat-grid"><!-- gerado via JS a partir das categorias cadastradas --></div>
+    </div>
+  </section>
+
+  <section class="novidades" id="recentlyViewedSection" hidden>
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Pra você</p>
+        <h2>Vistos recentemente</h2>
+      </div>
+      <div class="product-grid" id="recentlyViewedGrid"><!-- gerado via JS a partir do histórico local --></div>
     </div>
   </section>
 
   <section class="novidades" id="novidades">
     <div class="wrap">
       <div class="section-head">
-        <p class="eyebrow">Chegou agora</p>
-        <h2>Novidades</h2>
-        <p class="section-sub">As peças mais recentes do catálogo, direto pra você.</p>
+        <p class="eyebrow">Recém-chegados</p>
+        <h2>Novidades da curadoria</h2>
+        <p class="section-sub">Peças escolhidas para atualizar o guarda-roupa com personalidade.</p>
       </div>
       <div class="product-grid" id="novidadesGrid"><!-- gerado via JS, curadoria manual ou últimos produtos cadastrados --></div>
     </div>
@@ -170,9 +179,9 @@
   <section class="colecao" id="colecao">
     <div class="wrap">
       <div class="section-head">
-        <p class="eyebrow">Catálogo</p>
-        <h2>A coleção da vez</h2>
-        <p class="section-sub">Toque em uma peça para ver detalhes, ou adicione direto à sacola e feche o pedido no WhatsApp.</p>
+        <p class="eyebrow">Shop</p>
+        <h2>Explore toda a coleção</h2>
+        <p class="section-sub">Escolha sua peça, confira os detalhes e finalize com atendimento personalizado.</p>
       </div>
 
       <div class="catalog-toolbar">
@@ -214,26 +223,74 @@
     </div>
   </section>
 
+  <section class="editorial" id="inspire-se">
+    <div class="wrap">
+      <div class="section-head section-head-split editorial-head">
+        <div>
+          <p class="eyebrow">Inspire-se</p>
+          <h2>Looks com intenção</h2>
+        </div>
+        <a href="https://www.instagram.com/bynanaloja/" target="_blank" rel="noopener" class="text-link">Acompanhar @bynanaloja <span aria-hidden="true">↗</span></a>
+      </div>
+      <div class="editorial-grid">
+        <a class="editorial-card editorial-card-large" href="#colecao">
+          <img src="assets/img/processed/look-blazer-marinho-bermuda.jpg" alt="Look com blazer marinho e bermuda" loading="lazy" />
+          <span><small>Essenciais</small>Elegância sem excesso</span>
+        </a>
+        <a class="editorial-card" href="#colecao">
+          <img src="assets/img/processed/look-cropped-bege-pantalona.jpg" alt="Look bege com cropped e pantalona" loading="lazy" />
+          <span><small>Monocromático</small>Novos neutros</span>
+        </a>
+        <a class="editorial-card" href="#colecao">
+          <img src="assets/img/processed/look-jaqueta-animal-print.jpg" alt="Look com jaqueta animal print" loading="lazy" />
+          <span><small>Statement</small>Uma peça, todo o look</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section class="stories-rail-wrap" id="storiesSection" aria-label="Destaques em vídeo" hidden>
+    <div class="wrap">
+      <div class="section-head section-head-split stories-heading">
+        <div><p class="eyebrow">Em movimento</p><h2>Novidades em vídeo</h2></div>
+      </div>
+      <div class="stories-rail" id="storiesRail"><!-- gerado via JS a partir dos stories cadastrados --></div>
+    </div>
+  </section>
+
+  <section class="brand-proof" aria-label="Experiência By NaNa">
+    <div class="wrap brand-proof-inner">
+      <p class="eyebrow">Nosso jeito de fazer moda</p>
+      <blockquote>“Mais do que vender peças, ajudamos você a encontrar combinações que tenham a sua identidade.”</blockquote>
+      <div class="proof-points">
+        <div><strong>01</strong><span>Seleção cuidadosa</span></div>
+        <div><strong>02</strong><span>Ajuda para combinar</span></div>
+        <div><strong>03</strong><span>Atendimento próximo</span></div>
+      </div>
+    </div>
+  </section>
+
   <section class="sobre" id="sobre">
     <div class="wrap sobre-inner">
       <div class="sobre-img">
         <img src="assets/img/processed/site-sobre.jpg" alt="Vitrine By NaNa" />
       </div>
       <div class="sobre-copy">
-        <p class="eyebrow">Sobre a By NaNa</p>
-        <h2>Moda escolhida com carinho, uma peça de cada vez</h2>
-        <p>A By NaNa nasceu do olhar de quem ama moda de verdade: peças femininas e masculinas selecionadas com cuidado, looks montados para inspirar e um atendimento próximo, quase de amiga pra amiga.</p>
-        <p>Cada publicação no Instagram vira vitrine — e agora, também catálogo. Encontrou algo que combina com você? É só chamar no WhatsApp que a gente confirma tamanho, cor e forma de entrega.</p>
-        <a href="https://www.instagram.com/bynanaloja/" target="_blank" rel="noopener" class="btn btn-outline">Ver mais no Instagram</a>
+        <p class="eyebrow">Nossa história</p>
+        <h2>Moda com olhar pessoal e identidade</h2>
+        <p>A By NaNa nasceu de um olhar atento para peças que fazem sentido na vida real. Nossa curadoria aproxima tendência e versatilidade, com escolhas femininas e masculinas pensadas para durar mais de uma ocasião.</p>
+        <p>Aqui, cada atendimento é uma conversa. Ajudamos a confirmar tamanho, cor, combinações e a melhor forma de receber seu pedido.</p>
+        <a href="https://www.instagram.com/bynanaloja/" target="_blank" rel="noopener" class="text-link">Conheça nosso dia a dia <span aria-hidden="true">↗</span></a>
       </div>
     </div>
   </section>
 
   <section class="cta-final" id="contato">
     <div class="wrap cta-inner">
-      <h2>Viu um look que combina com você?</h2>
-      <p>Fala com a gente agora mesmo e garante sua peça antes que acabe.</p>
-      <a href="#" id="ctaWhats" target="_blank" rel="noopener" class="btn btn-primary btn-lg">Chamar no WhatsApp</a>
+      <p class="eyebrow">Atendimento By NaNa</p>
+      <h2>Quer ajuda para escolher?</h2>
+      <p>Conte o que você procura. A gente ajuda com tamanho, combinações e disponibilidade.</p>
+      <a href="#" id="ctaWhats" target="_blank" rel="noopener" class="btn btn-light btn-lg">Conversar com a gente</a>
     </div>
   </section>
 
@@ -241,13 +298,44 @@
 
 <footer class="site-footer">
   <div class="wrap footer-inner">
-    <span class="brand-mark footer-brand-mark">By NaNa</span>
-    <div class="footer-links">
-      <a href="https://www.instagram.com/bynanaloja/" target="_blank" rel="noopener">Instagram @bynanaloja</a>
-      <a href="#" id="footerWhats" target="_blank" rel="noopener">WhatsApp</a>
+    <div class="footer-brand">
+      <span class="brand-mark footer-brand-mark">By NaNa</span>
+      <p>Curadoria de moda feminina, masculina, calçados e acessórios.</p>
     </div>
-    <p class="footer-note">© <span id="year"></span> By NaNa. Catálogo online — pedidos combinados via WhatsApp.</p>
-    <a href="/admin" class="footer-admin-link">Área administrativa</a>
+    <div class="footer-nav">
+      <div>
+        <h3>Descubra</h3>
+        <a href="#novidades">Novidades</a>
+        <a href="#colecao">Coleção</a>
+        <a href="#inspire-se">Inspire-se</a>
+        <a href="#sobre">A marca</a>
+      </div>
+      <div>
+        <h3>Atendimento</h3>
+        <a href="#" id="footerWhats" target="_blank" rel="noopener">Fale pelo WhatsApp</a>
+        <a href="#colecao">Disponibilidade e tamanhos</a>
+        <span>Entrega e retirada sob consulta</span>
+      </div>
+      <div>
+        <h3>Siga a By NaNa</h3>
+        <a href="https://www.instagram.com/bynanaloja/" target="_blank" rel="noopener">Instagram @bynanaloja</a>
+        <span>Novidades e inspirações todos os dias</span>
+      </div>
+    </div>
+    <div class="footer-newsletter">
+      <h3>Fique por dentro</h3>
+      <p>Receba novidades, promoções e peças exclusivas em primeira mão.</p>
+      <form id="newsletterForm" class="newsletter-form" novalidate>
+        <input type="text" id="newsletterInput" placeholder="Seu e-mail ou WhatsApp" aria-label="Seu e-mail ou WhatsApp" />
+        <button type="submit" class="btn btn-light">Quero receber</button>
+      </form>
+      <p class="newsletter-msg" id="newsletterMsg" hidden></p>
+    </div>
+    <div class="footer-bottom">
+      <p class="footer-note">© <span id="year"></span> By NaNa. Todos os direitos reservados.</p>
+      <p class="footer-note">Pedidos e condições confirmados no atendimento.</p>
+      <p class="footer-note"><a href="admin.html">Área administrativa</a></p>
+    </div>
   </div>
 </footer>
 
@@ -260,7 +348,13 @@
     </button>
   </div>
   <div class="bag-scroll">
+    <div class="bag-shipping-progress" id="bagShippingProgress" hidden>
+      <p class="bag-shipping-progress-text" id="bagShippingProgressText"></p>
+      <div class="bag-shipping-progress-track"><span id="bagShippingProgressFill"></span></div>
+    </div>
     <div class="bag-items" id="bagItems"><!-- gerado via JS --></div>
+
+    <div class="bag-upsell" id="bagUpsell" hidden><!-- gerado via JS --></div>
 
     <div class="bag-details" id="bagDetails" hidden>
       <div class="bag-field-group">
@@ -268,6 +362,7 @@
         <div class="bag-contact-fields">
           <label>Nome<input type="text" id="bagName" autocomplete="name" placeholder="Seu nome" /></label>
           <label>Telefone<input type="tel" id="bagPhone" autocomplete="tel" placeholder="(31) 90000-0000" /></label>
+          <label>E-mail<input type="email" id="bagEmail" autocomplete="email" placeholder="seu@email.com" /></label>
         </div>
       </div>
 
@@ -365,7 +460,19 @@
       <p class="account-form-msg" id="loginMsg" hidden></p>
       <button type="submit" class="btn btn-primary btn-block">Entrar</button>
     </form>
+    <p class="account-switch"><button type="button" class="account-link" id="goForgot">Esqueci minha senha</button></p>
     <p class="account-switch">Não tem conta? <button type="button" class="account-link" id="goSignup">Cadastre-se</button></p>
+  </div>
+
+  <div class="account-view" id="accountViewForgot" hidden>
+    <h3>Esqueci minha senha</h3>
+    <p class="account-sub">Informe seu e-mail e enviaremos um link para redefinir a senha.</p>
+    <form class="account-form" id="forgotForm">
+      <label>E-mail<input type="email" id="forgotEmail" required autocomplete="email" /></label>
+      <p class="account-form-msg" id="forgotMsg" hidden></p>
+      <button type="submit" class="btn btn-primary btn-block">Enviar link</button>
+    </form>
+    <p class="account-switch"><button type="button" class="account-link" id="goLoginFromForgot">Voltar para o login</button></p>
   </div>
 
   <div class="account-view" id="accountViewSignup" hidden>
@@ -410,17 +517,25 @@
   </div>
 
   <div class="account-view" id="accountViewProfile" hidden>
-    <h3>Olá, <span id="profileName"></span>!</h3>
+    <header class="profile-header">
+      <span class="profile-avatar" id="profileAvatar">BN</span>
+      <div><p>Minha conta</p><h3>Olá, <span id="profileName"></span>!</h3><span id="profileEmail"></span></div>
+    </header>
+    <p class="welcome-coupon-msg" id="welcomeCouponMsg" hidden>🎉 Use o cupom <strong>BEMVINDA10</strong> e ganhe 10% na sua primeira compra!</p>
 
-    <nav class="profile-subnav" id="profileSubnav">
-      <button type="button" class="profile-subnav-btn is-active" data-ptab="dados">Meus dados</button>
-      <button type="button" class="profile-subnav-btn" data-ptab="pedidos">Pedidos</button>
-      <button type="button" class="profile-subnav-btn" data-ptab="enderecos">Endereços</button>
-      <button type="button" class="profile-subnav-btn" data-ptab="senha">Senha</button>
-      <button type="button" class="profile-subnav-btn" data-ptab="favoritos">Favoritos</button>
-    </nav>
+    <div class="profile-workspace">
+      <nav class="profile-subnav" id="profileSubnav">
+        <button type="button" class="profile-subnav-btn is-active" data-ptab="dados"><span aria-hidden="true">○</span> Meus dados</button>
+        <button type="button" class="profile-subnav-btn" data-ptab="pedidos"><span aria-hidden="true">□</span> Pedidos</button>
+        <button type="button" class="profile-subnav-btn" data-ptab="enderecos"><span aria-hidden="true">⌖</span> Endereços</button>
+        <button type="button" class="profile-subnav-btn" data-ptab="favoritos"><span aria-hidden="true">♡</span> Favoritos</button>
+        <button type="button" class="profile-subnav-btn" data-ptab="senha"><span aria-hidden="true">⋯</span> Segurança</button>
+      </nav>
+
+      <div class="profile-content">
 
     <div class="profile-panel" id="profilePanel-dados">
+      <div class="profile-panel-head"><h3>Dados pessoais</h3><p>Mantenha seus contatos atualizados para agilizar os pedidos.</p></div>
       <form class="account-form" id="profileDataForm">
         <div class="account-form-row">
           <label>Nome<input type="text" id="pdFirstName" required autocomplete="given-name" /></label>
@@ -438,10 +553,12 @@
     </div>
 
     <div class="profile-panel" id="profilePanel-pedidos" hidden>
+      <div class="profile-panel-head"><h3>Meus pedidos</h3><p>Acompanhe os pedidos iniciados pelo site.</p></div>
       <div class="profile-order-list" id="profileOrderList"></div>
     </div>
 
     <div class="profile-panel" id="profilePanel-enderecos" hidden>
+      <div class="profile-panel-head"><h3>Endereços</h3><p>Gerencie seus locais de entrega.</p></div>
       <div class="profile-address-list" id="profileAddressList"></div>
       <button type="button" class="btn btn-outline btn-block" id="profileAddAddressBtn">Adicionar endereço</button>
       <form class="account-form" id="profileAddressForm" hidden>
@@ -470,6 +587,7 @@
     </div>
 
     <div class="profile-panel" id="profilePanel-senha" hidden>
+      <div class="profile-panel-head"><h3>Segurança</h3><p>Use uma senha exclusiva para proteger sua conta.</p></div>
       <form class="account-form" id="profilePasswordForm">
         <label>Senha atual<input type="password" id="ppCurrent" required autocomplete="current-password" /></label>
         <label>Nova senha<input type="password" id="ppNew" minlength="6" required autocomplete="new-password" /></label>
@@ -479,11 +597,14 @@
     </div>
 
     <div class="profile-panel" id="profilePanel-favoritos" hidden>
+      <div class="profile-panel-head"><h3>Meus favoritos</h3><p>As peças que você salvou para ver depois.</p></div>
       <div class="product-grid profile-fav-grid" id="profileFavGrid"></div>
       <p class="empty-state" id="profileFavEmpty" hidden>Você ainda não salvou nenhuma peça nos favoritos.</p>
     </div>
 
-    <button type="button" class="btn btn-outline btn-block profile-logout" id="logoutBtn">Sair da conta</button>
+      </div>
+    </div>
+    <button type="button" class="profile-logout" id="logoutBtn">Sair da conta</button>
   </div>
 </div>
 
@@ -510,6 +631,7 @@
   <button class="btn btn-primary" id="mobileBarBtn">Ver sacola</button>
 </div>
 
+<script src="assets/js/analytics.js"></script>
 <script src="assets/js/promo.js"></script>
 <script src="assets/js/main.js"></script>
 </body>

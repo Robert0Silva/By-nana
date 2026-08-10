@@ -120,7 +120,7 @@
     return candidates.reduce((best, c) => (c.amount > best.amount ? c : best));
   }
 
-  window.PromoEngine = {
+  const PromoEngine = {
     todayISO,
     isPromoActive,
     promoStatus,
@@ -134,4 +134,9 @@
     PIX_DISCOUNT_PERCENT,
     QUANTITY_DISCOUNT_TIERS,
   };
+
+  // Também usado no servidor (serve.js) para revalidar preços/descontos do checkout com a
+  // mesma regra de negócio do front — evita que a lógica de desconto fique duplicada e diverja.
+  if (typeof window !== 'undefined') window.PromoEngine = PromoEngine;
+  if (typeof module !== 'undefined' && module.exports) module.exports = PromoEngine;
 })();

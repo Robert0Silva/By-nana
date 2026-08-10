@@ -5,12 +5,18 @@ const path = require('path');
 const crypto = require('crypto');
 const sharp = require('sharp');
 const { Pool, types } = require('pg');
+const { sendEmail } = require('./email');
+const PromoEngine = require('./assets/js/promo.js');
+const { getActiveProvider } = require('./payment-provider');
 
 // numeric -> number, date -> plain 'YYYY-MM-DD' string (avoids timezone drift from Date objects)
 types.setTypeParser(1700, (v) => (v === null ? null : parseFloat(v)));
 types.setTypeParser(1082, (v) => v);
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// Sem este listener, um erro num client ocioso do pool (ex.: o Neon derrubando a conexão por
+// inatividade) vira uncaughtException e derruba o processo inteiro — não só a request atual.
+pool.on('error', (err) => console.error('[pg pool] erro em client ocioso:', err.message));
 
 const root = __dirname;
 const port = Number(process.env.PORT) || 8787;
@@ -286,12 +292,16 @@ async function syncProductVariants(client, productId, variants, adminUserId) {
   }
 
   const removed = current.filter((variant) => !retainedIds.has(variant.id));
-  for (const variant of removed) {
-    const history = await client.query('SELECT COUNT(*)::int AS count FROM inventory_movements WHERE variant_id=$1', [variant.id]);
-    if (history.rows[0].count > 0) {
+  if (removed.length) {
+    const removedIds = removed.map((variant) => variant.id);
+    const { rows: history } = await client.query(
+      'SELECT variant_id AS "variantId", COUNT(*)::int AS count FROM inventory_movements WHERE variant_id = ANY($1) GROUP BY variant_id',
+      [removedIds]
+    );
+    if (history.some((row) => row.count > 0)) {
       throw new Error('Uma variação removida possui histórico. Mantenha-a na grade com estoque zero');
     }
-    await client.query('DELETE FROM product_variants WHERE id=$1', [variant.id]);
+    await client.query('DELETE FROM product_variants WHERE id = ANY($1)', [removedIds]);
   }
 }
 
@@ -320,24 +330,168 @@ async function getInventoryMovements(productId, limit = 40) {
   return rows;
 }
 
+const ORDER_STATUS_LABELS = {
+  novo: 'Recebido',
+  em_andamento: 'Em andamento',
+  concluido: 'Concluído',
+  cancelado: 'Cancelado',
+};
+
+const money = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+function buildOrderConfirmationHtml({ id, customerName, items, total, deliveryMethod }) {
+  const rows = items
+    .map((item) => `<li>${item.qty}x ${item.name}${item.variantLabel ? ` (${item.variantLabel})` : ''}</li>`)
+    .join('');
+  return `
+    <p>Olá, ${customerName}!</p>
+    <p>Recebemos seu pedido <strong>${id}</strong> na By NaNa. Aqui está o resumo:</p>
+    <ul>${rows}</ul>
+    <p><strong>Total: ${money(total)}</strong></p>
+    <p>Forma de entrega: ${deliveryMethod}</p>
+    <p>Assim que o status do pedido mudar, avisamos por aqui.</p>
+  `;
+}
+
+function buildOrderStatusHtml({ id, customerName, status }) {
+  const label = ORDER_STATUS_LABELS[status] || status;
+  return `
+    <p>Olá, ${customerName}!</p>
+    <p>O status do seu pedido <strong>${id}</strong> na By NaNa foi atualizado para: <strong>${label}</strong>.</p>
+  `;
+}
+
+function buildBackInStockHtml({ productName, variantLabel, url }) {
+  return `
+    <p>Boa notícia! 💛</p>
+    <p><strong>${productName}${variantLabel ? ` (${variantLabel})` : ''}</strong> voltou ao estoque na By NaNa.</p>
+    <p><a href="${url}">Ver a peça no site</a></p>
+    <p>Como o estoque é limitado, corre lá antes que esgote de novo!</p>
+  `;
+}
+
+function buildAbandonedCartHtml({ customerName, items, subtotal, origin }) {
+  const rows = items.map((item) => `<li>${item.qty}x ${item.name}</li>`).join('');
+  return `
+    <p>Oi${customerName ? `, ${customerName}` : ''}!</p>
+    <p>Você deixou algumas peças na sacola da By NaNa:</p>
+    <ul>${rows}</ul>
+    <p><strong>Subtotal: ${money(subtotal)}</strong></p>
+    <p><a href="${origin}/">Voltar pra sacola</a></p>
+  `;
+}
+
+// Chamado depois que uma variação sai de esgotada (stock 0) para disponível (stock > 0).
+// Só o canal 'email' é avisado automaticamente aqui; pedidos por WhatsApp ficam pendentes
+// (ver /api/admin/stock-notifications/list) pra loja chamar manualmente.
+async function notifyBackInStock(variantId, origin) {
+  try {
+    const { rows } = await pool.query(
+      `SELECT sn.id, sn.contact, p.id AS "productId", p.name AS "productName", pv.size, pv.color
+       FROM stock_notifications sn
+       JOIN product_variants pv ON pv.id = sn.variant_id
+       JOIN products p ON p.id = pv.product_id
+       WHERE sn.variant_id = $1 AND sn.channel = 'email' AND sn.notified_at IS NULL`,
+      [variantId]
+    );
+    if (!rows.length) return;
+    const label = [rows[0].size, rows[0].color].filter(Boolean).join(' / ');
+    const url = `${origin}/produto/${rows[0].productId}`;
+    for (const row of rows) {
+      await sendEmail({
+        to: row.contact,
+        subject: `${row.productName} voltou ao estoque — By NaNa`,
+        html: buildBackInStockHtml({ productName: row.productName, variantLabel: label, url }),
+      });
+      await pool.query('UPDATE stock_notifications SET notified_at = now() WHERE id = $1', [row.id]);
+    }
+  } catch (err) {
+    // aviso de reposição nunca deve derrubar a atualização de estoque em si.
+    console.error('[stock-notify] falha ao notificar reposição:', err.message);
+  }
+}
+
 async function getProducts() {
   const { rows } = await pool.query(`
     SELECT p.id, p.name, p.brand, c.name AS category, COALESCE(col.name, '') AS collection,
            p.tag, p.price, p.img, p.description AS desc, p.composition,
-           p.is_featured AS "isFeatured", p.featured_position AS "featuredPosition"
+           p.is_featured AS "isFeatured", p.featured_position AS "featuredPosition",
+           p.is_upsell AS "isUpsell", p.upsell_position AS "upsellPosition"
     FROM products p
     JOIN categories c ON c.id = p.category_id
     LEFT JOIN collections col ON col.id = p.collection_id
     ORDER BY p.created_at DESC
   `);
-  return attachReviewSummary(await attachImages(await attachVariants(rows)));
+  if (!rows.length) return rows;
+  // attachVariants/attachImages/attachReviewSummary só dependem das linhas originais (por id),
+  // não umas das outras — rodar em série (como antes) soma 3 round-trips ao Neon à toa.
+  const [withVariants, withImages, withReviews] = await Promise.all([
+    attachVariants(rows),
+    attachImages(rows),
+    attachReviewSummary(rows),
+  ]);
+  const variantsById = new Map(withVariants.map((p) => [p.id, { variants: p.variants, hasVariants: p.hasVariants, totalStock: p.totalStock }]));
+  const imagesById = new Map(withImages.map((p) => [p.id, { images: p.images }]));
+  const reviewsById = new Map(withReviews.map((p) => [p.id, { rating: p.rating, reviewCount: p.reviewCount }]));
+  return rows.map((p) => ({ ...p, ...variantsById.get(p.id), ...imagesById.get(p.id), ...reviewsById.get(p.id) }));
 }
 
-// Só o necessário pra montar o <head> da página de produto (título/meta/OG) no servidor —
-// não passa por attachVariants/attachImages, que são caros demais pra uma checagem de rota.
+// Só o necessário pra montar o <head> da página de produto (título/meta/OG/JSON-LD) no
+// servidor — não passa por attachVariants/attachImages completos (caros demais pra uma
+// checagem de rota), só a soma de estoque e o resumo de avaliação que o JSON-LD precisa.
 async function getProductMeta(id) {
-  const { rows } = await pool.query('SELECT id, name, price, img, description AS desc FROM products WHERE id = $1', [id]);
+  const { rows } = await pool.query(
+    `SELECT p.id, p.name, p.price, p.img, p.description AS desc,
+            COALESCE(v.variant_count, 0) > 0 AS "hasVariants",
+            COALESCE(v.total_stock, 0) AS "totalStock",
+            r.rating, r.review_count AS "reviewCount"
+       FROM products p
+       LEFT JOIN (
+         SELECT product_id, COUNT(*) AS variant_count, SUM(stock) AS total_stock
+         FROM product_variants GROUP BY product_id
+       ) v ON v.product_id = p.id
+       LEFT JOIN (
+         SELECT product_id, ROUND(AVG(rating)::numeric, 1) AS rating, COUNT(*)::int AS review_count
+         FROM product_reviews GROUP BY product_id
+       ) r ON r.product_id = p.id
+      WHERE p.id = $1`,
+    [id]
+  );
   return rows[0] || null;
+}
+
+// schema.org Product/Offer/AggregateRating — permite rich snippet (preço, disponibilidade,
+// estrelas) direto no resultado de busca do Google, sem depender de nenhuma lib externa.
+function buildProductJsonLd(product, { origin, canonical }) {
+  const soldOut = product.hasVariants && Number(product.totalStock) <= 0;
+  const data = {
+    '@context': 'https://schema.org',
+    '@type': 'Product',
+    name: product.name,
+    description: (product.desc || '').slice(0, 5000) || undefined,
+    image: [`${origin}/${product.img}`],
+    brand: { '@type': 'Brand', name: 'By NaNa' },
+  };
+  // "Sob consulta" (preço combinado no WhatsApp, sem valor cadastrado) não tem preço real pra
+  // declarar — omitir o Offer é mais correto pro Google do que anunciar price:"0.00", que o
+  // rich snippet mostraria como "grátis".
+  if (product.price != null) {
+    data.offers = {
+      '@type': 'Offer',
+      url: canonical,
+      priceCurrency: 'BRL',
+      price: Number(product.price).toFixed(2),
+      availability: soldOut ? 'https://schema.org/OutOfStock' : 'https://schema.org/InStock',
+    };
+  }
+  if (product.rating && product.reviewCount) {
+    data.aggregateRating = {
+      '@type': 'AggregateRating',
+      ratingValue: Number(product.rating),
+      reviewCount: Number(product.reviewCount),
+    };
+  }
+  return JSON.stringify(data);
 }
 
 // "Novidades" da home: curadoria manual (is_featured) se existir alguma; senão, cai automaticamente
@@ -352,7 +506,7 @@ async function getNovidades() {
     WHERE p.is_featured = true
     ORDER BY p.featured_position ASC
   `);
-  if (featured.rowCount) return attachVariants(featured.rows);
+  if (featured.rowCount) return attachReviewSummary(await attachVariants(featured.rows));
 
   const fallback = await pool.query(`
     SELECT p.id, p.name, p.brand, c.name AS category, COALESCE(col.name, '') AS collection,
@@ -363,7 +517,39 @@ async function getNovidades() {
     ORDER BY p.created_at DESC
     LIMIT 8
   `);
-  return attachVariants(fallback.rows);
+  return attachReviewSummary(await attachVariants(fallback.rows));
+}
+
+// "Leve também" na sacola: curadoria manual (is_upsell) se existir alguma; senão, cai
+// automaticamente nas peças de menor preço — a faixa nunca fica vazia por falta de curadoria.
+// A curadoria manual não filtra esgotados aqui (mesmo padrão de getNovidades — o cliente
+// esconde na hora de renderizar, junto com o que já está na sacola); já o fallback automático
+// só considera peças compráveis agora, senão o "menor preço" pode cair inteiro em itens sem
+// estoque e a faixa fica vazia à toa mesmo tendo opções mais caras disponíveis.
+async function getUpsellSuggestions() {
+  const curated = await pool.query(`
+    SELECT p.id, p.name, p.brand, c.name AS category, COALESCE(col.name, '') AS collection,
+           p.tag, p.price, p.img, p.description AS desc
+    FROM products p
+    JOIN categories c ON c.id = p.category_id
+    LEFT JOIN collections col ON col.id = p.collection_id
+    WHERE p.is_upsell = true
+    ORDER BY p.upsell_position ASC
+  `);
+  if (curated.rowCount) return attachReviewSummary(await attachVariants(curated.rows));
+
+  const fallback = await pool.query(`
+    SELECT p.id, p.name, p.brand, c.name AS category, COALESCE(col.name, '') AS collection,
+           p.tag, p.price, p.img, p.description AS desc
+    FROM products p
+    JOIN categories c ON c.id = p.category_id
+    LEFT JOIN collections col ON col.id = p.collection_id
+    WHERE NOT EXISTS (SELECT 1 FROM product_variants pv WHERE pv.product_id = p.id)
+       OR EXISTS (SELECT 1 FROM product_variants pv WHERE pv.product_id = p.id AND pv.stock > 0)
+    ORDER BY p.price ASC NULLS LAST
+    LIMIT 8
+  `);
+  return attachReviewSummary(await attachVariants(fallback.rows));
 }
 
 async function getPromotions() {
@@ -383,7 +569,8 @@ async function getPromotions() {
 async function getCoupons() {
   const { rows } = await pool.query(`
     SELECT code, discount_type AS type, discount_value AS value,
-           start_date AS "startDate", end_date AS "endDate", active
+           start_date AS "startDate", end_date AS "endDate", active,
+           first_purchase_only AS "firstPurchaseOnly"
     FROM coupons
     ORDER BY created_at DESC
   `);
@@ -500,7 +687,7 @@ function resolveCustomerId(body) {
 async function getStories(onlyActive) {
   const { rows } = await pool.query(`
     SELECT id, title, video, cover, link_url AS "linkUrl", link_label AS "linkLabel",
-           product_id AS "productId", active
+           product_id AS "productId", active, position
     FROM stories
     ${onlyActive ? 'WHERE active = true' : ''}
     ORDER BY position ASC, created_at ASC
@@ -545,8 +732,17 @@ const LOGIN_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_ATTEMPT_MAX = 10;
 const loginAttempts = new Map();
 
+// Mesmo raciocínio do requestOrigin() (abaixo): atrás de proxy/CDN, req.socket.remoteAddress
+// é sempre o IP do proxy — sem olhar X-Forwarded-For, o rate limit vira "por e-mail" (todo
+// mundo cai no mesmo balde) e uma pessoa consegue bloquear o login de outra.
+function clientIp(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (forwarded) return forwarded.split(',')[0].trim();
+  return req.socket.remoteAddress;
+}
+
 function loginRateLimited(req, email) {
-  const key = `${req.socket.remoteAddress}:${email}`;
+  const key = `${clientIp(req)}:${email}`;
   const now = Date.now();
   const entry = loginAttempts.get(key);
   if (!entry || now - entry.firstAttemptAt > LOGIN_ATTEMPT_WINDOW_MS) {
@@ -558,7 +754,7 @@ function loginRateLimited(req, email) {
 }
 
 function resetLoginAttempts(req, email) {
-  loginAttempts.delete(`${req.socket.remoteAddress}:${email}`);
+  loginAttempts.delete(`${clientIp(req)}:${email}`);
 }
 
 // ---------- admin auth (login multiusuário: e-mail+senha, token assinado, papéis) ----------
@@ -770,9 +966,122 @@ function validateDiscount(body) {
 // ---------- API ----------
 async function handleApi(req, res, pathname) {
   try {
+    // config pública lida pelo front (analytics.js) — nunca inclui segredo, só os IDs de
+    // rastreamento (públicos por natureza: aparecem no HTML de qualquer site que os usa).
+    // Sem as env vars configuradas (cliente ainda não tem conta no Google/Meta), volta string
+    // vazia e o front simplesmente não carrega nenhum script de tracking.
+    if (pathname === '/api/public-config' && req.method === 'GET') {
+      return sendJSON(res, 200, {
+        ga4MeasurementId: process.env.GA4_MEASUREMENT_ID || '',
+        metaPixelId: process.env.META_PIXEL_ID || '',
+      });
+    }
+
+    // ------ newsletter (captura de contato fora de uma compra, pra campanha de e-mail/WhatsApp) ------
+    if (pathname === '/api/newsletter' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const contact = String(body.contact || '').trim();
+      const channel = body.channel === 'whatsapp' ? 'whatsapp' : body.channel === 'email' ? 'email' : null;
+      if (!channel) return sendJSON(res, 400, { error: 'Canal inválido' });
+      if (channel === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)) {
+        return sendJSON(res, 400, { error: 'Informe um e-mail válido' });
+      }
+      if (channel === 'whatsapp' && contact.replace(/\D/g, '').length < 10) {
+        return sendJSON(res, 400, { error: 'Informe um WhatsApp válido' });
+      }
+      await pool.query(
+        `INSERT INTO newsletter_subscribers (id, contact, channel) VALUES ($1,$2,$3)
+         ON CONFLICT (lower(contact)) DO NOTHING`,
+        [crypto.randomUUID(), contact, channel]
+      );
+      return sendJSON(res, 201, { ok: true });
+    }
+
+    if (pathname === '/api/newsletter/list' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      const { rows } = await pool.query(
+        'SELECT id, contact, channel, source, created_at AS "createdAt" FROM newsletter_subscribers ORDER BY created_at DESC'
+      );
+      return sendJSON(res, 200, { subscribers: rows });
+    }
+
+    // ------ "avise-me quando chegar" (pedido de aviso de reposição por variação esgotada) ------
+    if (pathname === '/api/stock-notify' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const variantId = String(body.variantId || '').trim();
+      const contact = String(body.contact || '').trim();
+      const channel = body.channel === 'whatsapp' ? 'whatsapp' : body.channel === 'email' ? 'email' : null;
+      if (!variantId) return sendJSON(res, 400, { error: 'Variação inválida' });
+      if (!channel) return sendJSON(res, 400, { error: 'Canal inválido' });
+      if (channel === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)) {
+        return sendJSON(res, 400, { error: 'Informe um e-mail válido' });
+      }
+      if (channel === 'whatsapp' && contact.replace(/\D/g, '').length < 10) {
+        return sendJSON(res, 400, { error: 'Informe um WhatsApp válido' });
+      }
+      const { rows: variantRows } = await pool.query('SELECT id, stock FROM product_variants WHERE id = $1', [variantId]);
+      if (!variantRows.length) return sendJSON(res, 404, { error: 'Variação não encontrada' });
+      if (variantRows[0].stock > 0) return sendJSON(res, 400, { error: 'Essa variação já está disponível' });
+      await pool.query(
+        `INSERT INTO stock_notifications (id, variant_id, contact, channel) VALUES ($1,$2,$3,$4)
+         ON CONFLICT (variant_id, lower(contact)) WHERE notified_at IS NULL DO NOTHING`,
+        [crypto.randomUUID(), variantId, contact, channel]
+      );
+      return sendJSON(res, 201, { ok: true });
+    }
+
+    if (pathname === '/api/admin/stock-notifications/list' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      const { rows } = await pool.query(
+        `SELECT sn.id, sn.contact, sn.channel, sn.created_at AS "createdAt", p.id AS "productId", p.name AS "productName",
+                pv.size, pv.color, pv.stock
+         FROM stock_notifications sn
+         JOIN product_variants pv ON pv.id = sn.variant_id
+         JOIN products p ON p.id = pv.product_id
+         WHERE sn.notified_at IS NULL
+         ORDER BY sn.created_at ASC`
+      );
+      return sendJSON(res, 200, { stockNotifications: rows });
+    }
+
+    // Pra pedidos por WhatsApp (sem envio automático — ver notifyBackInStock em serve.js), a
+    // loja chama a cliente manualmente e marca aqui como contatada pra sumir da lista.
+    if (pathname === '/api/admin/stock-notifications/mark-contacted' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
+      await pool.query('UPDATE stock_notifications SET notified_at = now() WHERE id = $1', [body.id]);
+      return sendJSON(res, 200, { ok: true });
+    }
+
+    // ------ carrinho abandonado (captura silenciosa pro lembrete por e-mail — ver sweepAbandonedCarts) ------
+    if (pathname === '/api/cart-activity' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const email = String(body.email || '').trim().toLowerCase();
+      const items = Array.isArray(body.items) ? body.items.slice(0, 50) : [];
+      const subtotal = Number(body.subtotal);
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !items.length || !Number.isFinite(subtotal)) {
+        return sendJSON(res, 400, { error: 'Dados inválidos' });
+      }
+      const name = String(body.name || '').trim().slice(0, 120) || null;
+      await pool.query(
+        `INSERT INTO abandoned_carts (id, contact_email, customer_name, items, subtotal)
+         VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (lower(contact_email)) WHERE reminded_at IS NULL AND converted_at IS NULL
+         DO UPDATE SET customer_name = $3, items = $4, subtotal = $5, updated_at = now()`,
+        [crypto.randomUUID(), email, name, JSON.stringify(items), subtotal]
+      );
+      return sendJSON(res, 201, { ok: true });
+    }
+
     // ------ catalog ------
     if (pathname === '/api/data' && req.method === 'GET') {
-      const [products, categories, collections, promotions, coupons, shippingRules, categoryGroups, categoryContent, stories, novidades] = await Promise.all([
+      const [products, categories, collections, promotions, coupons, shippingRules, categoryGroups, categoryContent, stories, novidades, upsell] = await Promise.all([
         getProducts(),
         getCategories(),
         getCollections(),
@@ -783,8 +1092,9 @@ async function handleApi(req, res, pathname) {
         getCategoryContent(),
         getStories(true),
         getNovidades(),
+        getUpsellSuggestions(),
       ]);
-      return sendJSON(res, 200, { products, categories, collections, promotions, coupons, shippingRules, categoryGroups, categoryContent, stories, novidades });
+      return sendJSON(res, 200, { products, categories, collections, promotions, coupons, shippingRules, categoryGroups, categoryContent, stories, novidades, upsell });
     }
 
     // ------ admin auth (login multiusuário, papéis, log de atividade) ------
@@ -1169,12 +1479,14 @@ async function handleApi(req, res, pathname) {
       if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
 
+      let updated;
       if (body.featured) {
         const { rows } = await pool.query('SELECT COALESCE(MAX(featured_position), -1) AS max FROM products WHERE is_featured = true');
-        await pool.query('UPDATE products SET is_featured = true, featured_position = $1 WHERE id = $2', [rows[0].max + 1, body.id]);
+        updated = await pool.query('UPDATE products SET is_featured = true, featured_position = $1 WHERE id = $2', [rows[0].max + 1, body.id]);
       } else {
-        await pool.query('UPDATE products SET is_featured = false, featured_position = NULL WHERE id = $1', [body.id]);
+        updated = await pool.query('UPDATE products SET is_featured = false, featured_position = NULL WHERE id = $1', [body.id]);
       }
+      if (!updated.rowCount) return sendJSON(res, 404, { error: 'Produto não encontrado' });
       return sendJSON(res, 200, { products: await getProducts(), novidades: await getNovidades() });
     }
 
@@ -1200,6 +1512,47 @@ async function handleApi(req, res, pathname) {
       await pool.query('UPDATE products SET featured_position = $1 WHERE id = $2', [b.featuredPosition, a.id]);
       await pool.query('UPDATE products SET featured_position = $1 WHERE id = $2', [a.featuredPosition, b.id]);
       return sendJSON(res, 200, { products: await getProducts(), novidades: await getNovidades() });
+    }
+
+    if (pathname === '/api/products/upsell' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
+
+      let updated;
+      if (body.upsell) {
+        const { rows } = await pool.query('SELECT COALESCE(MAX(upsell_position), -1) AS max FROM products WHERE is_upsell = true');
+        updated = await pool.query('UPDATE products SET is_upsell = true, upsell_position = $1 WHERE id = $2', [rows[0].max + 1, body.id]);
+      } else {
+        updated = await pool.query('UPDATE products SET is_upsell = false, upsell_position = NULL WHERE id = $1', [body.id]);
+      }
+      if (!updated.rowCount) return sendJSON(res, 404, { error: 'Produto não encontrado' });
+      return sendJSON(res, 200, { products: await getProducts(), upsell: await getUpsellSuggestions() });
+    }
+
+    if (pathname === '/api/products/upsell/reorder' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      const direction = body.direction === 'up' ? 'up' : body.direction === 'down' ? 'down' : null;
+      if (!body.id || !direction) return sendJSON(res, 400, { error: 'id e direção são obrigatórios' });
+
+      const { rows: upsell } = await pool.query(
+        'SELECT id, upsell_position AS "upsellPosition" FROM products WHERE is_upsell = true ORDER BY upsell_position ASC'
+      );
+      const idx = upsell.findIndex((p) => p.id === body.id);
+      if (idx === -1) return sendJSON(res, 404, { error: 'Produto não está em Leve também' });
+      const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+      if (swapIdx < 0 || swapIdx >= upsell.length) {
+        return sendJSON(res, 200, { products: await getProducts(), upsell: await getUpsellSuggestions() });
+      }
+
+      const a = upsell[idx];
+      const b = upsell[swapIdx];
+      await pool.query('UPDATE products SET upsell_position = $1 WHERE id = $2', [b.upsellPosition, a.id]);
+      await pool.query('UPDATE products SET upsell_position = $1 WHERE id = $2', [a.upsellPosition, b.id]);
+      return sendJSON(res, 200, { products: await getProducts(), upsell: await getUpsellSuggestions() });
     }
 
     // ------ estoque/variação (tamanho, cor) — isolado do contrato de /api/products ------
@@ -1281,6 +1634,7 @@ async function handleApi(req, res, pathname) {
       try {
         const client = await pool.connect();
         let result;
+        let wasOutOfStock = false;
         try {
           await client.query('BEGIN');
           const current = await client.query('SELECT stock FROM product_variants WHERE id=$1 FOR UPDATE', [body.id]);
@@ -1288,6 +1642,7 @@ async function handleApi(req, res, pathname) {
             await client.query('ROLLBACK');
             return sendJSON(res, 404, { error: 'Variação não encontrada' });
           }
+          wasOutOfStock = current.rows[0].stock <= 0;
           result = await client.query(
             'UPDATE product_variants SET size=$1, color=$2, sku=$3, stock=$4 WHERE id=$5 RETURNING product_id AS "productId"',
             [size, color, sku, stock, body.id]
@@ -1304,6 +1659,7 @@ async function handleApi(req, res, pathname) {
           client.release();
         }
         logActivity(admin, 'variant.update', 'product_variant', body.id, { size, color, stock });
+        if (wasOutOfStock && stock > 0) notifyBackInStock(body.id, requestOrigin(req));
         return sendJSON(res, 200, {
           variants: await getProductVariants(result.rows[0].productId),
           movements: await getInventoryMovements(result.rows[0].productId),
@@ -1562,13 +1918,14 @@ async function handleApi(req, res, pathname) {
       const discount = validateDiscount(body);
       if (discount.error) return sendJSON(res, 400, { error: discount.error });
       const endDate = (body.endDate || '').trim() || null;
+      const firstPurchaseOnly = !!body.firstPurchaseOnly;
 
       const dup = await pool.query('SELECT 1 FROM coupons WHERE code = $1', [code]);
       if (dup.rowCount) return sendJSON(res, 409, { error: 'Já existe um cupom com esse código' });
 
       await pool.query(
-        'INSERT INTO coupons (code, discount_type, discount_value, end_date) VALUES ($1,$2,$3,$4)',
-        [code, discount.type, discount.value, endDate]
+        'INSERT INTO coupons (code, discount_type, discount_value, end_date, first_purchase_only) VALUES ($1,$2,$3,$4,$5)',
+        [code, discount.type, discount.value, endDate, firstPurchaseOnly]
       );
       logActivity(admin, 'coupon.create', 'coupon', code, null);
       return sendJSON(res, 201, { coupons: await getCoupons() });
@@ -1583,10 +1940,11 @@ async function handleApi(req, res, pathname) {
       const discount = validateDiscount(body);
       if (discount.error) return sendJSON(res, 400, { error: discount.error });
       const endDate = (body.endDate || '').trim() || null;
+      const firstPurchaseOnly = !!body.firstPurchaseOnly;
 
       const { rowCount } = await pool.query(
-        'UPDATE coupons SET discount_type=$1, discount_value=$2, end_date=$3 WHERE code=$4',
-        [discount.type, discount.value, endDate, code]
+        'UPDATE coupons SET discount_type=$1, discount_value=$2, end_date=$3, first_purchase_only=$4 WHERE code=$5',
+        [discount.type, discount.value, endDate, firstPurchaseOnly, code]
       );
       if (!rowCount) return sendJSON(res, 404, { error: 'Cupom não encontrado' });
       logActivity(admin, 'coupon.update', 'coupon', code, null);
@@ -1674,17 +2032,15 @@ async function handleApi(req, res, pathname) {
       const body = await readJSONBody(req);
       const customerName = (body.customerName || '').trim();
       const customerPhone = (body.customerPhone || '').trim();
+      const customerEmailRaw = (body.customerEmail || '').trim();
+      const customerEmail = /^\S+@\S+\.\S+$/.test(customerEmailRaw) ? customerEmailRaw : null;
       const paymentMethod = (body.paymentMethod || '').trim();
       const deliveryMethod = (body.deliveryMethod || '').trim();
-      const items = Array.isArray(body.items) ? body.items : [];
-      if (!customerName || !customerPhone || !paymentMethod || !deliveryMethod || !items.length) {
+      const rawItems = Array.isArray(body.items) ? body.items : [];
+      if (!customerName || !customerPhone || !paymentMethod || !deliveryMethod || !rawItems.length) {
         return sendJSON(res, 400, { error: 'Dados do pedido incompletos' });
       }
-      const subtotal = Number(body.subtotal) || 0;
-      const discount = Number(body.discount) || 0;
-      const shipping = Number(body.shipping) || 0;
-      const total = Number(body.total) || 0;
-      const couponCode = (body.couponCode || '').trim().toUpperCase() || null;
+      const couponCodeInput = (body.couponCode || '').trim().toUpperCase() || null;
       const address = body.address && typeof body.address === 'object' ? body.address : null;
 
       let customerId = null;
@@ -1693,19 +2049,47 @@ async function handleApi(req, res, pathname) {
         if (payload) customerId = payload.id;
       }
 
+      // Preço, cupom, frete e total nunca são aceitos do navegador — sempre recalculados aqui a
+      // partir do preço/promoção vigentes no banco, com a mesma regra de negócio do front
+      // (assets/js/promo.js), pra um pedido não poder ser fechado com desconto/total desatualizado
+      // ou manipulado no cliente.
+      const [promotions, coupons, shippingRules] = await Promise.all([getPromotions(), getCoupons(), getShippingRules()]);
+      let coupon = PromoEngine.findCoupon(coupons, couponCodeInput);
+
+      // cupom "só 1ª compra": vale pra quem nunca teve um pedido não-cancelado — por
+      // customer_id quando logada, senão pelo telefone informado (visitante). Em vez de
+      // rejeitar o pedido inteiro, só descarta o cupom (mesmo tratamento de "cupom expirou"
+      // que o carrinho já faz) pra não travar o fechamento por causa de um desconto extra.
+      if (coupon && coupon.firstPurchaseOnly) {
+        const priorOrder = customerId
+          ? await pool.query("SELECT 1 FROM orders WHERE customer_id = $1 AND status != 'cancelado' LIMIT 1", [customerId])
+          : await pool.query("SELECT 1 FROM orders WHERE customer_phone = $1 AND status != 'cancelado' LIMIT 1", [customerPhone]);
+        if (priorOrder.rowCount) coupon = null;
+      }
+
       const id = `pedido-${Date.now().toString(36)}`;
       const client = await pool.connect();
+      let items;
+      let subtotal;
+      let discountAmount;
+      let shippingCost;
+      let total;
       try {
         await client.query('BEGIN');
-        for (const item of items) {
+        items = [];
+        for (const item of rawItems) {
           const qty = Math.max(0, Math.floor(Number(item.qty) || 0));
           if (!item.variantId || !qty) {
             await client.query('ROLLBACK');
             return sendJSON(res, 400, { error: `Escolha um tamanho válido para ${item.name || 'o produto'}` });
           }
           const locked = await client.query(
-            `SELECT v.id, v.stock, v.size, p.id AS "productId", p.name
-               FROM product_variants v JOIN products p ON p.id = v.product_id
+            `SELECT v.id, v.stock, v.size, p.id AS "productId", p.name, p.price,
+                    c.name AS category, COALESCE(col.name, '') AS collection
+               FROM product_variants v
+               JOIN products p ON p.id = v.product_id
+               JOIN categories c ON c.id = p.category_id
+               LEFT JOIN collections col ON col.id = p.collection_id
               WHERE v.id = $1 FOR UPDATE OF v`,
             [item.variantId]
           );
@@ -1726,11 +2110,49 @@ async function handleApi(req, res, pathname) {
             variantId: variant.id, type: 'sale', quantity: -qty, stockAfter, orderId: id,
             note: `Reserva do pedido ${id}`,
           });
+
+          const best = variant.price != null && promotions.length
+            ? PromoEngine.bestPromoForProduct({ id: variant.productId, price: variant.price, category: variant.category, collection: variant.collection }, promotions)
+            : null;
+          items.push({
+            id: variant.productId,
+            name: variant.name,
+            qty,
+            price: variant.price == null ? null : (best ? best.price : variant.price),
+            listPrice: variant.price,
+            promoId: best ? best.promo.id : null,
+            variantId: variant.id,
+            variantLabel: typeof item.variantLabel === 'string' ? item.variantLabel : null,
+          });
         }
+
+        const itemCount = items.reduce((sum, it) => sum + (it.price != null ? it.qty : 0), 0);
+        subtotal = items.reduce((sum, it) => sum + (it.price != null ? it.price * it.qty : 0), 0);
+        const discountInfo = PromoEngine.bestDiscount(subtotal, { coupon, itemCount, payment: paymentMethod });
+        discountAmount = discountInfo ? discountInfo.amount : 0;
+
+        shippingCost = 0;
+        if (deliveryMethod === 'Entrega') {
+          const activeRules = shippingRules.filter((r) => r.active);
+          const uf = ((address && address.estado) || '').trim().toUpperCase();
+          const rule = activeRules.find((r) => r.uf.toUpperCase() === uf) || activeRules.find((r) => r.uf === '*');
+          if (rule) {
+            const free = rule.freeAbove != null && subtotal >= Number(rule.freeAbove);
+            shippingCost = free ? 0 : Number(rule.price);
+          }
+        }
+        total = Math.max(0, subtotal - discountAmount) + shippingCost;
+
+        // Sem provedor configurado (caso de hoje — cliente ainda não escolheu gateway), o pedido
+        // nasce 'manual' e o pagamento segue combinado no WhatsApp, como sempre foi. Quando um
+        // gateway for plugado (ver payment-provider.js), passa a nascer 'pending' aqui.
+        const paymentProvider = getActiveProvider();
+        const paymentStatus = paymentProvider ? 'pending' : 'manual';
+
         await client.query(
-          `INSERT INTO orders (id, customer_id, customer_name, customer_phone, items, subtotal, discount, shipping, total, coupon_code, payment_method, delivery_method, address)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-          [id, customerId, customerName, customerPhone, JSON.stringify(items), subtotal, discount, shipping, total, couponCode, paymentMethod, deliveryMethod, address ? JSON.stringify(address) : null]
+          `INSERT INTO orders (id, customer_id, customer_name, customer_phone, email, items, subtotal, discount, shipping, total, coupon_code, payment_method, delivery_method, address, payment_status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+          [id, customerId, customerName, customerPhone, customerEmail, JSON.stringify(items), subtotal, discountAmount, shippingCost, total, coupon ? coupon.code : null, paymentMethod, deliveryMethod, address ? JSON.stringify(address) : null, paymentStatus]
         );
         await client.query('COMMIT');
       } catch (err) {
@@ -1738,6 +2160,20 @@ async function handleApi(req, res, pathname) {
         throw err;
       } finally {
         client.release();
+      }
+
+      if (customerEmail) {
+        await sendEmail({
+          to: customerEmail,
+          subject: `Pedido ${id} confirmado — By NaNa`,
+          html: buildOrderConfirmationHtml({ id, customerName, items, total, deliveryMethod }),
+        });
+        // pedido concluído com esse e-mail: encerra a linha de carrinho abandonado (se houver)
+        // pra não mandar lembrete de uma compra que já aconteceu.
+        pool.query(
+          "UPDATE abandoned_carts SET converted_at = now() WHERE lower(contact_email) = lower($1) AND converted_at IS NULL",
+          [customerEmail]
+        ).catch((err) => console.error('[abandoned-carts] falha ao marcar conversão:', err.message));
       }
 
       return sendJSON(res, 201, { orderId: id });
@@ -1760,14 +2196,20 @@ async function handleApi(req, res, pathname) {
       }
       if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
       const client = await pool.connect();
+      let order;
+      let statusChanged;
       try {
         await client.query('BEGIN');
-        const orderResult = await client.query('SELECT status, items FROM orders WHERE id=$1 FOR UPDATE', [body.id]);
+        const orderResult = await client.query(
+          'SELECT status, items, email, customer_name AS "customerName" FROM orders WHERE id=$1 FOR UPDATE',
+          [body.id]
+        );
         if (!orderResult.rowCount) {
           await client.query('ROLLBACK');
           return sendJSON(res, 404, { error: 'Pedido não encontrado' });
         }
-        const order = orderResult.rows[0];
+        order = orderResult.rows[0];
+        statusChanged = order.status !== status;
         const items = Array.isArray(order.items) ? order.items : [];
         if (order.status !== 'cancelado' && status === 'cancelado') {
           for (const item of items) {
@@ -1811,6 +2253,13 @@ async function handleApi(req, res, pathname) {
         client.release();
       }
       logActivity(admin, 'order.status_update', 'order', body.id, { status });
+      if (statusChanged && order.email) {
+        await sendEmail({
+          to: order.email,
+          subject: `Pedido ${body.id} atualizado — By NaNa`,
+          html: buildOrderStatusHtml({ id: body.id, customerName: order.customerName, status }),
+        });
+      }
       return sendJSON(res, 200, { orders: await getOrders() });
     }
 
@@ -1930,6 +2379,57 @@ async function handleApi(req, res, pathname) {
         return sendJSON(res, 401, { error: 'Senha atual incorreta' });
       }
       await pool.query('UPDATE customers SET password_hash = $1 WHERE id = $2', [hashPassword(newPassword), customerId]);
+      return sendJSON(res, 200, { ok: true });
+    }
+
+    // "Esqueci minha senha": resposta sempre genérica (não revela se o e-mail existe), token
+    // aleatório com validade curta gravado no próprio cliente — sem tabela extra.
+    if (pathname === '/api/customers/forgot-password' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const email = (body.email || '').trim().toLowerCase();
+      if (email && loginRateLimited(req, `forgot:${email}`)) {
+        return sendJSON(res, 429, { error: 'Muitas tentativas. Aguarde alguns minutos e tente novamente' });
+      }
+      if (email) {
+        const { rows } = await pool.query(
+          'SELECT id, first_name AS "firstName" FROM customers WHERE lower(email) = $1',
+          [email]
+        );
+        const customer = rows[0];
+        if (customer) {
+          const token = crypto.randomBytes(32).toString('hex');
+          await pool.query(
+            `UPDATE customers SET reset_token = $1, reset_token_expires = now() + interval '1 hour' WHERE id = $2`,
+            [token, customer.id]
+          );
+          const link = `${requestOrigin(req)}/redefinir-senha.html?token=${token}`;
+          await sendEmail({
+            to: email,
+            subject: 'Redefinição de senha — By NaNa',
+            html: `<p>Olá, ${customer.firstName}!</p><p>Clique no link abaixo para definir uma nova senha. Ele expira em 1 hora.</p><p><a href="${link}">${link}</a></p><p>Se você não pediu isso, ignore este e-mail.</p>`,
+          });
+        }
+      }
+      return sendJSON(res, 200, { ok: true });
+    }
+
+    if (pathname === '/api/customers/reset-password' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const token = (body.token || '').trim();
+      const newPassword = body.newPassword || '';
+      if (!token) return sendJSON(res, 400, { error: 'Token inválido' });
+      if (newPassword.length < 6) return sendJSON(res, 400, { error: 'A nova senha deve ter ao menos 6 caracteres' });
+
+      const { rows } = await pool.query(
+        `SELECT id FROM customers WHERE reset_token = $1 AND reset_token_expires > now()`,
+        [token]
+      );
+      if (!rows[0]) return sendJSON(res, 400, { error: 'Link inválido ou expirado. Solicite a redefinição novamente.' });
+
+      await pool.query(
+        'UPDATE customers SET password_hash = $1, reset_token = NULL, reset_token_expires = NULL WHERE id = $2',
+        [hashPassword(newPassword), rows[0].id]
+      );
       return sendJSON(res, 200, { ok: true });
     }
 
@@ -2119,10 +2619,12 @@ async function handleApi(req, res, pathname) {
       if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
       const productIds = Array.isArray(body.productIds) ? body.productIds.filter((id) => typeof id === 'string' && id) : [];
 
-      for (const productId of productIds) {
+      if (productIds.length) {
         await pool.query(
-          'INSERT INTO customer_favorites (customer_id, product_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
-          [customerId, productId]
+          `INSERT INTO customer_favorites (customer_id, product_id)
+           SELECT $1, unnest($2::text[])
+           ON CONFLICT DO NOTHING`,
+          [customerId, productIds]
         );
       }
       return sendJSON(res, 200, { favorites: await getCustomerFavorites(customerId) });
@@ -2242,12 +2744,8 @@ async function handleApi(req, res, pathname) {
 
       const a = all[idx];
       const b = all[swapIdx];
-      const [{ position: posA }, { position: posB }] = await Promise.all([
-        pool.query('SELECT position FROM stories WHERE id = $1', [a.id]).then((r) => r.rows[0]),
-        pool.query('SELECT position FROM stories WHERE id = $1', [b.id]).then((r) => r.rows[0]),
-      ]);
-      await pool.query('UPDATE stories SET position = $1 WHERE id = $2', [posB, a.id]);
-      await pool.query('UPDATE stories SET position = $1 WHERE id = $2', [posA, b.id]);
+      await pool.query('UPDATE stories SET position = $1 WHERE id = $2', [b.position, a.id]);
+      await pool.query('UPDATE stories SET position = $1 WHERE id = $2', [a.position, b.id]);
       return sendJSON(res, 200, { stories: await getStories(false) });
     }
 
@@ -2336,18 +2834,36 @@ function serveNotFound(res) {
   });
 }
 
+function decodePath(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch (err) {
+    if (err instanceof URIError) return null;
+    throw err;
+  }
+}
+
+function serveBadRequest(res) {
+  res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' });
+  res.end('URL inválida');
+}
+
 // Só o que o front realmente precisa buscar por HTTP: as páginas HTML públicas e tudo
 // dentro de assets/. Tudo mais no repo (serve.js, .env, db/, node_modules/, package.json...)
 // nunca deve ser servido como arquivo estático — allowlist em vez de bloquear só ".."
 // porque um arquivo sensível (ex.: .env) pode estar dentro do root sem nenhum ".." envolvido.
-const PUBLIC_STATIC_FILES = new Set(['/index.html', '/admin.html', '/produto.html', '/404.html']);
+const PUBLIC_STATIC_FILES = new Set(['/index.html', '/admin.html', '/produto.html', '/404.html', '/redefinir-senha.html']);
 
 function isPublicStaticPath(filePath) {
   return PUBLIC_STATIC_FILES.has(filePath) || filePath.startsWith('/assets/');
 }
 
 function serveStatic(req, res, pathname) {
-  let filePath = decodeURIComponent(pathname);
+  let filePath = decodePath(pathname);
+  if (filePath === null) {
+    serveBadRequest(res);
+    return;
+  }
 
   // formas canônicas: uma única URL "de verdade" por página, sem duplicar / vs /index.html
   if (filePath === '/index.html') {
@@ -2428,18 +2944,56 @@ async function serveProductPage(req, res, id) {
     const origin = requestOrigin(req);
     const title = `${product.name} — By NaNa`;
     const description = (product.desc || `Confira ${product.name} na By NaNa.`).slice(0, 160);
+    const canonical = `${origin}/produto/${product.id}`;
+    const jsonLd = buildProductJsonLd(product, { origin, canonical });
     const html = template
       .replace(/<!--PRODUCT_TITLE-->/g, escapeHtml(title))
       .replace(/<!--PRODUCT_DESCRIPTION-->/g, escapeHtml(description))
       .replace(/<!--PRODUCT_OG_IMAGE-->/g, escapeHtml(`${origin}/${product.img}`))
-      .replace(/<!--PRODUCT_CANONICAL-->/g, escapeHtml(`${origin}/produto/${product.id}`));
+      .replace(/<!--PRODUCT_CANONICAL-->/g, escapeHtml(canonical))
+      // JSON-LD não passa por escapeHtml (quebraria a sintaxe JSON); JSON.stringify já escapa
+      // aspas, e "<" vira "<" abaixo pra um valor de produto nunca poder fechar a tag <script>.
+      .replace('<!--PRODUCT_JSONLD-->', jsonLd.replace(/</g, '\\u003c'));
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
     res.end(html);
   });
 }
 
+// CSP restrita a 'self' + só os domínios de terceiro que o site realmente usa (Google Fonts,
+// GA4, Meta Pixel — os dois últimos só são efetivamente chamados quando configurados, ver
+// /api/public-config, mas ficam liberados aqui desde já pra não exigir mexer nisso de novo
+// quando a cliente criar as contas). script-src sem 'unsafe-inline': todo <script> do site é
+// arquivo externo (ver redefinir-senha.js) — só style-src precisa de 'unsafe-inline', porque
+// o layout usa atributos style="" inline em alguns pontos (posições de callout, JS que anima
+// elementos). frame-ancestors 'none' bloqueia o site inteiro (inclusive /admin) de ser
+// carregado dentro de um <iframe> de outro site — a defesa moderna contra clickjacking.
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self' https://www.googletagmanager.com https://connect.facebook.net",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com",
+  "img-src 'self' data: https://www.facebook.com https://www.google-analytics.com",
+  "media-src 'self' data:",
+  "connect-src 'self' https://www.google-analytics.com https://*.google-analytics.com https://www.facebook.com https://connect.facebook.net",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join('; ');
+
+function applySecurityHeaders(res) {
+  res.setHeader('Content-Security-Policy', CSP);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'geolocation=(), camera=(), microphone=(), payment=()');
+  // Browsers só levam HSTS a sério quando a resposta veio por HTTPS — inofensivo em dev/HTTP local.
+  res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+}
+
 http
   .createServer((req, res) => {
+    applySecurityHeaders(res);
     const pathname = req.url.split('?')[0];
     if (pathname.startsWith('/api/')) {
       handleApi(req, res, pathname);
@@ -2458,10 +3012,46 @@ http
       return;
     }
     if (pathname.startsWith('/produto/')) {
-      const id = decodeURIComponent(pathname.slice('/produto/'.length));
+      const id = decodePath(pathname.slice('/produto/'.length));
+      if (id === null) {
+        serveBadRequest(res);
+        return;
+      }
       serveProductPage(req, res, id);
       return;
     }
     serveStatic(req, res, pathname);
   })
   .listen(port, host, () => console.log(`Serving on http://${host}:${port}`));
+
+// ---------- lembrete de carrinho abandonado (varredura periódica, sem cupom) ----------
+// Processo único e sempre ativo (sem worker/cron externo) — um setInterval aqui já cobre o
+// caso de uso. SITE_URL precisa estar configurada em produção pro link do e-mail apontar pro
+// domínio certo (sem ela, cai num link relativo que só funciona clicado dentro do próprio site).
+const ABANDONED_CART_DELAY_MS = 2 * 60 * 60 * 1000; // 2h sem atividade
+const ABANDONED_CART_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
+
+async function sweepAbandonedCarts() {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, contact_email, customer_name, items, subtotal FROM abandoned_carts
+       WHERE reminded_at IS NULL AND converted_at IS NULL AND updated_at < now() - make_interval(secs => $1)
+       ORDER BY updated_at ASC LIMIT 50`,
+      [ABANDONED_CART_DELAY_MS / 1000]
+    );
+    if (!rows.length) return;
+    const origin = (process.env.SITE_URL || '').replace(/\/$/, '');
+    for (const row of rows) {
+      await sendEmail({
+        to: row.contact_email,
+        subject: 'Você esqueceu itens na sua sacola — By NaNa',
+        html: buildAbandonedCartHtml({ customerName: row.customer_name, items: row.items, subtotal: row.subtotal, origin }),
+      });
+      await pool.query('UPDATE abandoned_carts SET reminded_at = now() WHERE id = $1', [row.id]);
+    }
+  } catch (err) {
+    console.error('[abandoned-carts] falha na varredura:', err.message);
+  }
+}
+
+setInterval(sweepAbandonedCarts, ABANDONED_CART_SWEEP_INTERVAL_MS);

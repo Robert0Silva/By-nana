@@ -13,6 +13,7 @@
 <meta property="og:image" content="<!--PRODUCT_OG_IMAGE-->" />
 <meta property="og:url" content="<!--PRODUCT_CANONICAL-->" />
 <meta name="twitter:card" content="summary_large_image" />
+<script type="application/ld+json"><!--PRODUCT_JSONLD--></script>
 <link rel="icon" href="/assets/img/processed/logo.png" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -97,8 +98,12 @@
 
       <div class="pdp-layout" id="pdpLayout">
         <div class="pdp-gallery">
-          <div class="pdp-gallery-main">
+          <div class="pdp-gallery-main" id="pdpGalleryMain">
             <img id="pdpMainImg" src="" alt="" />
+            <div class="pdp-zoom-pane" id="pdpZoomPane" aria-hidden="true"></div>
+            <button type="button" class="pdp-zoom-hint" id="pdpZoomHint" aria-label="Ampliar imagem">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6M8 11h6"/></svg>
+            </button>
           </div>
           <div class="pdp-gallery-thumbs" id="pdpThumbs"><!-- gerado via JS --></div>
         </div>
@@ -112,6 +117,7 @@
             <span class="discount-badge" id="pdpDiscountBadge" hidden></span>
             <span class="low-stock-badge" id="pdpLowStock" hidden>Últimas unidades</span>
           </div>
+          <p class="installments" id="pdpInstallments" hidden></p>
           <div class="pdp-rating-row" id="pdpRatingRow" hidden>
             <span class="pdp-rating-stars" id="pdpRatingStars" aria-hidden="true"></span>
             <span class="pdp-rating-count" id="pdpRatingCount"></span>
@@ -119,6 +125,15 @@
           <div class="color-dot-row" id="pdpColorDots"></div>
           <p class="pdp-desc" id="pdpDesc"></p>
           <div class="variant-picker" id="pdpVariantPicker" hidden></div>
+          <div class="pdp-restock" id="pdpRestock" hidden>
+            <button type="button" class="text-link" id="pdpRestockToggle">Não achou seu tamanho? Avise-me quando chegar</button>
+            <form class="pdp-restock-form" id="pdpRestockForm" hidden>
+              <select id="pdpRestockVariant" aria-label="Tamanho/cor esgotado"></select>
+              <input type="text" id="pdpRestockContact" placeholder="Seu e-mail ou WhatsApp" aria-label="Seu e-mail ou WhatsApp" />
+              <button type="submit" class="btn btn-ghost">Avisar</button>
+            </form>
+            <p class="pdp-restock-msg" id="pdpRestockMsg" hidden></p>
+          </div>
           <div class="product-actions">
             <button class="add-btn" id="pdpAdd">Adicionar à sacola</button>
             <a class="ask-btn" id="pdpAsk" target="_blank" rel="noopener" aria-label="Perguntar no WhatsApp">
@@ -141,6 +156,11 @@
       <div class="pdp-related" id="pdpRelated" hidden>
         <p class="pdp-related-title">Combine também</p>
         <div class="product-grid" id="pdpRelatedGrid"><!-- gerado via JS --></div>
+      </div>
+
+      <div class="pdp-related" id="recentlyViewedSection" hidden>
+        <p class="pdp-related-title">Vistos recentemente</p>
+        <div class="product-grid" id="recentlyViewedGrid"><!-- gerado via JS a partir do histórico local --></div>
       </div>
 
       <div class="pdp-reviews">
@@ -195,7 +215,13 @@
     </button>
   </div>
   <div class="bag-scroll">
+    <div class="bag-shipping-progress" id="bagShippingProgress" hidden>
+      <p class="bag-shipping-progress-text" id="bagShippingProgressText"></p>
+      <div class="bag-shipping-progress-track"><span id="bagShippingProgressFill"></span></div>
+    </div>
     <div class="bag-items" id="bagItems"><!-- gerado via JS --></div>
+
+    <div class="bag-upsell" id="bagUpsell" hidden><!-- gerado via JS --></div>
 
     <div class="bag-details" id="bagDetails" hidden>
       <div class="bag-field-group">
@@ -203,6 +229,7 @@
         <div class="bag-contact-fields">
           <label>Nome<input type="text" id="bagName" autocomplete="name" placeholder="Seu nome" /></label>
           <label>Telefone<input type="tel" id="bagPhone" autocomplete="tel" placeholder="(31) 90000-0000" /></label>
+          <label>E-mail<input type="email" id="bagEmail" autocomplete="email" placeholder="seu@email.com" /></label>
         </div>
       </div>
 
@@ -300,7 +327,19 @@
       <p class="account-form-msg" id="loginMsg" hidden></p>
       <button type="submit" class="btn btn-primary btn-block">Entrar</button>
     </form>
+    <p class="account-switch"><button type="button" class="account-link" id="goForgot">Esqueci minha senha</button></p>
     <p class="account-switch">Não tem conta? <button type="button" class="account-link" id="goSignup">Cadastre-se</button></p>
+  </div>
+
+  <div class="account-view" id="accountViewForgot" hidden>
+    <h3>Esqueci minha senha</h3>
+    <p class="account-sub">Informe seu e-mail e enviaremos um link para redefinir a senha.</p>
+    <form class="account-form" id="forgotForm">
+      <label>E-mail<input type="email" id="forgotEmail" required autocomplete="email" /></label>
+      <p class="account-form-msg" id="forgotMsg" hidden></p>
+      <button type="submit" class="btn btn-primary btn-block">Enviar link</button>
+    </form>
+    <p class="account-switch"><button type="button" class="account-link" id="goLoginFromForgot">Voltar para o login</button></p>
   </div>
 
   <div class="account-view" id="accountViewSignup" hidden>
@@ -346,6 +385,7 @@
 
   <div class="account-view" id="accountViewProfile" hidden>
     <h3>Olá, <span id="profileName"></span>!</h3>
+    <p class="welcome-coupon-msg" id="welcomeCouponMsg" hidden>🎉 Use o cupom <strong>BEMVINDA10</strong> e ganhe 10% na sua primeira compra!</p>
 
     <nav class="profile-subnav" id="profileSubnav">
       <button type="button" class="profile-subnav-btn is-active" data-ptab="dados">Meus dados</button>
@@ -446,6 +486,35 @@
   <button class="btn btn-primary" id="mobileBarBtn">Ver sacola</button>
 </div>
 
+<div class="pdp-lightbox-overlay" id="pdpLightboxOverlay"></div>
+<div class="pdp-lightbox" id="pdpLightbox" role="dialog" aria-modal="true" aria-label="Galeria de imagens do produto">
+  <button class="icon-btn pdp-lightbox-close" id="pdpLightboxClose" aria-label="Fechar">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 5l14 14M19 5 5 19"/></svg>
+  </button>
+  <button type="button" class="pdp-lightbox-nav pdp-lightbox-prev" id="pdpLightboxPrev" aria-label="Imagem anterior">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
+  </button>
+  <div class="pdp-lightbox-stage">
+    <img id="pdpLightboxImg" src="" alt="" />
+  </div>
+  <button type="button" class="pdp-lightbox-nav pdp-lightbox-next" id="pdpLightboxNext" aria-label="Próxima imagem">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>
+  </button>
+  <span class="pdp-lightbox-counter" id="pdpLightboxCounter"></span>
+</div>
+
+<div class="pdp-buy-bar" id="pdpBuyBar" hidden>
+  <div class="pdp-buy-bar-info">
+    <img id="pdpBuyBarImg" src="" alt="" />
+    <div class="pdp-buy-bar-text">
+      <span class="pdp-buy-bar-name" id="pdpBuyBarName"></span>
+      <span class="pdp-buy-bar-price" id="pdpBuyBarPrice"></span>
+    </div>
+  </div>
+  <button class="add-btn" id="pdpBuyBarAdd">Adicionar à sacola</button>
+</div>
+
+<script src="/assets/js/analytics.js"></script>
 <script src="/assets/js/promo.js"></script>
 <script src="/assets/js/main.js"></script>
 </body>

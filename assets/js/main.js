@@ -15,9 +15,17 @@
   let CATEGORY_CONTENT = [];
   let STORIES = [];
   let NOVIDADES = [];
+  let UPSELL_PRODUCTS = [];
 
   const money = (v) =>
     v == null ? 'Sob consulta' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+  // parcelamento no cartão exibido junto ao preço — a loja parcela em até 6x sem juros
+  // (combinado no WhatsApp no fechamento do pedido; aqui é só a exibição informativa).
+  const INSTALLMENT_COUNT = 6;
+  function installmentText(price) {
+    return price == null ? '' : `ou ${INSTALLMENT_COUNT}x de ${money(price / INSTALLMENT_COUNT)} sem juros`;
+  }
 
   // avaliações trazem texto livre digitado por clientes (nome de conta, comentário) — precisa
   // escapar antes de ir pro innerHTML, ou vira XSS armazenado visível pra qualquer visitante.
@@ -218,12 +226,131 @@
     return { applicable: true, cost: free ? 0 : Number(rule.price), label: rule.label || '', free };
   }
 
+  // Antes de a cliente escolher UF (ou de escolher "Entrega"), usa o menor valor de freeAbove
+  // entre as regras ativas como estimativa — assim que o CEP/UF é preenchido, passa a usar a
+  // regra específica daquela UF (ou o fallback '*'), que pode ser diferente da estimativa inicial.
+  function freeShippingInfo(keys) {
+    const active = SHIPPING_RULES.filter((r) => r.active && r.freeAbove != null);
+    if (!active.length) return null;
+    const uf = (address.estado || '').trim().toUpperCase();
+    const specific = selectedDelivery === 'Entrega' && uf
+      ? active.find((r) => r.uf.toUpperCase() === uf) || active.find((r) => r.uf === '*')
+      : null;
+    const target = Number(specific ? specific.freeAbove : Math.min(...active.map((r) => Number(r.freeAbove))));
+    if (!Number.isFinite(target) || target <= 0) return null;
+    const subtotal = cartSubtotal(keys);
+    return { target, subtotal, remaining: Math.max(0, target - subtotal), reached: subtotal >= target };
+  }
+
   const waLink = (text) => `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`;
 
   // basic greeting links used across the page
   document.querySelectorAll('#quickWhats, #ctaWhats, #footerWhats, #floatWhats').forEach((el) => {
     el.href = waLink('Olá! Vim pelo site da By NaNa e queria saber mais sobre as peças 💛');
   });
+
+  // ---------- newsletter (captura de contato no rodapé) ----------
+  const newsletterForm = document.getElementById('newsletterForm');
+  if (newsletterForm) {
+    const newsletterInput = document.getElementById('newsletterInput');
+    const newsletterMsg = document.getElementById('newsletterMsg');
+    newsletterForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const raw = newsletterInput.value.trim();
+      const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw);
+      const digits = raw.replace(/\D/g, '');
+      const channel = isEmail ? 'email' : digits.length >= 10 ? 'whatsapp' : null;
+      newsletterMsg.hidden = false;
+      if (!channel) {
+        newsletterMsg.textContent = 'Informe um e-mail ou WhatsApp válido.';
+        newsletterMsg.className = 'newsletter-msg is-error';
+        return;
+      }
+      const submitBtn = newsletterForm.querySelector('button');
+      submitBtn.disabled = true;
+      try {
+        const res = await fetch('/api/newsletter', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contact: channel === 'whatsapp' ? digits : raw, channel }),
+        });
+        if (!res.ok) throw new Error();
+        newsletterMsg.textContent = 'Prontinho! Use o cupom BEMVINDA10 e ganhe 10% na sua primeira compra 💛';
+        newsletterMsg.className = 'newsletter-msg is-ok';
+        newsletterForm.reset();
+        window.byNanaAnalytics?.trackLead('newsletter_footer');
+      } catch {
+        newsletterMsg.textContent = 'Não deu pra cadastrar agora. Tenta de novo em instantes.';
+        newsletterMsg.className = 'newsletter-msg is-error';
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+  }
+
+  // ---------- "avise-me quando chegar" (PDP, variação esgotada) ----------
+  const pdpRestockBlock = document.getElementById('pdpRestock');
+  const pdpRestockToggle = document.getElementById('pdpRestockToggle');
+  const pdpRestockForm = document.getElementById('pdpRestockForm');
+  const pdpRestockSelect = document.getElementById('pdpRestockVariant');
+  const pdpRestockContact = document.getElementById('pdpRestockContact');
+  const pdpRestockMsg = document.getElementById('pdpRestockMsg');
+
+  // Chamado a cada render da PDP (initProductPage) com as variações esgotadas do produto —
+  // o <select> é refeito do zero pra nunca ficar com opções de um produto anterior.
+  function setupRestockNotify(soldOutVariants) {
+    if (!pdpRestockBlock) return;
+    pdpRestockBlock.hidden = soldOutVariants.length === 0;
+    pdpRestockForm.hidden = true;
+    pdpRestockMsg.hidden = true;
+    pdpRestockSelect.innerHTML = soldOutVariants
+      .map((v) => `<option value="${v.id}">${escapeHtml(variantLabel(v))}</option>`)
+      .join('');
+  }
+
+  if (pdpRestockToggle) {
+    pdpRestockToggle.addEventListener('click', () => {
+      pdpRestockForm.hidden = !pdpRestockForm.hidden;
+      pdpRestockMsg.hidden = true;
+    });
+  }
+
+  if (pdpRestockForm) {
+    pdpRestockForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const variantId = pdpRestockSelect.value;
+      const raw = pdpRestockContact.value.trim();
+      const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw);
+      const digits = raw.replace(/\D/g, '');
+      const channel = isEmail ? 'email' : digits.length >= 10 ? 'whatsapp' : null;
+      pdpRestockMsg.hidden = false;
+      if (!variantId || !channel) {
+        pdpRestockMsg.textContent = 'Informe um e-mail ou WhatsApp válido.';
+        pdpRestockMsg.className = 'pdp-restock-msg is-error';
+        return;
+      }
+      const submitBtn = pdpRestockForm.querySelector('button[type="submit"]');
+      submitBtn.disabled = true;
+      try {
+        const res = await fetch('/api/stock-notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ variantId, contact: channel === 'whatsapp' ? digits : raw, channel }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Não foi possível registrar o aviso.');
+        pdpRestockMsg.textContent = 'Prontinho! Avisamos você assim que chegar. 💛';
+        pdpRestockMsg.className = 'pdp-restock-msg is-ok';
+        pdpRestockForm.reset();
+        pdpRestockForm.hidden = true;
+      } catch (err) {
+        pdpRestockMsg.textContent = err.message;
+        pdpRestockMsg.className = 'pdp-restock-msg is-error';
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+  }
 
   // ---------- cart (sacola) ----------
   const CART_KEY = 'bynana_cart';
@@ -363,6 +490,7 @@
         <h3 class="product-name">${escapeHtml(p.name)}</h3>
         ${p.rating ? `<div class="pdp-rating-row product-rating-row"><span class="pdp-rating-stars">${starsHtml(p.rating)}</span><span class="pdp-rating-count">${p.rating.toFixed(1)} (${p.reviewCount})</span></div>` : ''}
         <div class="product-price-row">${priceHtml}</div>
+        ${p.price != null ? `<p class="installments">${installmentText(price)}</p>` : ''}
         ${colorDotsHtml(variants)}
         ${variantHtml}
         <div class="product-actions">
@@ -374,6 +502,42 @@
       </div>
     `;
     return div;
+  }
+
+  // ---------- vistos recentemente (histórico local, sem conta necessária) ----------
+  const RECENT_KEY = 'bynana_recent';
+  const RECENT_MAX = 10;
+
+  function trackRecentlyViewed(id) {
+    let ids = [];
+    try {
+      ids = JSON.parse(localStorage.getItem(RECENT_KEY)) || [];
+    } catch {
+      ids = [];
+    }
+    ids = [id, ...ids.filter((x) => x !== id)].slice(0, RECENT_MAX);
+    localStorage.setItem(RECENT_KEY, JSON.stringify(ids));
+  }
+
+  // excludeId: na página de produto, não mostra o próprio produto na lista.
+  function renderRecentlyViewed(excludeId) {
+    const section = document.getElementById('recentlyViewedSection');
+    const grid = document.getElementById('recentlyViewedGrid');
+    if (!section || !grid) return;
+    let ids = [];
+    try {
+      ids = JSON.parse(localStorage.getItem(RECENT_KEY)) || [];
+    } catch {
+      ids = [];
+    }
+    const items = ids
+      .filter((id) => id !== excludeId)
+      .map((id) => PRODUCTS.find((p) => p.id === id))
+      .filter(Boolean)
+      .slice(0, 8);
+    section.hidden = items.length === 0;
+    grid.innerHTML = '';
+    items.forEach((p) => grid.appendChild(productCard(p)));
   }
 
   function matchesSearch(p, term) {
@@ -705,7 +869,11 @@
   });
 
   const bagCount = document.getElementById('bagCount');
+  const bagShippingProgressEl = document.getElementById('bagShippingProgress');
+  const bagShippingProgressTextEl = document.getElementById('bagShippingProgressText');
+  const bagShippingProgressFillEl = document.getElementById('bagShippingProgressFill');
   const bagItemsEl = document.getElementById('bagItems');
+  const bagUpsellEl = document.getElementById('bagUpsell');
   const bagTotalEl = document.getElementById('bagTotal');
   const bagSubtotalRow = document.getElementById('bagSubtotalRow');
   const bagSubtotalEl = document.getElementById('bagSubtotal');
@@ -838,6 +1006,8 @@
   function validateCheckout() {
     if (!bagNameInput.value.trim()) return 'Informe seu nome.';
     if (!bagPhoneInput.value.trim()) return 'Informe seu telefone.';
+    const email = bagEmailInput.value.trim();
+    if (email && !/^\S+@\S+\.\S+$/.test(email)) return 'Informe um e-mail válido (ou deixe em branco).';
     if (!selectedPayment) return 'Selecione a forma de pagamento.';
     if (!selectedDelivery) return 'Selecione retirada em loja ou entrega.';
     if (selectedDelivery === 'Entrega') {
@@ -911,6 +1081,7 @@
     const payload = {
       customerName: bagNameInput.value.trim(),
       customerPhone: bagPhoneInput.value.trim(),
+      customerEmail: bagEmailInput.value.trim(),
       items,
       subtotal: cartSubtotal(keys),
       discount: discount ? discount.amount : 0,
@@ -969,7 +1140,15 @@
     bagFormError.hidden = true;
     checkoutBtn.classList.add('is-loading');
     checkoutBtn.textContent = 'Enviando...';
-    persistOrder(ids).then(() => {
+    const checkoutTotal = cartFinalTotal(ids) + shippingQuote(ids).cost;
+    window.byNanaAnalytics?.trackBeginCheckout(checkoutTotal);
+    const checkoutItems = ids.map((key) => {
+      const entry = cart[key];
+      const p = entry ? PRODUCTS.find((x) => x.id === entry.productId) : null;
+      return p ? { id: p.id, name: p.name, qty: entry.qty, price: getEffective(p).price } : null;
+    }).filter(Boolean);
+    persistOrder(ids).then((orderId) => {
+      window.byNanaAnalytics?.trackPurchase(orderId, checkoutTotal, checkoutItems);
       window.open(waLink(buildOrderMessage(ids)), '_blank', 'noopener');
       checkoutBtn.classList.remove('is-loading');
       checkoutBtn.textContent = 'Finalizar no WhatsApp';
@@ -1035,6 +1214,17 @@
     const keys = Object.keys(cart);
     const totalQty = keys.reduce((sum, key) => sum + cart[key].qty, 0);
     bagCount.textContent = totalQty;
+
+    const shipInfo = totalQty > 0 ? freeShippingInfo(keys) : null;
+    bagShippingProgressEl.hidden = !shipInfo;
+    if (shipInfo) {
+      const pct = Math.min(100, (shipInfo.subtotal / shipInfo.target) * 100);
+      bagShippingProgressFillEl.style.width = `${pct}%`;
+      bagShippingProgressEl.classList.toggle('is-complete', shipInfo.reached);
+      bagShippingProgressTextEl.innerHTML = shipInfo.reached
+        ? '🎉 Você garantiu <strong>frete grátis</strong>!'
+        : `Faltam <strong>${money(shipInfo.remaining)}</strong> para o frete grátis`;
+    }
 
     if (totalQty === 0) {
       mobileBar.classList.remove('is-visible');
@@ -1104,6 +1294,47 @@
 
     showCouponStatus();
     syncAddButtons();
+    renderCartUpsell(keys);
+  }
+
+  // "Leve também": sugestões de menor ticket, não relacionadas ao produto e sim à sacola —
+  // exclui o que já está no carrinho e o que está esgotado; nunca mostra se a sacola está vazia.
+  function renderCartUpsell(keys) {
+    if (!bagUpsellEl) return;
+    if (keys.length === 0) {
+      bagUpsellEl.hidden = true;
+      bagUpsellEl.innerHTML = '';
+      return;
+    }
+    const cartProductIds = new Set(keys.map((key) => cart[key].productId));
+    const candidates = UPSELL_PRODUCTS.filter((p) => !cartProductIds.has(p.id) && !isProductSoldOut(p)).slice(0, 4);
+    if (!candidates.length) {
+      bagUpsellEl.hidden = true;
+      bagUpsellEl.innerHTML = '';
+      return;
+    }
+    bagUpsellEl.hidden = false;
+    bagUpsellEl.innerHTML = `
+      <span class="bag-upsell-title">Leve também</span>
+      <div class="bag-upsell-scroll">
+        ${candidates
+          .map((p) => {
+            const variants = p.variants || [];
+            const defaultVariant = variants.filter((v) => v.stock > 0)[0] || null;
+            const { price } = getEffective(p);
+            const priceLabel = p.price == null ? 'Sob consulta' : money(price);
+            return `
+              <div class="bag-upsell-item">
+                <a href="/produto/${p.id}" class="bag-upsell-media"><img src="${escapeHtml(p.img)}" alt="${escapeHtml(p.name)}" loading="lazy" /></a>
+                <span class="bag-upsell-name">${escapeHtml(p.name)}</span>
+                <span class="bag-upsell-price">${priceLabel}</span>
+                <button type="button" class="bag-upsell-add" data-id="${p.id}" ${defaultVariant ? `data-variant-id="${defaultVariant.id}"` : ''} aria-label="Adicionar ${escapeHtml(p.name)} à sacola">+</button>
+              </div>
+            `;
+          })
+          .join('')}
+      </div>
+    `;
   }
 
   const cartAnnouncer = document.getElementById('cartAnnouncer');
@@ -1113,7 +1344,21 @@
 
   function addToCart(productId, variantId) {
     const product = PRODUCTS.find((p) => p.id === productId);
-    const variant = product && variantId ? (product.variants || []).find((v) => v.id === variantId) : null;
+    if (!product) return false;
+
+    // produto sem nenhuma variação cadastrada não tem tamanho pra escolher — adiciona direto,
+    // sem checagem de estoque por variação (ver cartKey acima).
+    if (!product.hasVariants) {
+      const key = cartKey(productId, null);
+      if (cart[key]) cart[key].qty += 1;
+      else cart[key] = { productId, variantId: null, qty: 1 };
+      saveCart();
+      announce(`${product.name} adicionada à sacola.`);
+      window.byNanaAnalytics?.trackAddToCart(product, null);
+      return true;
+    }
+
+    const variant = variantId ? (product.variants || []).find((v) => v.id === variantId) : null;
     if (!variant) {
       announce('Escolha um tamanho disponível.');
       return false;
@@ -1126,7 +1371,8 @@
     if (cart[key]) cart[key].qty += 1;
     else cart[key] = { productId, variantId: variantId || null, qty: 1 };
     saveCart();
-    announce(product ? `${product.name} adicionada à sacola.` : 'Peça adicionada à sacola.');
+    announce(`${product.name} adicionada à sacola.`);
+    window.byNanaAnalytics?.trackAddToCart(product, variant);
     return true;
   }
 
@@ -1149,12 +1395,27 @@
         addBtnForChip.dataset.variantId = chip.dataset.variantId;
         syncAddButton(addBtnForChip);
       }
+      if (picker.id === 'pdpVariantPicker') {
+        const buyBarAdd = document.getElementById('pdpBuyBarAdd');
+        if (buyBarAdd) {
+          buyBarAdd.dataset.variantId = chip.dataset.variantId;
+          syncAddButton(buyBarAdd);
+        }
+      }
       return;
     }
     const addBtn = e.target.closest('.add-btn');
     if (addBtn) {
       if (addBtn.disabled) return;
       if (addToCart(addBtn.dataset.id, addBtn.dataset.variantId || null)) openBag();
+      return;
+    }
+    // botão "+" da faixa "Leve também" dentro da própria sacola — não usa .add-btn de propósito:
+    // syncAddButtons() reescreveria o texto do botão pro padrão "Adicionar à sacola"/"Adicionado ✓",
+    // que não cabe no card compacto. O item some da faixa assim que entra na sacola (renderCart).
+    const upsellAddBtn = e.target.closest('.bag-upsell-add');
+    if (upsellAddBtn) {
+      addToCart(upsellAddBtn.dataset.id, upsellAddBtn.dataset.variantId || null);
       return;
     }
     const qtyBtn = e.target.closest('.qty-btn');
@@ -1399,15 +1660,41 @@
   const accountOverlay = document.getElementById('accountOverlay');
   const accountModal = document.getElementById('accountModal');
   const accountViewLogin = document.getElementById('accountViewLogin');
+  const accountViewForgot = document.getElementById('accountViewForgot');
   const accountViewSignup = document.getElementById('accountViewSignup');
   const accountViewProfile = document.getElementById('accountViewProfile');
   const loginForm = document.getElementById('loginForm');
   const loginMsg = document.getElementById('loginMsg');
+  const forgotForm = document.getElementById('forgotForm');
+  const forgotMsg = document.getElementById('forgotMsg');
   const signupForm = document.getElementById('signupForm');
   const signupMsg = document.getElementById('signupMsg');
   const profileName = document.getElementById('profileName');
   const bagNameInput = document.getElementById('bagName');
   const bagPhoneInput = document.getElementById('bagPhone');
+  const bagEmailInput = document.getElementById('bagEmail');
+
+  // Dispara quando a cliente sai do campo de e-mail com a sacola preenchida — não em cada
+  // tecla digitada — pra registrar a atividade que alimenta o lembrete de carrinho abandonado
+  // (ver /api/cart-activity e sweepAbandonedCarts em serve.js). Silencioso: falha aqui nunca
+  // deve incomodar quem só está preenchendo o checkout.
+  bagEmailInput.addEventListener('blur', () => {
+    const email = bagEmailInput.value.trim();
+    const keys = Object.keys(cart);
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || keys.length === 0) return;
+    const items = keys
+      .map((key) => {
+        const entry = cart[key];
+        const p = PRODUCTS.find((x) => x.id === entry.productId);
+        return p ? { qty: entry.qty, name: p.name } : null;
+      })
+      .filter(Boolean);
+    fetch('/api/cart-activity', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, name: bagNameInput.value.trim(), items, subtotal: cartSubtotal(keys) }),
+    }).catch(() => {});
+  });
 
   let currentCustomer = JSON.parse(localStorage.getItem(CUSTOMER_KEY) || 'null');
 
@@ -1419,6 +1706,7 @@
 
   function showAccountView(view) {
     accountViewLogin.hidden = view !== 'login';
+    accountViewForgot.hidden = view !== 'forgot';
     accountViewSignup.hidden = view !== 'signup';
     accountViewProfile.hidden = view !== 'profile';
     accountModal.classList.toggle('is-profile', view === 'profile');
@@ -1434,6 +1722,7 @@
       bagNameInput.value = `${currentCustomer.firstName} ${currentCustomer.lastName || ''}`.trim();
     }
     if (bagPhoneInput && !bagPhoneInput.value) bagPhoneInput.value = currentCustomer.phone || '';
+    if (bagEmailInput && !bagEmailInput.value) bagEmailInput.value = currentCustomer.email || '';
   }
 
   function updateAccountButton() {
@@ -1441,6 +1730,13 @@
     accountBtn.title = currentCustomer ? `Olá, ${currentCustomer.firstName}` : 'Minha conta';
     if (currentCustomer) {
       profileName.textContent = currentCustomer.firstName;
+      const profileEmail = document.getElementById('profileEmail');
+      const profileAvatar = document.getElementById('profileAvatar');
+      if (profileEmail) profileEmail.textContent = currentCustomer.email || '';
+      if (profileAvatar) {
+        const initials = `${currentCustomer.firstName || ''} ${currentCustomer.lastName || ''}`.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join('');
+        profileAvatar.textContent = initials.toUpperCase() || 'BN';
+      }
       prefillBagContact();
     }
   }
@@ -1502,6 +1798,8 @@
     accountOverlay.classList.remove('is-open');
     accountModal.classList.remove('is-open');
     closeModalFocus(accountModal);
+    const welcomeCouponMsg = document.getElementById('welcomeCouponMsg');
+    if (welcomeCouponMsg) welcomeCouponMsg.hidden = true;
   }
 
   accountBtn.addEventListener('click', openAccountModal);
@@ -1509,6 +1807,8 @@
   accountOverlay.addEventListener('click', closeAccountModal);
   document.getElementById('goSignup').addEventListener('click', () => showAccountView('signup'));
   document.getElementById('goLogin').addEventListener('click', () => showAccountView('login'));
+  document.getElementById('goForgot').addEventListener('click', () => showAccountView('forgot'));
+  document.getElementById('goLoginFromForgot').addEventListener('click', () => showAccountView('login'));
   document.getElementById('logoutBtn').addEventListener('click', () => {
     clearCustomer();
     closeAccountModal();
@@ -1535,6 +1835,24 @@
       showProfileTab('dados');
     } catch (err) {
       setFormMsg(loginMsg, err.message, 'error');
+    }
+  });
+
+  forgotForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    setFormMsg(forgotMsg, '', '');
+    const email = document.getElementById('forgotEmail').value.trim();
+    try {
+      const res = await fetch('/api/customers/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Não foi possível enviar o e-mail');
+      setFormMsg(forgotMsg, 'Se esse e-mail tiver uma conta, enviamos um link de redefinição.', 'ok');
+    } catch (err) {
+      setFormMsg(forgotMsg, err.message, 'error');
     }
   });
 
@@ -1577,6 +1895,8 @@
       showAccountView('profile');
       fillProfileDataForm();
       showProfileTab('dados');
+      const welcomeCouponMsg = document.getElementById('welcomeCouponMsg');
+      if (welcomeCouponMsg) welcomeCouponMsg.hidden = false;
     } catch (err) {
       setFormMsg(signupMsg, err.message, 'error');
     }
@@ -1978,10 +2298,15 @@
       closeAccountModal();
       closeStoryViewer();
       closeBag();
+      closePdpLightbox();
     }
     if (storyViewer.classList.contains('is-open')) {
       if (e.key === 'ArrowRight') nextStory();
       else if (e.key === 'ArrowLeft') prevStory();
+    }
+    if (pdpLightbox && pdpLightbox.classList.contains('is-open')) {
+      if (e.key === 'ArrowRight') nextPdpLightboxSlide();
+      else if (e.key === 'ArrowLeft') prevPdpLightboxSlide();
     }
   });
 
@@ -2001,6 +2326,124 @@
   const dataError = document.getElementById('dataError');
   const dataErrorRetry = document.getElementById('dataErrorRetry');
 
+  // ---------- galeria com zoom + lightbox (produto.html) ----------
+  const pdpGalleryMain = document.getElementById('pdpGalleryMain');
+  const pdpMainImg = document.getElementById('pdpMainImg');
+  const pdpZoomPane = document.getElementById('pdpZoomPane');
+  const pdpZoomHint = document.getElementById('pdpZoomHint');
+  const pdpLightboxOverlay = document.getElementById('pdpLightboxOverlay');
+  const pdpLightbox = document.getElementById('pdpLightbox');
+  const pdpLightboxImg = document.getElementById('pdpLightboxImg');
+  const pdpLightboxClose = document.getElementById('pdpLightboxClose');
+  const pdpLightboxPrev = document.getElementById('pdpLightboxPrev');
+  const pdpLightboxNext = document.getElementById('pdpLightboxNext');
+  const pdpLightboxCounter = document.getElementById('pdpLightboxCounter');
+  let pdpGalleryImages = [];
+  let pdpLightboxIndex = 0;
+
+  function setPdpMainImage(url) {
+    pdpMainImg.src = url;
+    pdpZoomPane.style.backgroundImage = `url("${url}")`;
+  }
+
+  function pdpLightboxIndexFor(url) {
+    // pdpMainImg.src sempre vem resolvido em absoluto pelo getter — resolve os caminhos de
+    // pdpGalleryImages (que ficam relativos, como vêm da API) antes de comparar. Usa
+    // document.baseURI (não location.href) porque a página tem <base href="/">.
+    const resolved = new URL(url, document.baseURI).href;
+    const idx = pdpGalleryImages.findIndex((u) => new URL(u, document.baseURI).href === resolved);
+    return idx === -1 ? 0 : idx;
+  }
+
+  function renderPdpLightboxSlide() {
+    pdpLightboxImg.src = pdpGalleryImages[pdpLightboxIndex];
+    const multi = pdpGalleryImages.length > 1;
+    pdpLightboxCounter.hidden = !multi;
+    pdpLightboxCounter.textContent = `${pdpLightboxIndex + 1}/${pdpGalleryImages.length}`;
+    pdpLightboxPrev.hidden = !multi;
+    pdpLightboxNext.hidden = !multi;
+  }
+
+  function openPdpLightbox(index) {
+    if (!pdpGalleryImages.length) return;
+    pdpLightboxIndex = index;
+    renderPdpLightboxSlide();
+    pdpLightboxOverlay.classList.add('is-open');
+    pdpLightbox.classList.add('is-open');
+    openModalFocus(pdpLightbox);
+  }
+
+  function closePdpLightbox() {
+    if (!pdpLightbox || !pdpLightbox.classList.contains('is-open')) return;
+    pdpLightboxOverlay.classList.remove('is-open');
+    pdpLightbox.classList.remove('is-open');
+    closeModalFocus(pdpLightbox);
+  }
+
+  function nextPdpLightboxSlide() {
+    pdpLightboxIndex = (pdpLightboxIndex + 1) % pdpGalleryImages.length;
+    renderPdpLightboxSlide();
+  }
+
+  function prevPdpLightboxSlide() {
+    pdpLightboxIndex = (pdpLightboxIndex - 1 + pdpGalleryImages.length) % pdpGalleryImages.length;
+    renderPdpLightboxSlide();
+  }
+
+  if (pdpGalleryMain) {
+    pdpGalleryMain.addEventListener('mouseenter', () => pdpGalleryMain.classList.add('is-zooming'));
+    pdpGalleryMain.addEventListener('mouseleave', () => pdpGalleryMain.classList.remove('is-zooming'));
+    pdpGalleryMain.addEventListener('mousemove', (e) => {
+      const rect = pdpGalleryMain.getBoundingClientRect();
+      const x = ((e.clientX - rect.left) / rect.width) * 100;
+      const y = ((e.clientY - rect.top) / rect.height) * 100;
+      pdpZoomPane.style.backgroundPosition = `${x}% ${y}%`;
+    });
+    pdpGalleryMain.addEventListener('click', () => openPdpLightbox(pdpLightboxIndexFor(pdpMainImg.src)));
+  }
+  if (pdpZoomHint) {
+    pdpZoomHint.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openPdpLightbox(pdpLightboxIndexFor(pdpMainImg.src));
+    });
+  }
+  if (pdpLightboxClose) pdpLightboxClose.addEventListener('click', closePdpLightbox);
+  if (pdpLightboxOverlay) pdpLightboxOverlay.addEventListener('click', closePdpLightbox);
+  if (pdpLightboxNext) pdpLightboxNext.addEventListener('click', nextPdpLightboxSlide);
+  if (pdpLightboxPrev) pdpLightboxPrev.addEventListener('click', prevPdpLightboxSlide);
+  if (pdpLightbox) {
+    let pdpTouchStartX = 0;
+    pdpLightbox.addEventListener('touchstart', (e) => { pdpTouchStartX = e.changedTouches[0].clientX; }, { passive: true });
+    pdpLightbox.addEventListener('touchend', (e) => {
+      const dx = e.changedTouches[0].clientX - pdpTouchStartX;
+      if (Math.abs(dx) < 40) return;
+      if (dx < 0) nextPdpLightboxSlide();
+      else prevPdpLightboxSlide();
+    }, { passive: true });
+  }
+
+  // ---------- barra fixa de compra (produto.html) ----------
+  const pdpBuyBar = document.getElementById('pdpBuyBar');
+  const pdpBuyBarImg = document.getElementById('pdpBuyBarImg');
+  const pdpBuyBarName = document.getElementById('pdpBuyBarName');
+  const pdpBuyBarPrice = document.getElementById('pdpBuyBarPrice');
+  const pdpBuyBarAdd = document.getElementById('pdpBuyBarAdd');
+  if (pdpBuyBar) {
+    const buyBarObserver = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        // só mostra a barra quando o botão original já rolou para cima da tela —
+        // evita mostrar a barra logo de cara, antes da cliente rolar a página
+        const shouldShow = !entry.isIntersecting && entry.boundingClientRect.top < 0;
+        pdpBuyBar.classList.toggle('is-visible', shouldShow);
+        document.body.classList.toggle('pdp-buy-bar-open', shouldShow);
+      },
+      { threshold: 0 }
+    );
+    const productActionsEl = document.querySelector('.product-actions');
+    if (productActionsEl) buyBarObserver.observe(productActionsEl);
+  }
+
   // ---------- página de produto (produto.html) ----------
   // Reaproveita os mesmos helpers da vitrine (getEffective, money, colorDotsHtml,
   // variantLabel, isLowStock, syncAddButton, productCard) — é o mesmo main.js rodando nas duas
@@ -2016,14 +2459,17 @@
       return;
     }
 
+    window.byNanaAnalytics?.trackViewItem(p);
+    trackRecentlyViewed(p.id);
+
     document.getElementById('pdpBreadcrumb').innerHTML =
       `<a href="/">Home</a> / <a href="/#colecao">${escapeHtml(p.category)}</a> / <span>${escapeHtml(p.name)}</span>`;
 
     const images = p.images && p.images.length ? p.images : [p.img];
-    const mainImg = document.getElementById('pdpMainImg');
+    pdpGalleryImages = images;
     const thumbs = document.getElementById('pdpThumbs');
-    mainImg.src = images[0];
-    mainImg.alt = p.name;
+    setPdpMainImage(images[0]);
+    pdpMainImg.alt = p.name;
     thumbs.innerHTML = images
       .map(
         (url, i) => `<button type="button" class="pdp-thumb${i === 0 ? ' is-active' : ''}" data-src="${url}"><img src="${url}" alt="" /></button>`
@@ -2032,10 +2478,13 @@
     thumbs.hidden = images.length <= 1;
     thumbs.querySelectorAll('.pdp-thumb').forEach((btn) => {
       btn.addEventListener('click', () => {
-        mainImg.src = btn.dataset.src;
+        setPdpMainImage(btn.dataset.src);
         thumbs.querySelectorAll('.pdp-thumb').forEach((b) => b.classList.toggle('is-active', b === btn));
       });
     });
+
+    if (pdpBuyBarImg) pdpBuyBarImg.src = images[0];
+    if (pdpBuyBarName) pdpBuyBarName.textContent = p.name;
 
     document.getElementById('pdpBrand').textContent = `${p.brand}${p.collection ? ` · ${p.collection}` : ''}`;
     document.getElementById('pdpName').textContent = p.name;
@@ -2051,6 +2500,10 @@
     priceOldEl.hidden = !promo;
     discountBadge.textContent = promo ? `-${promo.percent}%` : '';
     discountBadge.hidden = !promo;
+    if (pdpBuyBarPrice) pdpBuyBarPrice.textContent = priceEl.textContent;
+    const installmentsEl = document.getElementById('pdpInstallments');
+    installmentsEl.textContent = installmentText(price);
+    installmentsEl.hidden = p.price == null;
 
     const ratingRow = document.getElementById('pdpRatingRow');
     if (p.rating) {
@@ -2083,6 +2536,8 @@
       variantPicker.innerHTML = '';
     }
 
+    setupRestockNotify(variants.filter((v) => v.stock <= 0));
+
     const addBtn = document.getElementById('pdpAdd');
     addBtn.dataset.id = p.id;
     if (defaultVariant) addBtn.dataset.variantId = defaultVariant.id;
@@ -2091,6 +2546,16 @@
     addBtn.disabled = soldOut;
     if (soldOut) addBtn.textContent = 'Esgotado';
     else syncAddButton(addBtn);
+
+    if (pdpBuyBarAdd) {
+      pdpBuyBarAdd.dataset.id = p.id;
+      if (defaultVariant) pdpBuyBarAdd.dataset.variantId = defaultVariant.id;
+      else delete pdpBuyBarAdd.dataset.variantId;
+      pdpBuyBarAdd.classList.toggle('is-soldout', soldOut);
+      pdpBuyBarAdd.disabled = soldOut;
+      if (soldOut) pdpBuyBarAdd.textContent = 'Esgotado';
+      else syncAddButton(pdpBuyBarAdd);
+    }
 
     document.getElementById('pdpAsk').href = waLink(
       `Olá! Tenho interesse na peça "${p.name}" que vi no catálogo By NaNa. Pode me passar mais detalhes?`
@@ -2128,6 +2593,7 @@
     relatedGrid.innerHTML = '';
     related.forEach((r) => relatedGrid.appendChild(productCard(r)));
     document.getElementById('pdpRelated').hidden = related.length === 0;
+    renderRecentlyViewed(p.id);
 
     initProductReviews(p);
 
@@ -2279,8 +2745,10 @@
       SHIPPING_RULES = data.shippingRules || [];
       CATEGORY_GROUPS = data.categoryGroups || [];
       CATEGORY_CONTENT = data.categoryContent || [];
-      STORIES = data.stories || [];
+      // Registros usados durante a configuração do painel não devem aparecer na vitrine pública.
+      STORIES = (data.stories || []).filter((story) => !/^story\s+teste?\b/i.test((story.title || '').trim()));
       NOVIDADES = data.novidades || [];
+      UPSELL_PRODUCTS = data.upsell || [];
     } catch (e) {
       loadBar.classList.remove('is-active');
       if (grid) grid.innerHTML = '';
@@ -2310,6 +2778,7 @@
       renderGrid(initialCategory, initialSearch);
       filtersEl.querySelectorAll('.filter-chip').forEach((c) => c.classList.toggle('is-active', c.dataset.filter === initialCategory));
       renderNovidades();
+      renderRecentlyViewed();
       renderStoriesRail();
     }
   }

@@ -59,6 +59,8 @@
       return;
     }
     adminCurrentUser.textContent = `${CURRENT_ADMIN.name} · ${CURRENT_ADMIN.role === 'owner' ? 'owner' : 'equipe'}`;
+    const greeting = document.getElementById('dashGreetingName');
+    if (greeting) greeting.textContent = CURRENT_ADMIN.name.split(' ')[0];
   }
 
   function applyRoleVisibility() {
@@ -83,6 +85,7 @@
     renderCollectionSelect();
     renderProductList();
     renderFeaturedList();
+    renderUpsellList();
     renderPromoTargetOptions();
     renderStoryProductSelect();
     renderPromoList();
@@ -141,17 +144,31 @@
     'rel-promocoes': () => loadPromotionsReport(),
     'rel-clientes': () => loadCustomersReport(),
     avaliacoes: () => loadReviews(),
+    newsletter: () => loadNewsletter(),
+    'avise-me': () => loadStockNotifications(),
   };
 
-  document.querySelectorAll('.admin-tab').forEach((btn) => {
-    btn.addEventListener('click', () => {
+  function activateAdminPanel(target) {
+      const btn = document.querySelector(`.admin-tab[data-target="${target}"]`);
+      if (!btn) return;
       document.querySelectorAll('.admin-tab').forEach((b) => b.classList.toggle('is-active', b === btn));
       document.querySelectorAll('.admin-panel').forEach((p) => {
-        p.hidden = p.id !== `panel-${btn.dataset.target}`;
+        p.hidden = p.id !== `panel-${target}`;
       });
-      setActiveTabGroupFor(btn.dataset.target);
+      setActiveTabGroupFor(target);
       closeAllTabGroups();
-      if (TAB_LOAD_HANDLERS[btn.dataset.target]) TAB_LOAD_HANDLERS[btn.dataset.target]();
+      if (TAB_LOAD_HANDLERS[target]) TAB_LOAD_HANDLERS[target]();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  document.querySelectorAll('.admin-tab').forEach((btn) => {
+    btn.addEventListener('click', () => activateAdminPanel(btn.dataset.target));
+  });
+
+  document.querySelectorAll('[data-admin-jump]').forEach((button) => {
+    button.addEventListener('click', () => {
+      activateAdminPanel(button.dataset.adminJump);
+      if (button.dataset.newProduct === 'true') endEditProduct(true);
     });
   });
 
@@ -448,6 +465,7 @@
       imageDataUrl = reader.result;
       pPreview.src = imageDataUrl;
       pPreview.hidden = false;
+      updateProductCompletion();
     };
     reader.readAsDataURL(file);
   });
@@ -540,6 +558,31 @@
     const name = document.getElementById('pName').value.trim();
     pReviewTitle.textContent = pEditId.value ? 'Salvar todas as alterações' : 'Produto pronto para publicar?';
     pReviewSummary.textContent = `${name || 'Produto sem nome'} · ${valid.length} tamanho(s) · ${total} unidade(s)`;
+    updateProductCompletion();
+  }
+
+  function updateProductCompletion() {
+    const checks = [
+      !!document.getElementById('pName').value.trim(),
+      !!document.getElementById('pBrand').value.trim(),
+      !!pCategory.value,
+      !!document.getElementById('pDesc').value.trim(),
+      !!pEditId.value || !!imageDataUrl,
+      editorVariants.some((variant) => (variant.size || '').trim()),
+    ];
+    const done = checks.filter(Boolean).length;
+    const percent = Math.round((done / checks.length) * 100);
+    document.getElementById('pCompletionBar').style.width = `${percent}%`;
+    document.getElementById('pCompletionLabel').textContent = `${percent}% preenchido`;
+    const hints = [
+      'Comece pelo nome do produto.',
+      'Informe a marca.',
+      'Escolha uma categoria.',
+      'Adicione uma descrição que ajude na decisão de compra.',
+      'Selecione a foto principal.',
+      'Crie ao menos uma variação de tamanho.',
+    ];
+    document.getElementById('pCompletionHint').textContent = percent === 100 ? 'Tudo certo para revisar e publicar.' : hints[checks.findIndex((value) => !value)];
   }
 
   function renderEditorVariants() {
@@ -603,7 +646,8 @@
     setMsg(added ? `${added} variações adicionadas à grade.` : 'Essa combinação de tamanhos e cor já está na grade.', added ? 'ok' : 'error');
   });
   pAddVariant.addEventListener('click', () => addVariantRow());
-  ['pName', 'pPrice'].forEach((id) => document.getElementById(id).addEventListener('input', updateProductReview));
+  ['pName', 'pBrand', 'pPrice', 'pDesc', 'pTag', 'pComposition'].forEach((id) => document.getElementById(id).addEventListener('input', updateProductReview));
+  [pCategory, pCollection].forEach((field) => field.addEventListener('change', updateProductReview));
 
   async function startEditProduct(p) {
     pEditId.value = p.id;
@@ -737,6 +781,7 @@
       renderPromoTargetOptions();
       renderStoryProductSelect();
       renderFeaturedList();
+      renderUpsellList();
 
       const wasEditing = editing;
       endEditProduct();
@@ -753,12 +798,21 @@
   const productList = document.getElementById('productList');
   const productCount = document.getElementById('productCount');
   const productSearch = document.getElementById('productSearch');
+  const productCategoryFilter = document.getElementById('productCategoryFilter');
+  const productSort = document.getElementById('productSort');
 
   function renderProductList() {
+    const selectedCategory = productCategoryFilter.value;
+    productCategoryFilter.innerHTML = '<option value="">Todas as categorias</option>' + CATEGORIES.map((category) => `<option value="${escapeHtml(category)}">${escapeHtml(category)}</option>`).join('');
+    productCategoryFilter.value = selectedCategory;
     const term = (productSearch.value || '').trim().toLowerCase();
-    const list = term
+    let list = term
       ? PRODUCTS.filter((p) => `${p.name} ${p.brand} ${p.category} ${p.collection || ''}`.toLowerCase().includes(term))
-      : PRODUCTS;
+      : [...PRODUCTS];
+    if (productCategoryFilter.value) list = list.filter((product) => product.category === productCategoryFilter.value);
+    if (productSort.value === 'name') list.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+    if (productSort.value === 'stock-low') list.sort((a, b) => Number(a.totalStock || 0) - Number(b.totalStock || 0));
+    if (productSort.value === 'price-high') list.sort((a, b) => Number(b.price || 0) - Number(a.price || 0));
 
     productCount.textContent = PRODUCTS.length;
     productList.innerHTML = '';
@@ -797,6 +851,7 @@
           renderPromoTargetOptions();
           renderStoryProductSelect();
           renderFeaturedList();
+          renderUpsellList();
         } catch (err) {
           alert(err.message);
         }
@@ -806,6 +861,8 @@
   }
 
   productSearch.addEventListener('input', renderProductList);
+  productCategoryFilter.addEventListener('change', renderProductList);
+  productSort.addEventListener('change', renderProductList);
 
   // ---------- estoque / variação (tamanho, cor) por produto ----------
   async function toggleVariantEditor(productId, container) {
@@ -1006,6 +1063,65 @@
 
   featuredSearch.addEventListener('input', renderFeaturedList);
 
+  // ---------- leve também (curadoria manual da sacola) ----------
+  const upsellList = document.getElementById('upsellList');
+  const upsellSearch = document.getElementById('upsellSearch');
+
+  function renderUpsellList() {
+    const term = (upsellSearch.value || '').trim().toLowerCase();
+    const list = term ? PRODUCTS.filter((p) => p.name.toLowerCase().includes(term)) : PRODUCTS;
+
+    const upsell = list.filter((p) => p.isUpsell).sort((a, b) => a.upsellPosition - b.upsellPosition);
+    const rest = list.filter((p) => !p.isUpsell);
+    const ordered = [...upsell, ...rest];
+
+    upsellList.innerHTML = '';
+    if (!ordered.length) {
+      upsellList.innerHTML = '<p class="admin-empty-block">Nenhum produto encontrado.</p>';
+      return;
+    }
+    ordered.forEach((p) => {
+      const div = document.createElement('div');
+      div.className = `admin-featured-item${p.isUpsell ? ' is-featured' : ''}`;
+      const idx = upsell.findIndex((f) => f.id === p.id);
+      div.innerHTML = `
+        <div class="admin-featured-thumb"><img src="${escapeHtml(p.img)}" alt="${escapeHtml(p.name)}" /></div>
+        <div class="admin-featured-info">
+          <span class="admin-featured-name">${escapeHtml(p.name)}</span>
+          <span class="admin-featured-meta">${escapeHtml(p.category)}${p.collection ? ` · ${escapeHtml(p.collection)}` : ''}</span>
+        </div>
+        <div class="admin-featured-actions">
+          <button type="button" class="admin-featured-move" data-dir="up" aria-label="Mover para cima" ${!p.isUpsell || idx === 0 ? 'disabled' : ''}>↑</button>
+          <button type="button" class="admin-featured-move" data-dir="down" aria-label="Mover para baixo" ${!p.isUpsell || idx === upsell.length - 1 ? 'disabled' : ''}>↓</button>
+          <button type="button" class="admin-featured-badge ${p.isUpsell ? 'is-on' : ''}">${p.isUpsell ? 'Marcado' : 'Marcar'}</button>
+        </div>
+      `;
+      div.querySelector('.admin-featured-badge').addEventListener('click', async () => {
+        try {
+          const data = await api('/api/products/upsell', 'POST', { id: p.id, upsell: !p.isUpsell });
+          PRODUCTS = data.products;
+          renderUpsellList();
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+      div.querySelectorAll('.admin-featured-move').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          try {
+            const data = await api('/api/products/upsell/reorder', 'POST', { id: p.id, direction: btn.dataset.dir });
+            PRODUCTS = data.products;
+            renderUpsellList();
+          } catch (err) {
+            alert(err.message);
+          }
+        });
+      });
+      upsellList.appendChild(div);
+    });
+  }
+
+  upsellSearch.addEventListener('input', renderUpsellList);
+
   // ---------- promotions ----------
   const promoForm = document.getElementById('promoForm');
   const promoEditId = document.getElementById('promoEditId');
@@ -1168,6 +1284,7 @@
   const couponType = document.getElementById('couponType');
   const couponValue = document.getElementById('couponValue');
   const couponEnd = document.getElementById('couponEnd');
+  const couponFirstPurchaseOnly = document.getElementById('couponFirstPurchaseOnly');
   const couponSubmit = document.getElementById('couponSubmit');
   const couponCancelEdit = document.getElementById('couponCancelEdit');
   const couponFormTitle = document.getElementById('couponFormTitle');
@@ -1189,8 +1306,9 @@
     COUPONS.forEach((c) => {
       const discountText = c.type === 'percent' ? `${c.value}% OFF` : `${money(c.value)} OFF`;
       const validity = c.endDate ? ` · válido até ${formatDate(c.endDate)}` : '';
+      const firstPurchaseTag = c.firstPurchaseOnly ? ' · só 1ª compra' : '';
       const li = document.createElement('li');
-      li.innerHTML = `<span>${c.code} — ${discountText}${validity}</span><button type="button" class="admin-coupon-edit" aria-label="Editar">✎</button><button type="button" aria-label="Remover">✕</button>`;
+      li.innerHTML = `<span>${c.code} — ${discountText}${validity}${firstPurchaseTag}</span><button type="button" class="admin-coupon-edit" aria-label="Editar">✎</button><button type="button" aria-label="Remover">✕</button>`;
       li.querySelector('.admin-coupon-edit').addEventListener('click', () => startEditCoupon(c));
       li.querySelector('button:not(.admin-coupon-edit)').addEventListener('click', async () => {
         if (!confirm(`Remover o cupom "${c.code}"?`)) return;
@@ -1210,6 +1328,7 @@
     couponType.value = c.type;
     couponValue.value = c.value;
     couponEnd.value = c.endDate || '';
+    couponFirstPurchaseOnly.checked = !!c.firstPurchaseOnly;
     couponFormTitle.textContent = `Editando cupom "${c.code}"`;
     couponSubmit.textContent = 'Salvar alterações';
     couponCancelEdit.hidden = false;
@@ -1240,6 +1359,7 @@
         type: couponType.value,
         value: couponValue.value,
         endDate: couponEnd.value,
+        firstPurchaseOnly: couponFirstPurchaseOnly.checked,
       };
       const data = editing
         ? await api('/api/coupons/update', 'POST', payload)
@@ -1497,6 +1617,112 @@
     URL.revokeObjectURL(url);
   });
 
+  // ---------- newsletter (contatos captados no rodapé do site, fora de uma compra) ----------
+  let NEWSLETTER_SUBSCRIBERS = [];
+  const newsletterList = document.getElementById('newsletterList');
+  const newsletterCount = document.getElementById('newsletterCount');
+
+  async function loadNewsletter() {
+    try {
+      const data = await api('/api/newsletter/list', 'POST', {});
+      NEWSLETTER_SUBSCRIBERS = data.subscribers || [];
+      renderNewsletterList();
+    } catch (err) {
+      newsletterList.innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+    }
+  }
+
+  function renderNewsletterList() {
+    newsletterCount.textContent = NEWSLETTER_SUBSCRIBERS.length;
+    newsletterList.innerHTML = '';
+    if (!NEWSLETTER_SUBSCRIBERS.length) {
+      newsletterList.innerHTML = '<p class="admin-empty-block">Nenhum contato captado ainda.</p>';
+      return;
+    }
+    NEWSLETTER_SUBSCRIBERS.forEach((s) => {
+      const div = document.createElement('div');
+      div.className = 'admin-customer-item';
+      div.innerHTML = `
+        <div class="admin-customer-info">
+          <span class="admin-customer-name">${escapeHtml(s.contact)}</span>
+          <span class="admin-customer-meta">${s.channel === 'whatsapp' ? 'WhatsApp' : 'E-mail'} · captado em ${formatDate(s.createdAt.slice(0, 10))}</span>
+        </div>
+      `;
+      newsletterList.appendChild(div);
+    });
+  }
+
+  // ---------- avise-me quando chegar (pedidos de aviso de reposição, por variação esgotada) ----------
+  let STOCK_NOTIFICATIONS = [];
+  const stockNotifyList = document.getElementById('stockNotifyList');
+  const stockNotifyCount = document.getElementById('stockNotifyCount');
+
+  async function loadStockNotifications() {
+    try {
+      const data = await api('/api/admin/stock-notifications/list', 'POST', {});
+      STOCK_NOTIFICATIONS = data.stockNotifications || [];
+      renderStockNotifications();
+    } catch (err) {
+      stockNotifyList.innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+    }
+  }
+
+  function renderStockNotifications() {
+    stockNotifyCount.textContent = STOCK_NOTIFICATIONS.length;
+    stockNotifyList.innerHTML = '';
+    if (!STOCK_NOTIFICATIONS.length) {
+      stockNotifyList.innerHTML = '<p class="admin-empty-block">Nenhum pedido de aviso pendente.</p>';
+      return;
+    }
+    STOCK_NOTIFICATIONS.forEach((n) => {
+      const variantLabel = [n.size, n.color].filter(Boolean).join(' / ');
+      const div = document.createElement('div');
+      div.className = 'admin-customer-item';
+      div.innerHTML = `
+        <div class="admin-customer-info">
+          <span class="admin-customer-name">${escapeHtml(n.productName)}${variantLabel ? ` — ${escapeHtml(variantLabel)}` : ''}</span>
+          <span class="admin-customer-meta">${escapeHtml(n.contact)} · ${n.channel === 'whatsapp' ? 'WhatsApp' : 'E-mail'} · pedido em ${formatDate(n.createdAt.slice(0, 10))}${n.stock > 0 ? ' · estoque já disponível' : ''}</span>
+        </div>
+        ${n.channel === 'whatsapp' ? `<button type="button" class="btn btn-outline btn-sm" data-id="${n.id}">Marcar como contatado</button>` : ''}
+      `;
+      const btn = div.querySelector('button[data-id]');
+      if (btn) {
+        btn.addEventListener('click', async () => {
+          btn.disabled = true;
+          try {
+            await api('/api/admin/stock-notifications/mark-contacted', 'POST', { id: n.id });
+            loadStockNotifications();
+          } catch (err) {
+            alert(err.message);
+            btn.disabled = false;
+          }
+        });
+      }
+      stockNotifyList.appendChild(div);
+    });
+  }
+
+  const newsletterExportBtn = document.getElementById('newsletterExport');
+  if (newsletterExportBtn) {
+    newsletterExportBtn.addEventListener('click', () => {
+      if (!NEWSLETTER_SUBSCRIBERS.length) {
+        alert('Não há contatos para exportar.');
+        return;
+      }
+      const header = ['Contato', 'Canal', 'Captado em'];
+      const csvEscape = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+      const rows = NEWSLETTER_SUBSCRIBERS.map((s) => [s.contact, s.channel, formatDate(s.createdAt.slice(0, 10))]);
+      const csv = [header, ...rows].map((r) => r.map(csvEscape).join(';')).join('\r\n');
+      const blob = new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `newsletter-bynana-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  }
+
   // ---------- pedidos (fechados no checkout do site) ----------
   const orderList = document.getElementById('orderList');
   const orderCount = document.getElementById('orderCount');
@@ -1529,11 +1755,14 @@
     list.forEach((o) => {
       const itemsText = (o.items || []).map((it) => `${escapeHtml(it.qty)}x ${escapeHtml(it.name)}${it.variantLabel ? ` (${escapeHtml(it.variantLabel)})` : ''}`).join(', ');
       const when = new Date(o.createdAt).toLocaleString('pt-BR');
+      // pedido "novo" há mais de 2h sem virar em_andamento provavelmente não recebeu retorno
+      // no WhatsApp ainda — sinalizado aqui pra não passar batido numa loja de poucas vendas/dia.
+      const isStale = o.status === 'novo' && Date.now() - new Date(o.createdAt).getTime() > 2 * 60 * 60 * 1000;
       const div = document.createElement('div');
       div.className = 'admin-order-item';
       div.innerHTML = `
         <div class="admin-order-info">
-          <span class="admin-order-name">${escapeHtml(o.customerName)} · ${escapeHtml(o.customerPhone)}</span>
+          <span class="admin-order-name">${escapeHtml(o.customerName)} · ${escapeHtml(o.customerPhone)}${isStale ? ' <span class="admin-order-stale-badge" title="Sem retorno há mais de 2h">⏰ Aguardando retorno</span>' : ''}</span>
           <span class="admin-order-meta">${when}${o.couponCode ? ` · cupom ${escapeHtml(o.couponCode)}` : ''} · ${escapeHtml(o.paymentMethod)} · ${escapeHtml(o.deliveryMethod)}${o.shipping ? ` · frete ${money(o.shipping)}` : ''}</span>
           <p class="admin-order-items">${itemsText}</p>
           <span class="admin-order-total">${money(o.total)}</span>
