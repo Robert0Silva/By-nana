@@ -588,11 +588,11 @@
   function renderEditorVariants() {
     pVariantRows.innerHTML = editorVariants.map((variant, index) => `
       <tr data-index="${index}">
-        <td><input type="text" class="v-size" value="${variant.size || ''}" placeholder="Ex: P ou 36" aria-label="Tamanho" /></td>
-        <td><input type="text" class="v-color" value="${variant.color || ''}" placeholder="Ex: Preto" aria-label="Cor" /></td>
-        <td><input type="text" class="v-sku" value="${variant.sku || ''}" placeholder="Gerado automaticamente" aria-label="SKU" /></td>
+        <td><input type="text" class="v-size" value="${escapeHtml(variant.size || '')}" placeholder="Ex: P ou 36" aria-label="Tamanho" /></td>
+        <td><input type="text" class="v-color" value="${escapeHtml(variant.color || '')}" placeholder="Ex: Preto" aria-label="Cor" /></td>
+        <td><input type="text" class="v-sku" value="${escapeHtml(variant.sku || '')}" placeholder="Gerado automaticamente" aria-label="SKU" /></td>
         <td><input type="number" class="v-stock" min="0" step="1" value="${Number(variant.stock || 0)}" aria-label="Estoque" /></td>
-        <td><input type="text" class="v-measurements" value="${variant.measurements || ''}" placeholder="Ex: 24cm sola" aria-label="Medidas" /></td>
+        <td><input type="text" class="v-measurements" value="${escapeHtml(variant.measurements || '')}" placeholder="Ex: 24cm sola" aria-label="Medidas" /></td>
         <td><button type="button" class="admin-variant-remove" data-index="${index}" aria-label="Remover variação">✕</button></td>
       </tr>
     `).join('');
@@ -913,9 +913,9 @@
           .map(
             (v) => `
           <div class="admin-variant-row" data-id="${v.id}">
-            <label class="admin-variant-field"><span class="admin-variant-field-label">Tamanho</span><input type="text" class="v-size" placeholder="Ex: P, 38..." value="${v.size || ''}" /></label>
-            <label class="admin-variant-field"><span class="admin-variant-field-label">Cor</span><input type="text" class="v-color" placeholder="Ex: Preto" value="${v.color || ''}" /></label>
-            <label class="admin-variant-field"><span class="admin-variant-field-label">SKU</span><input type="text" class="v-sku" placeholder="Opcional" value="${v.sku || ''}" /></label>
+            <label class="admin-variant-field"><span class="admin-variant-field-label">Tamanho</span><input type="text" class="v-size" placeholder="Ex: P, 38..." value="${escapeHtml(v.size || '')}" /></label>
+            <label class="admin-variant-field"><span class="admin-variant-field-label">Cor</span><input type="text" class="v-color" placeholder="Ex: Preto" value="${escapeHtml(v.color || '')}" /></label>
+            <label class="admin-variant-field"><span class="admin-variant-field-label">SKU</span><input type="text" class="v-sku" placeholder="Opcional" value="${escapeHtml(v.sku || '')}" /></label>
             <label class="admin-variant-field"><span class="admin-variant-field-label">Estoque</span><input type="number" class="v-stock" min="0" step="1" value="${v.stock}" /></label>
             <button type="button" class="btn btn-outline v-save">Salvar</button>
             <button type="button" class="admin-variant-remove" aria-label="Remover">✕</button>
@@ -1165,10 +1165,10 @@
     if (promo.scope === 'site') return 'Loja inteira';
     if (promo.scope === 'product') {
       const p = PRODUCTS.find((x) => x.id === promo.target);
-      return `Produto: ${p ? p.name : promo.target}`;
+      return `Produto: ${escapeHtml(p ? p.name : promo.target)}`;
     }
-    if (promo.scope === 'category') return `Categoria: ${promo.target}`;
-    return `Coleção: ${promo.target}`;
+    if (promo.scope === 'category') return `Categoria: ${escapeHtml(promo.target)}`;
+    return `Coleção: ${escapeHtml(promo.target)}`;
   }
 
   function promoPeriodLabel(promo) {
@@ -1192,7 +1192,7 @@
       div.className = 'admin-promo-item';
       div.innerHTML = `
         <div class="admin-promo-info">
-          <span class="admin-promo-title">${promo.label ? `${promo.label} — ` : ''}${promoTargetLabel(promo)} · ${discountText}</span>
+          <span class="admin-promo-title">${promo.label ? `${escapeHtml(promo.label)} — ` : ''}${promoTargetLabel(promo)} · ${discountText}</span>
           <span class="admin-promo-meta">${promoPeriodLabel(promo)}</span>
         </div>
         <div class="admin-promo-actions">
