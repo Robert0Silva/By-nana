@@ -233,14 +233,14 @@
 
   function renderCategoryGroupOptions() {
     const groups = [...new Set(CATEGORY_GROUPS.map((g) => g.groupName).filter(Boolean))];
-    categoryGroupList.innerHTML = groups.map((g) => `<option value="${g}"></option>`).join('');
+    categoryGroupList.innerHTML = groups.map((g) => `<option value="${escapeHtml(g)}"></option>`).join('');
   }
 
   function faqRowHtml(q, a) {
     return `
       <div class="admin-category-faq-row">
-        <input type="text" class="admin-faq-question" placeholder="Pergunta" value="${q || ''}" />
-        <textarea class="admin-faq-answer" rows="2" placeholder="Resposta">${a || ''}</textarea>
+        <input type="text" class="admin-faq-question" placeholder="Pergunta" value="${escapeHtml(q || '')}" />
+        <textarea class="admin-faq-answer" rows="2" placeholder="Resposta">${escapeHtml(a || '')}</textarea>
         <button type="button" class="admin-faq-remove" aria-label="Remover pergunta">✕</button>
       </div>`;
   }
@@ -260,15 +260,15 @@
       row.className = 'admin-category-item';
       row.innerHTML = `
         <div class="admin-category-item-row">
-          <span class="admin-category-item-name">${c}</span>
-          <input type="text" class="admin-category-group-input" list="categoryGroupList" placeholder="Grupo no mega-menu (opcional)" value="${groupInfo && groupInfo.groupName ? groupInfo.groupName : ''}" />
+          <span class="admin-category-item-name">${escapeHtml(c)}</span>
+          <input type="text" class="admin-category-group-input" list="categoryGroupList" placeholder="Grupo no mega-menu (opcional)" value="${escapeHtml(groupInfo && groupInfo.groupName ? groupInfo.groupName : '')}" />
           <button type="button" class="admin-category-save">Salvar</button>
           <button type="button" class="admin-category-seo-toggle">Editar texto/FAQ</button>
           <button type="button" class="admin-category-remove" aria-label="Remover">✕</button>
         </div>
         <div class="admin-category-seo-editor" hidden>
           <label>Texto da categoria (SEO)
-            <textarea class="admin-category-seo-text" rows="3" placeholder="Parágrafo curto sobre esta categoria">${content && content.seoText ? content.seoText : ''}</textarea>
+            <textarea class="admin-category-seo-text" rows="3" placeholder="Parágrafo curto sobre esta categoria">${escapeHtml(content && content.seoText ? content.seoText : '')}</textarea>
           </label>
           <div class="admin-category-faq-rows">
             ${faq.map((f) => faqRowHtml(f.question, f.answer)).join('')}
@@ -364,7 +364,7 @@
     }
     COLLECTIONS.forEach((c) => {
       const li = document.createElement('li');
-      li.innerHTML = `<span>${c}</span><button type="button" aria-label="Remover">✕</button>`;
+      li.innerHTML = `<span>${escapeHtml(c)}</span><button type="button" aria-label="Remover">✕</button>`;
       li.querySelector('button').addEventListener('click', async () => {
         const count = PRODUCTS.filter((p) => p.collection === c).length;
         const msg = count
@@ -403,14 +403,14 @@
 
   function renderCategorySelect() {
     const current = pCategory.value;
-    pCategory.innerHTML = CATEGORIES.map((c) => `<option value="${c}">${c}</option>`).join('');
+    pCategory.innerHTML = CATEGORIES.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
     if (CATEGORIES.includes(current)) pCategory.value = current;
   }
 
   function renderCollectionSelect() {
     const current = pCollection.value;
     pCollection.innerHTML =
-      '<option value="">Nenhuma</option>' + COLLECTIONS.map((c) => `<option value="${c}">${c}</option>`).join('');
+      '<option value="">Nenhuma</option>' + COLLECTIONS.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
     if (COLLECTIONS.includes(current)) pCollection.value = current;
   }
 
@@ -881,7 +881,7 @@
       const data = await api('/api/products/variants/list', 'POST', { productId });
       renderVariantEditor(productId, container, data.variants || [], data.movements || []);
     } catch (err) {
-      container.innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+      container.innerHTML = `<p class="admin-empty-block">${escapeHtml(err.message)}</p>`;
     }
   }
 
@@ -1151,9 +1151,9 @@
     if (scope === 'product') {
       promoTarget.innerHTML = PRODUCTS.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
     } else if (scope === 'category') {
-      promoTarget.innerHTML = CATEGORIES.map((c) => `<option value="${c}">${c}</option>`).join('');
+      promoTarget.innerHTML = CATEGORIES.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
     } else if (scope === 'collection') {
-      promoTarget.innerHTML = COLLECTIONS.map((c) => `<option value="${c}">${c}</option>`).join('');
+      promoTarget.innerHTML = COLLECTIONS.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
     } else {
       promoTarget.innerHTML = '';
     }
@@ -1308,7 +1308,7 @@
       const validity = c.endDate ? ` · válido até ${formatDate(c.endDate)}` : '';
       const firstPurchaseTag = c.firstPurchaseOnly ? ' · só 1ª compra' : '';
       const li = document.createElement('li');
-      li.innerHTML = `<span>${c.code} — ${discountText}${validity}${firstPurchaseTag}</span><button type="button" class="admin-coupon-edit" aria-label="Editar">✎</button><button type="button" aria-label="Remover">✕</button>`;
+      li.innerHTML = `<span>${escapeHtml(c.code)} — ${discountText}${validity}${firstPurchaseTag}</span><button type="button" class="admin-coupon-edit" aria-label="Editar">✎</button><button type="button" aria-label="Remover">✕</button>`;
       li.querySelector('.admin-coupon-edit').addEventListener('click', () => startEditCoupon(c));
       li.querySelector('button:not(.admin-coupon-edit)').addEventListener('click', async () => {
         if (!confirm(`Remover o cupom "${c.code}"?`)) return;
@@ -1406,7 +1406,7 @@
       const freeText = r.freeAbove != null ? ` · grátis acima de ${money(r.freeAbove)}` : '';
       const inactiveText = r.active ? '' : ' · inativa';
       const li = document.createElement('li');
-      li.innerHTML = `<span>${ufText}${r.label ? ` — ${r.label}` : ''} · ${money(r.price)}${freeText}${inactiveText}</span><button type="button" class="admin-coupon-edit" aria-label="Editar">✎</button><button type="button" aria-label="Remover">✕</button>`;
+      li.innerHTML = `<span>${ufText}${r.label ? ` — ${escapeHtml(r.label)}` : ''} · ${money(r.price)}${freeText}${inactiveText}</span><button type="button" class="admin-coupon-edit" aria-label="Editar">✎</button><button type="button" aria-label="Remover">✕</button>`;
       li.querySelector('.admin-coupon-edit').addEventListener('click', () => startEditShipping(r));
       li.querySelector('button:not(.admin-coupon-edit)').addEventListener('click', async () => {
         if (!confirm(`Remover a regra de frete "${ufText}"?`)) return;
@@ -1547,7 +1547,7 @@
       CUSTOMERS = data.customers || [];
       renderCustomerList();
     } catch (err) {
-      customerList.innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+      customerList.innerHTML = `<p class="admin-empty-block">${escapeHtml(err.message)}</p>`;
     }
   }
 
@@ -1598,7 +1598,13 @@
       return;
     }
     const header = ['Nome', 'Sobrenome', 'E-mail', 'Telefone', 'Recebe novidades', 'Cliente desde'];
-    const csvEscape = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+    // Prefixa com apóstrofo células que começam com =, +, -, @ ou tab/CR — sem isso, um nome
+    // de cliente como "=cmd|'/c calc'!A1" vira uma fórmula executável ao abrir o CSV no Excel/Sheets.
+    const csvEscape = (v) => {
+      let s = String(v == null ? '' : v);
+      if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+      return `"${s.replace(/"/g, '""')}"`;
+    };
     const rows = CUSTOMERS.map((c) => [
       c.firstName,
       c.lastName,
@@ -1628,7 +1634,7 @@
       NEWSLETTER_SUBSCRIBERS = data.subscribers || [];
       renderNewsletterList();
     } catch (err) {
-      newsletterList.innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+      newsletterList.innerHTML = `<p class="admin-empty-block">${escapeHtml(err.message)}</p>`;
     }
   }
 
@@ -1663,7 +1669,7 @@
       STOCK_NOTIFICATIONS = data.stockNotifications || [];
       renderStockNotifications();
     } catch (err) {
-      stockNotifyList.innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+      stockNotifyList.innerHTML = `<p class="admin-empty-block">${escapeHtml(err.message)}</p>`;
     }
   }
 
@@ -1710,7 +1716,13 @@
         return;
       }
       const header = ['Contato', 'Canal', 'Captado em'];
-      const csvEscape = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+      // Prefixa com apóstrofo células que começam com =, +, -, @ ou tab/CR — sem isso, um nome
+    // de cliente como "=cmd|'/c calc'!A1" vira uma fórmula executável ao abrir o CSV no Excel/Sheets.
+    const csvEscape = (v) => {
+      let s = String(v == null ? '' : v);
+      if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+      return `"${s.replace(/"/g, '""')}"`;
+    };
       const rows = NEWSLETTER_SUBSCRIBERS.map((s) => [s.contact, s.channel, formatDate(s.createdAt.slice(0, 10))]);
       const csv = [header, ...rows].map((r) => r.map(csvEscape).join(';')).join('\r\n');
       const blob = new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8;' });
@@ -1736,7 +1748,7 @@
       ORDERS = data.orders || [];
       renderOrderList();
     } catch (err) {
-      orderList.innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+      orderList.innerHTML = `<p class="admin-empty-block">${escapeHtml(err.message)}</p>`;
     }
   }
 
@@ -1758,12 +1770,17 @@
       // pedido "novo" há mais de 2h sem virar em_andamento provavelmente não recebeu retorno
       // no WhatsApp ainda — sinalizado aqui pra não passar batido numa loja de poucas vendas/dia.
       const isStale = o.status === 'novo' && Date.now() - new Date(o.createdAt).getTime() > 2 * 60 * 60 * 1000;
+      const a = o.address;
+      const addressText = a
+        ? `${escapeHtml(a.rua || '')}, ${escapeHtml(a.numero || '')}${a.complemento ? ` - ${escapeHtml(a.complemento)}` : ''} - ${escapeHtml(a.bairro || '')}, ${escapeHtml(a.cidade || '')}/${escapeHtml(a.estado || '')} - CEP ${escapeHtml(a.cep || '')}`
+        : '';
       const div = document.createElement('div');
       div.className = 'admin-order-item';
       div.innerHTML = `
         <div class="admin-order-info">
           <span class="admin-order-name">${escapeHtml(o.customerName)} · ${escapeHtml(o.customerPhone)}${isStale ? ' <span class="admin-order-stale-badge" title="Sem retorno há mais de 2h">⏰ Aguardando retorno</span>' : ''}</span>
           <span class="admin-order-meta">${when}${o.couponCode ? ` · cupom ${escapeHtml(o.couponCode)}` : ''} · ${escapeHtml(o.paymentMethod)} · ${escapeHtml(o.deliveryMethod)}${o.shipping ? ` · frete ${money(o.shipping)}` : ''}</span>
+          ${addressText ? `<span class="admin-order-address">📍 ${addressText}</span>` : ''}
           <p class="admin-order-items">${itemsText}</p>
           <span class="admin-order-total">${money(o.total)}</span>
         </div>
@@ -1802,7 +1819,7 @@
       REVIEWS = data.reviews || [];
       renderReviewList();
     } catch (err) {
-      reviewList.innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+      reviewList.innerHTML = `<p class="admin-empty-block">${escapeHtml(err.message)}</p>`;
     }
   }
 
@@ -1929,7 +1946,7 @@
       STORIES = data.stories || [];
       renderStoryList();
     } catch (err) {
-      storyList.innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+      storyList.innerHTML = `<p class="admin-empty-block">${escapeHtml(err.message)}</p>`;
     }
   }
 
@@ -1981,18 +1998,18 @@
       const div = document.createElement('div');
       div.className = 'admin-story-item';
       const thumb = s.cover
-        ? `<img src="${s.cover}" alt="${s.title || 'Story'}" />`
+        ? `<img src="${s.cover}" alt="${escapeHtml(s.title || 'Story')}" />`
         : `<video src="${s.video}" muted preload="metadata"></video>`;
       const linkedProduct = s.productId ? PRODUCTS.find((p) => p.id === s.productId) : null;
       const metaText = linkedProduct
-        ? `Produto: ${linkedProduct.name}`
+        ? `Produto: ${escapeHtml(linkedProduct.name)}`
         : s.linkUrl
-        ? `Botão: "${s.linkLabel}" → ${s.linkUrl}`
+        ? `Botão: "${escapeHtml(s.linkLabel)}" → ${escapeHtml(s.linkUrl)}`
         : 'Sem botão de ação';
       div.innerHTML = `
         <div class="admin-story-thumb">${thumb}</div>
         <div class="admin-story-info">
-          <span class="admin-story-title">${s.title || '(sem título)'}</span>
+          <span class="admin-story-title">${escapeHtml(s.title || '(sem título)')}</span>
           <span class="admin-story-meta">${metaText}</span>
           <div class="admin-story-product-edit">
             <select class="admin-story-product-select">
@@ -2076,7 +2093,7 @@
       ADMIN_USERS = data.adminUsers || [];
       renderAdminUserList();
     } catch (err) {
-      adminUserList.innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+      adminUserList.innerHTML = `<p class="admin-empty-block">${escapeHtml(err.message)}</p>`;
     }
   }
 
@@ -2090,8 +2107,8 @@
       div.className = 'admin-user-item';
       div.innerHTML = `
         <div class="admin-user-info">
-          <span class="admin-user-name">${u.name}${isSelf ? ' (você)' : ''}</span>
-          <span class="admin-user-meta">${u.email} · desde ${formatDate(u.createdAt.slice(0, 10))}</span>
+          <span class="admin-user-name">${escapeHtml(u.name)}${isSelf ? ' (você)' : ''}</span>
+          <span class="admin-user-meta">${escapeHtml(u.email)} · desde ${formatDate(u.createdAt.slice(0, 10))}</span>
         </div>
         <div class="admin-user-actions">
           <span class="admin-user-role-badge ${u.role === 'staff' ? 'is-staff' : ''}">${u.role === 'owner' ? 'Owner' : 'Equipe'}</span>
@@ -2191,7 +2208,7 @@
       ACTIVITY = data.activity || [];
       renderActivityList();
     } catch (err) {
-      activityList.innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+      activityList.innerHTML = `<p class="admin-empty-block">${escapeHtml(err.message)}</p>`;
     }
   }
 
@@ -2294,7 +2311,7 @@
           .join('');
       }
     } catch (err) {
-      document.getElementById('dashTopProducts').innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+      document.getElementById('dashTopProducts').innerHTML = `<p class="admin-empty-block">${escapeHtml(err.message)}</p>`;
     }
   }
 
@@ -2321,7 +2338,7 @@
         (v) => money(v)
       );
     } catch (err) {
-      document.getElementById('relVendasStats').innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+      document.getElementById('relVendasStats').innerHTML = `<p class="admin-empty-block">${escapeHtml(err.message)}</p>`;
     }
   }
 
@@ -2347,7 +2364,7 @@
         data.products
       );
     } catch (err) {
-      document.getElementById('relProdutosTable').innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+      document.getElementById('relProdutosTable').innerHTML = `<p class="admin-empty-block">${escapeHtml(err.message)}</p>`;
     }
   }
 
@@ -2383,7 +2400,7 @@
         data.promotions
       );
     } catch (err) {
-      document.getElementById('relCouponsTable').innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+      document.getElementById('relCouponsTable').innerHTML = `<p class="admin-empty-block">${escapeHtml(err.message)}</p>`;
     }
   }
 
@@ -2406,7 +2423,7 @@
         <div class="admin-stat-card"><span class="admin-stat-label">Taxa de opt-in</span><span class="admin-stat-value">${rate}%</span></div>
       `;
     } catch (err) {
-      document.getElementById('relClientesStats').innerHTML = `<p class="admin-empty-block">${err.message}</p>`;
+      document.getElementById('relClientesStats').innerHTML = `<p class="admin-empty-block">${escapeHtml(err.message)}</p>`;
     }
   }
 
