@@ -399,6 +399,7 @@
   background:#f7e3d8;color:var(--wine);font-size:.68rem;font-weight:600;vertical-align:middle;
 }
 .admin-order-meta{font-size:.76rem;color:var(--ink-soft);}
+.admin-order-address{font-size:.76rem;color:var(--ink-soft);}
 .admin-order-items{font-size:.78rem;color:var(--ink-soft);margin:2px 0 0;}
 .admin-order-total{font-size:.88rem;font-weight:700;color:var(--ink);}
 .admin-order-actions{display:flex;flex-direction:column;align-items:flex-end;gap:8px;}

@@ -1,5 +1,5 @@
 (() => {
-  const WHATSAPP_NUMBER = '5531986315271';
+  const WHATSAPP_NUMBER = '5531973053380';
 
   const WA_ICON =
     '<svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor"><path d="M12.02 2C6.5 2 2 6.48 2 12c0 1.85.5 3.58 1.38 5.07L2 22l5.1-1.34A9.94 9.94 0 0 0 12.02 22C17.5 22 22 17.52 22 12S17.5 2 12.02 2Zm5.87 14.14c-.25.7-1.45 1.34-2 1.42-.53.08-1.13.11-1.83-.12-.42-.14-.96-.32-1.66-.62-2.92-1.26-4.83-4.2-4.98-4.4-.15-.2-1.19-1.58-1.19-3.02 0-1.44.76-2.15 1.03-2.44.27-.29.6-.36.8-.36.2 0 .4 0 .57.01.18.01.43-.07.67.51.25.6.85 2.07.92 2.22.07.15.12.33.02.53-.1.2-.15.32-.3.5-.15.18-.31.4-.44.53-.15.15-.3.31-.13.6.17.3.76 1.25 1.63 2.02 1.12 1 2.06 1.31 2.36 1.46.3.15.47.13.65-.08.18-.2.76-.88.96-1.18.2-.3.4-.25.67-.15.27.1 1.73.82 2.03.97.3.15.5.22.57.35.07.13.07.75-.18 1.45Z"/></svg>';
@@ -679,7 +679,7 @@
       const btn = document.createElement('button');
       btn.className = 'cat-card';
       btn.dataset.filter = cat;
-      btn.innerHTML = `<img src="${rep ? rep.img : fallbackImg}" alt="${cat}" /><span>${cat}</span>`;
+      btn.innerHTML = `<img src="${rep ? rep.img : fallbackImg}" alt="${escapeHtml(cat)}" /><span>${escapeHtml(cat)}</span>`;
       btn.addEventListener('click', () => {
         setFilter(cat);
         document.getElementById('colecao').scrollIntoView({ behavior: 'smooth' });
@@ -704,7 +704,7 @@
     const select = document.createElement('select');
     select.className = 'collection-select';
     select.setAttribute('aria-label', 'Filtrar por coleção');
-    select.innerHTML = `<option value="">Todas as coleções</option>${COLLECTIONS.map((c) => `<option value="${c}">${c}</option>`).join('')}`;
+    select.innerHTML = `<option value="">Todas as coleções</option>${COLLECTIONS.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}`;
     select.addEventListener('change', () => {
       currentCollection = select.value;
       renderGrid(currentFilter, currentSearch);
@@ -742,8 +742,8 @@
           const hex = colorToHex(c);
           const swatch = hex
             ? `<span class="color-dot" style="background-color:${hex}"></span>`
-            : `<span class="color-dot color-dot-label">${c.slice(0, 3)}</span>`;
-          return `<button type="button" class="color-filter-chip" data-color="${c}" title="${c}" aria-label="Filtrar por cor ${c}">${swatch}</button>`;
+            : `<span class="color-dot color-dot-label">${escapeHtml(c.slice(0, 3))}</span>`;
+          return `<button type="button" class="color-filter-chip" data-color="${escapeHtml(c)}" title="${escapeHtml(c)}" aria-label="Filtrar por cor ${escapeHtml(c)}">${swatch}</button>`;
         })
         .join('');
     colorFiltersEl.querySelectorAll('[data-color]').forEach((btn) => {
@@ -805,8 +805,8 @@
       .map(
         ([groupName, names]) => `
         <div class="mega-menu-col">
-          <p class="mega-menu-col-title">${groupName}</p>
-          <ul>${names.map((n) => `<li><a href="#colecao" data-cat="${n}">${n}</a></li>`).join('')}</ul>
+          <p class="mega-menu-col-title">${escapeHtml(groupName)}</p>
+          <ul>${names.map((n) => `<li><a href="#colecao" data-cat="${escapeHtml(n)}">${escapeHtml(n)}</a></li>`).join('')}</ul>
         </div>`
       )
       .join('');
@@ -1173,7 +1173,7 @@
       localStorage.removeItem(COUPON_KEY);
     }
     if (coupon) {
-      couponStatus.innerHTML = `Cupom <strong>${coupon.code}</strong> aplicado ✓ <button type="button" class="coupon-remove">remover</button>`;
+      couponStatus.innerHTML = `Cupom <strong>${escapeHtml(coupon.code)}</strong> aplicado ✓ <button type="button" class="coupon-remove">remover</button>`;
       couponStatus.className = 'bag-coupon-status is-ok';
       couponStatus.hidden = false;
       couponInput.value = coupon.code;
@@ -1531,11 +1531,11 @@
         <span class="story-ring">
           ${
             s.cover
-              ? `<img src="${s.cover}" alt="${s.title || 'Story'}" />`
+              ? `<img src="${s.cover}" alt="${escapeHtml(s.title || 'Story')}" />`
               : `<video src="${s.video}" preload="metadata" muted playsinline></video>`
           }
         </span>
-        ${s.title ? `<span class="story-bubble-label">${s.title}</span>` : ''}
+        ${s.title ? `<span class="story-bubble-label">${escapeHtml(s.title)}</span>` : ''}
       `;
       btn.addEventListener('click', () => openStoryViewer(i));
       storiesRail.appendChild(btn);
@@ -1869,6 +1869,10 @@
       setFormMsg(signupMsg, 'É preciso aceitar a política de privacidade.', 'error');
       return;
     }
+    if (!isValidCPF(document.getElementById('suCpf').value)) {
+      setFormMsg(signupMsg, 'CPF inválido.', 'error');
+      return;
+    }
     const body = {
       firstName: document.getElementById('suFirstName').value.trim(),
       lastName: document.getElementById('suLastName').value.trim(),
@@ -1997,7 +2001,7 @@
       if (!res.ok) throw new Error(data.error || 'Não foi possível carregar seus pedidos');
       renderProfileOrders(data.orders || []);
     } catch (err) {
-      profileOrderList.innerHTML = `<p class="bag-empty">${err.message}</p>`;
+      profileOrderList.innerHTML = `<p class="bag-empty">${escapeHtml(err.message)}</p>`;
     }
   }
 
@@ -2049,7 +2053,7 @@
       PROFILE_ADDRESSES = data.addresses || [];
       renderProfileAddresses();
     } catch (err) {
-      profileAddressList.innerHTML = `<p class="bag-empty">${err.message}</p>`;
+      profileAddressList.innerHTML = `<p class="bag-empty">${escapeHtml(err.message)}</p>`;
     }
   }
 
@@ -2064,8 +2068,8 @@
       div.className = 'profile-address-item';
       div.innerHTML = `
         <div class="profile-address-info">
-          <span class="profile-address-label">${a.label || 'Endereço'}</span>
-          <span class="profile-address-meta">${a.rua}, ${a.numero}${a.complemento ? ` - ${a.complemento}` : ''} - ${a.bairro}, ${a.cidade}/${a.estado} - CEP ${a.cep}</span>
+          <span class="profile-address-label">${escapeHtml(a.label || 'Endereço')}</span>
+          <span class="profile-address-meta">${escapeHtml(a.rua)}, ${escapeHtml(a.numero)}${a.complemento ? ` - ${escapeHtml(a.complemento)}` : ''} - ${escapeHtml(a.bairro)}, ${escapeHtml(a.cidade)}/${escapeHtml(a.estado)} - CEP ${escapeHtml(a.cep)}</span>
         </div>
         <div class="profile-address-actions">
           <button type="button" class="profile-address-default-badge ${a.isDefault ? '' : 'is-off'}">${a.isDefault ? 'Padrão' : 'Usar como padrão'}</button>
@@ -2249,6 +2253,18 @@
       el.value = formatPhone(el.value);
     });
   });
+  function isValidCPF(value) {
+    const cpf = String(value || '').replace(/\D/g, '');
+    if (!/^\d{11}$/.test(cpf) || /^(\d)\1{10}$/.test(cpf)) return false;
+    const digits = cpf.split('').map(Number);
+    for (const pos of [9, 10]) {
+      let sum = 0;
+      for (let i = 0; i < pos; i++) sum += digits[i] * (pos + 1 - i);
+      const check = ((sum * 10) % 11) % 10;
+      if (check !== digits[pos]) return false;
+    }
+    return true;
+  }
   document.getElementById('suCpf').addEventListener('input', (e) => {
     const digits = e.target.value.replace(/\D/g, '').slice(0, 11);
     e.target.value = digits

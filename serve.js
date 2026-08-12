@@ -13,6 +13,13 @@ const { getActiveProvider } = require('./payment-provider');
 types.setTypeParser(1700, (v) => (v === null ? null : parseFloat(v)));
 types.setTypeParser(1082, (v) => v);
 
+const REQUIRED_ENV_VARS = ['DATABASE_URL', 'SESSION_SECRET', 'ADMIN_SESSION_SECRET'];
+const missingEnvVars = REQUIRED_ENV_VARS.filter((name) => !process.env[name]);
+if (missingEnvVars.length) {
+  console.error(`[boot] Variáveis de ambiente obrigatórias ausentes: ${missingEnvVars.join(', ')}. Configure o .env antes de iniciar o servidor.`);
+  process.exit(1);
+}
+
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 // Sem este listener, um erro num client ocioso do pool (ex.: o Neon derrubando a conexão por
 // inatividade) vira uncaughtException e derruba o processo inteiro — não só a request atual.
@@ -341,14 +348,14 @@ const money = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency',
 
 function buildOrderConfirmationHtml({ id, customerName, items, total, deliveryMethod }) {
   const rows = items
-    .map((item) => `<li>${item.qty}x ${item.name}${item.variantLabel ? ` (${item.variantLabel})` : ''}</li>`)
+    .map((item) => `<li>${escapeHtml(item.qty)}x ${escapeHtml(item.name)}${item.variantLabel ? ` (${escapeHtml(item.variantLabel)})` : ''}</li>`)
     .join('');
   return `
-    <p>Olá, ${customerName}!</p>
-    <p>Recebemos seu pedido <strong>${id}</strong> na By NaNa. Aqui está o resumo:</p>
+    <p>Olá, ${escapeHtml(customerName)}!</p>
+    <p>Recebemos seu pedido <strong>${escapeHtml(id)}</strong> na By NaNa. Aqui está o resumo:</p>
     <ul>${rows}</ul>
     <p><strong>Total: ${money(total)}</strong></p>
-    <p>Forma de entrega: ${deliveryMethod}</p>
+    <p>Forma de entrega: ${escapeHtml(deliveryMethod)}</p>
     <p>Assim que o status do pedido mudar, avisamos por aqui.</p>
   `;
 }
@@ -356,28 +363,28 @@ function buildOrderConfirmationHtml({ id, customerName, items, total, deliveryMe
 function buildOrderStatusHtml({ id, customerName, status }) {
   const label = ORDER_STATUS_LABELS[status] || status;
   return `
-    <p>Olá, ${customerName}!</p>
-    <p>O status do seu pedido <strong>${id}</strong> na By NaNa foi atualizado para: <strong>${label}</strong>.</p>
+    <p>Olá, ${escapeHtml(customerName)}!</p>
+    <p>O status do seu pedido <strong>${escapeHtml(id)}</strong> na By NaNa foi atualizado para: <strong>${escapeHtml(label)}</strong>.</p>
   `;
 }
 
 function buildBackInStockHtml({ productName, variantLabel, url }) {
   return `
     <p>Boa notícia! 💛</p>
-    <p><strong>${productName}${variantLabel ? ` (${variantLabel})` : ''}</strong> voltou ao estoque na By NaNa.</p>
-    <p><a href="${url}">Ver a peça no site</a></p>
+    <p><strong>${escapeHtml(productName)}${variantLabel ? ` (${escapeHtml(variantLabel)})` : ''}</strong> voltou ao estoque na By NaNa.</p>
+    <p><a href="${escapeHtml(url)}">Ver a peça no site</a></p>
     <p>Como o estoque é limitado, corre lá antes que esgote de novo!</p>
   `;
 }
 
 function buildAbandonedCartHtml({ customerName, items, subtotal, origin }) {
-  const rows = items.map((item) => `<li>${item.qty}x ${item.name}</li>`).join('');
+  const rows = items.map((item) => `<li>${escapeHtml(item.qty)}x ${escapeHtml(item.name)}</li>`).join('');
   return `
-    <p>Oi${customerName ? `, ${customerName}` : ''}!</p>
+    <p>Oi${customerName ? `, ${escapeHtml(customerName)}` : ''}!</p>
     <p>Você deixou algumas peças na sacola da By NaNa:</p>
     <ul>${rows}</ul>
     <p><strong>Subtotal: ${money(subtotal)}</strong></p>
-    <p><a href="${origin}/">Voltar pra sacola</a></p>
+    <p><a href="${escapeHtml(origin)}/">Voltar pra sacola</a></p>
   `;
 }
 
@@ -1915,6 +1922,12 @@ async function handleApi(req, res, pathname) {
 
       const code = (body.code || '').trim().toUpperCase();
       if (!code) return sendJSON(res, 400, { error: 'Informe um código para o cupom' });
+      // Restringe o charset (defesa em profundidade além do escapeHtml no front): o código do
+      // cupom é exibido sem contexto de "produto"/"admin" em vários lugares (sacola do
+      // cliente, lista no painel) — travar aqui elimina de vez a classe de bug, não só sintoma.
+      if (!/^[A-Z0-9_-]{1,30}$/.test(code)) {
+        return sendJSON(res, 400, { error: 'O código do cupom deve conter só letras, números, "-" ou "_" (até 30 caracteres)' });
+      }
       const discount = validateDiscount(body);
       if (discount.error) return sendJSON(res, 400, { error: discount.error });
       const endDate = (body.endDate || '').trim() || null;
@@ -1937,6 +1950,9 @@ async function handleApi(req, res, pathname) {
       if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       const code = (body.code || '').trim().toUpperCase();
       if (!code) return sendJSON(res, 400, { error: 'Cupom não encontrado' });
+      if (!/^[A-Z0-9_-]{1,30}$/.test(code)) {
+        return sendJSON(res, 400, { error: 'Cupom não encontrado' });
+      }
       const discount = validateDiscount(body);
       if (discount.error) return sendJSON(res, 400, { error: discount.error });
       const endDate = (body.endDate || '').trim() || null;
@@ -2039,6 +2055,9 @@ async function handleApi(req, res, pathname) {
       const rawItems = Array.isArray(body.items) ? body.items : [];
       if (!customerName || !customerPhone || !paymentMethod || !deliveryMethod || !rawItems.length) {
         return sendJSON(res, 400, { error: 'Dados do pedido incompletos' });
+      }
+      if (!['Entrega', 'Retirada em loja'].includes(deliveryMethod)) {
+        return sendJSON(res, 400, { error: 'Forma de entrega inválida' });
       }
       const couponCodeInput = (body.couponCode || '').trim().toUpperCase() || null;
       const address = body.address && typeof body.address === 'object' ? body.address : null;
@@ -2265,6 +2284,12 @@ async function handleApi(req, res, pathname) {
 
     // ------ customers (cadastro/login público + CRM no admin) ------
     if (pathname === '/api/customers' && req.method === 'POST') {
+      // Sem isso, a checagem de duplicidade abaixo (que confirma se um e-mail/CPF já é
+      // cliente) vira um oráculo de força bruta: um atacante testa CPFs em lote sem limite
+      // de tentativas para descobrir quem já comprou na loja.
+      if (loginRateLimited(req, 'signup')) {
+        return sendJSON(res, 429, { error: 'Muitas tentativas. Aguarde alguns minutos e tente novamente' });
+      }
       const body = await readJSONBody(req);
 
       const firstName = (body.firstName || '').trim();
@@ -2281,7 +2306,7 @@ async function handleApi(req, res, pathname) {
         return sendJSON(res, 400, { error: 'Preencha todos os campos obrigatórios' });
       }
       if (!/^\S+@\S+\.\S+$/.test(email)) return sendJSON(res, 400, { error: 'E-mail inválido' });
-      if (cpf.length !== 11) return sendJSON(res, 400, { error: 'CPF inválido' });
+      if (!isValidCPF(cpf)) return sendJSON(res, 400, { error: 'CPF inválido' });
       if (password.length < 6) return sendJSON(res, 400, { error: 'A senha deve ter ao menos 6 caracteres' });
       if (body.privacyAccepted !== true) {
         return sendJSON(res, 400, { error: 'É preciso aceitar a política de privacidade' });
@@ -2406,7 +2431,7 @@ async function handleApi(req, res, pathname) {
           await sendEmail({
             to: email,
             subject: 'Redefinição de senha — By NaNa',
-            html: `<p>Olá, ${customer.firstName}!</p><p>Clique no link abaixo para definir uma nova senha. Ele expira em 1 hora.</p><p><a href="${link}">${link}</a></p><p>Se você não pediu isso, ignore este e-mail.</p>`,
+            html: `<p>Olá, ${escapeHtml(customer.firstName)}!</p><p>Clique no link abaixo para definir uma nova senha. Ele expira em 1 hora.</p><p><a href="${escapeHtml(link)}">${escapeHtml(link)}</a></p><p>Se você não pediu isso, ignore este e-mail.</p>`,
           });
         }
       }
@@ -2894,6 +2919,18 @@ function serveStatic(req, res, pathname) {
       return;
     }
     const ext = path.extname(full);
+    if (filePath === '/index.html') {
+      // og:image/canonical precisam ser URL absoluta (esquema+host) — link relativo não é
+      // resolvido de forma confiável por crawlers de preview (WhatsApp/Facebook/Instagram).
+      const origin = requestOrigin(req);
+      const html = data
+        .toString('utf8')
+        .replace(/<!--HOME_OG_IMAGE-->/g, escapeHtml(`${origin}/assets/img/processed/site-hero-1.jpg`))
+        .replace(/<!--HOME_CANONICAL-->/g, escapeHtml(`${origin}/`));
+      res.writeHead(200, { 'Content-Type': types_[ext] || 'application/octet-stream', 'Cache-Control': cacheControlFor(filePath, ext) });
+      res.end(html);
+      return;
+    }
     res.writeHead(200, { 'Content-Type': types_[ext] || 'application/octet-stream', 'Cache-Control': cacheControlFor(filePath, ext) });
     res.end(data);
   });
@@ -2916,6 +2953,21 @@ async function buildSitemap(origin) {
   const urls = ['/', ...rows.map((r) => `/produto/${r.id}`)];
   const items = urls.map((u) => `  <url><loc>${origin}${u}</loc></url>`).join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${items}\n</urlset>\n`;
+}
+
+// Valida os dois dígitos verificadores do CPF (módulo 11) — a checagem de tamanho sozinha
+// deixa passar sequências óbvias como "111.111.111-11" ou "000.000.000-00".
+function isValidCPF(cpf) {
+  if (!/^\d{11}$/.test(cpf)) return false;
+  if (/^(\d)\1{10}$/.test(cpf)) return false;
+  const digits = cpf.split('').map(Number);
+  for (const pos of [9, 10]) {
+    let sum = 0;
+    for (let i = 0; i < pos; i++) sum += digits[i] * (pos + 1 - i);
+    const check = (sum * 10) % 11 % 10;
+    if (check !== digits[pos]) return false;
+  }
+  return true;
 }
 
 function escapeHtml(str) {
@@ -2974,7 +3026,7 @@ const CSP = [
   "font-src 'self' https://fonts.gstatic.com",
   "img-src 'self' data: https://www.facebook.com https://www.google-analytics.com",
   "media-src 'self' data:",
-  "connect-src 'self' https://www.google-analytics.com https://*.google-analytics.com https://www.facebook.com https://connect.facebook.net",
+  "connect-src 'self' https://viacep.com.br https://www.google-analytics.com https://*.google-analytics.com https://www.facebook.com https://connect.facebook.net",
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
@@ -2991,7 +3043,14 @@ function applySecurityHeaders(res) {
   res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
 }
 
-http
+// Rede de segurança contra promises rejeitadas sem .catch() em algum ponto do código — sem
+// isso, uma unhandled rejection derruba o processo inteiro (comportamento padrão do Node
+// desde a v15), tirando o site do ar para todo mundo por causa de uma única requisição.
+process.on('unhandledRejection', (err) => {
+  console.error('[unhandledRejection]', err);
+});
+
+const httpServer = http
   .createServer((req, res) => {
     applySecurityHeaders(res);
     const pathname = req.url.split('?')[0];
@@ -3005,10 +3064,16 @@ http
       return;
     }
     if (pathname === '/sitemap.xml') {
-      buildSitemap(requestOrigin(req)).then((xml) => {
-        res.writeHead(200, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'no-cache' });
-        res.end(xml);
-      });
+      buildSitemap(requestOrigin(req))
+        .then((xml) => {
+          res.writeHead(200, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'no-cache' });
+          res.end(xml);
+        })
+        .catch((err) => {
+          console.error('[sitemap] falha ao gerar sitemap:', err.message);
+          if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Erro ao gerar sitemap');
+        });
       return;
     }
     if (pathname.startsWith('/produto/')) {
@@ -3023,6 +3088,19 @@ http
     serveStatic(req, res, pathname);
   })
   .listen(port, host, () => console.log(`Serving on http://${host}:${port}`));
+
+// Encerramento gracioso: plataformas de deploy (Render, Railway, Fly.io, Docker) mandam SIGTERM
+// antes de matar o container. Sem isso, requisições em voo são cortadas e o pool do Neon fica
+// aberto, gerando 502s desnecessários a cada deploy.
+function gracefulShutdown(signal) {
+  console.log(`[shutdown] ${signal} recebido, encerrando...`);
+  httpServer.close(() => {
+    pool.end().finally(() => process.exit(0));
+  });
+  setTimeout(() => process.exit(1), 10000).unref();
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // ---------- lembrete de carrinho abandonado (varredura periódica, sem cupom) ----------
 // Processo único e sempre ativo (sem worker/cron externo) — um setInterval aqui já cobre o

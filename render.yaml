@@ -1,0 +1,43 @@
+services:
+  - type: web
+    name: by-nana
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      # Neon (pooler) — mesma URL que já está no .env local.
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: ADMIN_SESSION_SECRET
+        sync: false
+      # Usados só uma vez por `node db/seed-admin.js` para criar o primeiro admin (owner).
+      - key: SEED_ADMIN_NAME
+        sync: false
+      - key: SEED_ADMIN_EMAIL
+        sync: false
+      - key: SEED_ADMIN_PASSWORD
+        sync: false
+      # E-mail transacional (Resend).
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      # Domínio final do site — usado no sitemap, robots.txt, og:image e no link do
+      # e-mail de carrinho abandonado. Preencher com a URL pública real (ex.: https://bynana.com.br).
+      - key: SITE_URL
+        sync: false
+      # Opcionais — deixar em branco por enquanto vira no-op automático no analytics.js.
+      - key: GA4_MEASUREMENT_ID
+        sync: false
+      - key: META_PIXEL_ID
+        sync: false
+      # Opcional — sem isso, checkout continua 100% manual via WhatsApp (comportamento atual).
+      - key: PAYMENT_PROVIDER
+        sync: false
