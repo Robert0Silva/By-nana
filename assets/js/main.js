@@ -2788,6 +2788,7 @@
     loadBar.classList.add('is-done');
     buildMegaMenu();
     renderPromoBanner();
+    renderTopbarMessages();
     renderCart();
     restoreSession();
 
@@ -2825,5 +2826,52 @@
       : `🎉 Promoção especial: ${discountText} em toda a loja`;
     banner.hidden = false;
   }
+
+  // ---------- topbar: mensagens fixas da marca + incentivos dinâmicos (frete grátis, cupom de
+  // boas-vindas) — lidos direto de SHIPPING_RULES/COUPONS, então somem sozinhos se a loja não
+  // tiver frete grátis ou cupom de primeira compra configurado (nenhum valor fica hardcoded).
+  let topbarRotationTimer = null;
+
+  function appendTopbarMessage(topbar, text) {
+    const span = document.createElement('span');
+    span.className = 'topbar-msg';
+    span.dataset.dynamic = '1';
+    span.textContent = text;
+    topbar.appendChild(span);
+  }
+
+  function renderTopbarMessages() {
+    const topbar = document.getElementById('topbar');
+    if (!topbar) return;
+
+    // remove mensagens dinâmicas de uma chamada anterior (o retry de /api/data pode rodar init() de novo).
+    topbar.querySelectorAll('.topbar-msg[data-dynamic]').forEach((el) => el.remove());
+
+    const freeShippingRules = SHIPPING_RULES.filter((r) => r.active && r.freeAbove != null && Number(r.freeAbove) > 0);
+    if (freeShippingRules.length) {
+      const minFreeAbove = Math.min(...freeShippingRules.map((r) => Number(r.freeAbove)));
+      appendTopbarMessage(topbar, `🚚 Frete grátis em compras acima de ${money(minFreeAbove)}`);
+    }
+
+    const today = window.PromoEngine.todayISO();
+    const welcomeCoupon = COUPONS.find(
+      (c) => c.active && c.firstPurchaseOnly && (!c.startDate || today >= c.startDate) && (!c.endDate || today <= c.endDate)
+    );
+    if (welcomeCoupon) {
+      const discountText = welcomeCoupon.type === 'percent' ? `${welcomeCoupon.value}%` : money(welcomeCoupon.value);
+      appendTopbarMessage(topbar, `🎁 Cupom ${welcomeCoupon.code}: ${discountText} OFF na primeira compra`);
+    }
+
+    const messages = topbar.querySelectorAll('.topbar-msg');
+    if (topbarRotationTimer) clearInterval(topbarRotationTimer);
+    if (messages.length <= 1) return;
+    let current = 0;
+    topbarRotationTimer = setInterval(() => {
+      messages[current].classList.remove('is-active');
+      current = (current + 1) % messages.length;
+      messages[current].classList.add('is-active');
+    }, 5000);
+  }
+
   init();
 })();
