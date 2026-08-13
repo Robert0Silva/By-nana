@@ -120,6 +120,13 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
   background:var(--ink);color:var(--cream);text-align:center;
   font-size:.78rem;letter-spacing:.03em;padding:9px 12px;
 }
+/* mensagem de cupom clicável (copiar código) — reseta a aparência padrão de <button>, mantém
+   o texto igual às outras mensagens da topbar (só troca o cursor pra indicar que é clicável). */
+.topbar-msg-action{
+  background:none;border:none;padding:0;margin:0;color:inherit;font:inherit;
+  letter-spacing:inherit;text-transform:inherit;cursor:pointer;
+}
+.topbar-msg-action:hover,.topbar-msg-action:focus-visible{text-decoration:underline;}
 
 /* ---------- header ---------- */
 .site-header{
@@ -504,6 +511,8 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 .product-price-old{font-size:.8rem;color:var(--ink-soft);text-decoration:line-through;}
 .installments{margin:2px 0 0;font-size:.74rem;color:var(--ink-soft);}
 .pdp-info .installments{font-size:.82rem;margin:-4px 0 2px;}
+.pix-hint{margin:1px 0 0;font-size:.74rem;color:var(--wine);font-weight:500;}
+.pdp-info .pix-hint{font-size:.82rem;margin:0 0 2px;}
 .product-actions{display:flex;gap:8px;margin-top:6px;}
 .add-btn{
   flex:1;padding:11px 12px;border-radius:999px;border:1px solid var(--ink);

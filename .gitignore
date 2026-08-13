@@ -2,3 +2,5 @@ node_modules/
 server.log
 server-error.log
 .env
+test-results/
+playwright-report/

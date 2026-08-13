@@ -573,6 +573,24 @@ async function getPromotions() {
   return rows;
 }
 
+// ---------- mais vendidos (prova social na vitrine pública) ----------
+// Só product_id + quantidade vendida nos últimos 90 dias — nunca receita, que é dado sensível
+// de negócio e já tem seu próprio endpoint autenticado (/api/admin/reports/products). Pedidos
+// cancelados não contam, e a janela de 90 dias evita que um produto antigo fique "mais vendido"
+// pra sempre por causa de um pico isolado.
+async function getBestSellers(limit = 8) {
+  const { rows } = await pool.query(
+    `SELECT item->>'id' AS "productId", SUM((item->>'qty')::int)::int AS qty
+       FROM orders, jsonb_array_elements(items) AS item
+      WHERE status != 'cancelado' AND created_at >= now() - interval '90 days'
+      GROUP BY item->>'id'
+      ORDER BY qty DESC
+      LIMIT $1`,
+    [limit]
+  );
+  return rows;
+}
+
 async function getCoupons() {
   const { rows } = await pool.query(`
     SELECT code, discount_type AS type, discount_value AS value,
@@ -1088,7 +1106,7 @@ async function handleApi(req, res, pathname) {
 
     // ------ catalog ------
     if (pathname === '/api/data' && req.method === 'GET') {
-      const [products, categories, collections, promotions, coupons, shippingRules, categoryGroups, categoryContent, stories, novidades, upsell] = await Promise.all([
+      const [products, categories, collections, promotions, coupons, shippingRules, categoryGroups, categoryContent, stories, novidades, upsell, bestSellers] = await Promise.all([
         getProducts(),
         getCategories(),
         getCollections(),
@@ -1100,8 +1118,9 @@ async function handleApi(req, res, pathname) {
         getStories(true),
         getNovidades(),
         getUpsellSuggestions(),
+        getBestSellers(),
       ]);
-      return sendJSON(res, 200, { products, categories, collections, promotions, coupons, shippingRules, categoryGroups, categoryContent, stories, novidades, upsell });
+      return sendJSON(res, 200, { products, categories, collections, promotions, coupons, shippingRules, categoryGroups, categoryContent, stories, novidades, upsell, bestSellers });
     }
 
     // ------ admin auth (login multiusuário, papéis, log de atividade) ------
@@ -2357,6 +2376,7 @@ async function handleApi(req, res, pathname) {
         return sendJSON(res, 401, { error: 'E-mail ou senha inválidos' });
       }
       resetLoginAttempts(req, email);
+      // eslint-disable-next-line no-unused-vars -- descarta passwordHash de propósito, pra nunca ir na resposta ao cliente.
       const { passwordHash, ...customer } = row;
       return sendJSON(res, 200, { customer, token: signSessionToken(customer.id) });
     }

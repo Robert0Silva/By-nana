@@ -16,6 +16,7 @@
   let STORIES = [];
   let NOVIDADES = [];
   let UPSELL_PRODUCTS = [];
+  let BEST_SELLERS = [];
 
   const money = (v) =>
     v == null ? 'Sob consulta' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -25,6 +26,16 @@
   const INSTALLMENT_COUNT = 6;
   function installmentText(price) {
     return price == null ? '' : `ou ${INSTALLMENT_COUNT}x de ${money(price / INSTALLMENT_COUNT)} sem juros`;
+  }
+
+  // dica de preço à vista no Pix, exibida no card/PDP para antecipar o desconto que hoje só
+  // aparece no fechamento do pedido (mesmo percentual de PromoEngine.bestDiscount — não é um
+  // desconto extra, só mostra mais cedo um que o checkout já aplicaria).
+  function pixHintText(price) {
+    if (price == null) return '';
+    const pct = window.PromoEngine.PIX_DISCOUNT_PERCENT;
+    const pixPrice = price * (1 - pct / 100);
+    return `ou ${money(pixPrice)} no Pix (-${pct}%)`;
   }
 
   // avaliações trazem texto livre digitado por clientes (nome de conta, comentário) — precisa
@@ -386,6 +397,7 @@
     saveFavs();
     renderGrid(currentFilter, currentSearch);
     renderNovidades();
+    renderBestSellers();
     syncPdpFavButton();
     if (!document.getElementById('profilePanel-favoritos').hidden) renderProfileFavorites();
 
@@ -491,6 +503,7 @@
         ${p.rating ? `<div class="pdp-rating-row product-rating-row"><span class="pdp-rating-stars">${starsHtml(p.rating)}</span><span class="pdp-rating-count">${p.rating.toFixed(1)} (${p.reviewCount})</span></div>` : ''}
         <div class="product-price-row">${priceHtml}</div>
         ${p.price != null ? `<p class="installments">${installmentText(price)}</p>` : ''}
+        ${p.price != null ? `<p class="pix-hint">${pixHintText(price)}</p>` : ''}
         ${colorDotsHtml(variants)}
         ${variantHtml}
         <div class="product-actions">
@@ -834,6 +847,19 @@
     NOVIDADES.forEach((p) => novidadesGrid.appendChild(productCard(p)));
   }
 
+  // ---------- mais vendidos (prova social — vem de /api/data, sem receita/dado sensível) ----------
+  const bestSellersSection = document.getElementById('bestSellers');
+  const bestSellersGrid = document.getElementById('bestSellersGrid');
+  function renderBestSellers() {
+    if (!bestSellersGrid || !bestSellersSection) return;
+    // junta com PRODUCTS no client: um produto vendido e depois removido do catálogo
+    // simplesmente não aparece, em vez de quebrar a seção.
+    const products = BEST_SELLERS.map((b) => PRODUCTS.find((p) => p.id === b.productId)).filter(Boolean);
+    bestSellersSection.hidden = products.length === 0;
+    bestSellersGrid.innerHTML = '';
+    products.forEach((p) => bestSellersGrid.appendChild(productCard(p)));
+  }
+
   function debounce(fn, wait) {
     let t;
     return (...args) => {
@@ -967,7 +993,7 @@
       bagAddressFields.hidden = false;
       document.getElementById('addrNumero').focus();
       renderCart();
-    } catch (e) {
+    } catch {
       cepStatus.textContent = 'Não foi possível buscar o CEP agora. Preencha o endereço manualmente.';
       cepStatus.className = 'bag-cep-status is-error';
       bagAddressFields.hidden = false;
@@ -1093,18 +1119,14 @@
       address: selectedDelivery === 'Entrega' ? address : null,
       customerToken: localStorage.getItem(CUSTOMER_TOKEN_KEY) || null,
     };
-    try {
-      const res = await fetch('/api/orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'Não foi possível reservar o estoque');
-      return data.orderId;
-    } catch (err) {
-      throw err;
-    }
+    const res = await fetch('/api/orders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Não foi possível reservar o estoque');
+    return data.orderId;
   }
 
   // Re-sincroniza só os dados de produto/estoque após uma falha de checkout (ex.: estoque
@@ -1778,6 +1800,7 @@
       saveFavs();
       renderGrid(currentFilter, currentSearch);
       renderNovidades();
+      renderBestSellers();
       syncPdpFavButton();
       if (!document.getElementById('profilePanel-favoritos').hidden) renderProfileFavorites();
     } catch {
@@ -2531,6 +2554,11 @@
     const installmentsEl = document.getElementById('pdpInstallments');
     installmentsEl.textContent = installmentText(price);
     installmentsEl.hidden = p.price == null;
+    const pixHintEl = document.getElementById('pdpPixHint');
+    if (pixHintEl) {
+      pixHintEl.textContent = pixHintText(price);
+      pixHintEl.hidden = p.price == null;
+    }
 
     const ratingRow = document.getElementById('pdpRatingRow');
     if (p.rating) {
@@ -2776,7 +2804,8 @@
       STORIES = (data.stories || []).filter((story) => !/^story\s+teste?\b/i.test((story.title || '').trim()));
       NOVIDADES = data.novidades || [];
       UPSELL_PRODUCTS = data.upsell || [];
-    } catch (e) {
+      BEST_SELLERS = data.bestSellers || [];
+    } catch {
       loadBar.classList.remove('is-active');
       if (grid) grid.innerHTML = '';
       if (emptyState) emptyState.hidden = true;
@@ -2806,6 +2835,7 @@
       renderGrid(initialCategory, initialSearch);
       filtersEl.querySelectorAll('.filter-chip').forEach((c) => c.classList.toggle('is-active', c.dataset.filter === initialCategory));
       renderNovidades();
+      renderBestSellers();
       renderRecentlyViewed();
       renderStoriesRail();
     }
@@ -2832,12 +2862,31 @@
   // tiver frete grátis ou cupom de primeira compra configurado (nenhum valor fica hardcoded).
   let topbarRotationTimer = null;
 
-  function appendTopbarMessage(topbar, text) {
-    const span = document.createElement('span');
-    span.className = 'topbar-msg';
-    span.dataset.dynamic = '1';
-    span.textContent = text;
-    topbar.appendChild(span);
+  // onClick presente => vira <button> (clique-para-copiar do cupom); ausente => <span> comum
+  // (mensagem só informativa, como a de frete grátis). Retorna o elemento criado.
+  function appendTopbarMessage(topbar, text, onClick) {
+    const el = document.createElement(onClick ? 'button' : 'span');
+    el.className = onClick ? 'topbar-msg topbar-msg-action' : 'topbar-msg';
+    el.dataset.dynamic = '1';
+    el.textContent = text;
+    if (onClick) {
+      el.type = 'button';
+      el.addEventListener('click', onClick);
+    }
+    topbar.appendChild(el);
+    return el;
+  }
+
+  function copyWelcomeCoupon(el, code, originalLabel) {
+    navigator.clipboard
+      .writeText(code)
+      .then(() => {
+        el.textContent = `✓ Cupom ${code} copiado!`;
+        setTimeout(() => {
+          el.textContent = originalLabel;
+        }, 2200);
+      })
+      .catch(() => {});
   }
 
   function renderTopbarMessages() {
@@ -2859,7 +2908,11 @@
     );
     if (welcomeCoupon) {
       const discountText = welcomeCoupon.type === 'percent' ? `${welcomeCoupon.value}%` : money(welcomeCoupon.value);
-      appendTopbarMessage(topbar, `🎁 Cupom ${welcomeCoupon.code}: ${discountText} OFF na primeira compra`);
+      // Clipboard API exige contexto seguro (https ou localhost); sem isso, a mensagem some do
+      // clique e vira só informativa — nunca some por completo.
+      const canCopy = !!(navigator.clipboard && navigator.clipboard.writeText);
+      const label = `🎁 Cupom ${welcomeCoupon.code}: ${discountText} OFF na primeira compra${canCopy ? ' · toque para copiar' : ''}`;
+      const el = appendTopbarMessage(topbar, label, canCopy ? () => copyWelcomeCoupon(el, welcomeCoupon.code, label) : null);
     }
 
     const messages = topbar.querySelectorAll('.topbar-msg');

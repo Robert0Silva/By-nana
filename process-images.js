@@ -4,10 +4,6 @@ const path = require('path');
 const SRC = path.join(__dirname, 'assets/img/src');
 const OUT = path.join(__dirname, 'assets/img/processed');
 
-// Soft pearl/cream backdrop matching the By NaNa logo card, used behind
-// isolated product shots so they read as one coherent catalog.
-const CARD_BG = { r: 238, g: 235, b: 230, alpha: 1 };
-
 async function enhance(input) {
   return input
     .normalize({ lower: 1, upper: 99 })
