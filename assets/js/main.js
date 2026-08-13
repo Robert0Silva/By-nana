@@ -1127,10 +1127,15 @@
     else if (grid) renderGrid(currentFilter, currentSearch);
   }
 
+  // checkoutBtn é um <a>, então "disabled" não impede clique/Enter por si só (e a classe
+  // is-loading só bloqueia o mouse via pointer-events, não o teclado) — esta flag é a
+  // proteção de verdade contra duplo envio (duplo clique, Enter repetido no link focado).
+  let checkoutInFlight = false;
   checkoutBtn.addEventListener('click', (e) => {
     const ids = Object.keys(cart);
     if (ids.length === 0) return;
     e.preventDefault();
+    if (checkoutInFlight) return;
     const error = validateCheckout();
     if (error) {
       bagFormError.textContent = error;
@@ -1138,7 +1143,9 @@
       return;
     }
     bagFormError.hidden = true;
+    checkoutInFlight = true;
     checkoutBtn.classList.add('is-loading');
+    checkoutBtn.setAttribute('aria-disabled', 'true');
     checkoutBtn.textContent = 'Enviando...';
     const checkoutTotal = cartFinalTotal(ids) + shippingQuote(ids).cost;
     window.byNanaAnalytics?.trackBeginCheckout(checkoutTotal);
@@ -1150,12 +1157,16 @@
     persistOrder(ids).then((orderId) => {
       window.byNanaAnalytics?.trackPurchase(orderId, checkoutTotal, checkoutItems);
       window.open(waLink(buildOrderMessage(ids)), '_blank', 'noopener');
+      checkoutInFlight = false;
       checkoutBtn.classList.remove('is-loading');
+      checkoutBtn.removeAttribute('aria-disabled');
       checkoutBtn.textContent = 'Finalizar no WhatsApp';
     }).catch((err) => {
       bagFormError.textContent = err.message;
       bagFormError.hidden = false;
+      checkoutInFlight = false;
       checkoutBtn.classList.remove('is-loading');
+      checkoutBtn.removeAttribute('aria-disabled');
       checkoutBtn.textContent = 'Finalizar no WhatsApp';
       refreshProductData();
     });
