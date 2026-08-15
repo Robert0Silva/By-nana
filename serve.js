@@ -898,6 +898,23 @@ async function getTopProducts(from, to, limit = 10) {
   return rows;
 }
 
+async function getSalesByCategory(from, to) {
+  const { rows } = await pool.query(
+    `SELECT COALESCE(cat.name, 'Sem categoria') AS category,
+            SUM((item->>'qty')::int)::int AS qty,
+            SUM((item->>'qty')::int * (item->>'price')::numeric) AS revenue
+     FROM orders
+     CROSS JOIN LATERAL jsonb_array_elements(items) AS item
+     LEFT JOIN products p ON p.id = item->>'id'
+     LEFT JOIN categories cat ON cat.id = p.category_id
+     WHERE status != 'cancelado' AND created_at >= ($1::date)::timestamp AT TIME ZONE 'America/Sao_Paulo' AND created_at < (($2::date + interval '1 day'))::timestamp AT TIME ZONE 'America/Sao_Paulo'
+     GROUP BY 1
+     ORDER BY revenue DESC`,
+    [from, to]
+  );
+  return rows;
+}
+
 async function getCouponUsage(from, to) {
   const { rows } = await pool.query(
     `SELECT coupon_code AS code, COUNT(*)::int AS uses, COALESCE(SUM(discount), 0) AS "totalDiscount"
@@ -1238,13 +1255,22 @@ async function handleApi(req, res, pathname) {
 
       const to = new Date().toISOString().slice(0, 10);
       const from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-      const [summary, topProducts, newCustomers, allOrders] = await Promise.all([
+      const prevTo = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const prevFrom = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const [summary, summaryPrev, byDay, topProducts, byCategory, newCustomers, newCustomersPrev, allOrders] = await Promise.all([
         getSalesSummary(from, to),
+        getSalesSummary(prevFrom, prevTo),
+        getSalesByDay(from, to),
         getTopProducts(from, to, 5),
+        getSalesByCategory(from, to),
         getNewCustomers(from, to),
+        getNewCustomers(prevFrom, prevTo),
         getOrders(),
       ]);
-      return sendJSON(res, 200, { summary, topProducts, newCustomers, recentOrders: allOrders.slice(0, 5), from, to });
+      return sendJSON(res, 200, {
+        summary, summaryPrev, byDay, topProducts, byCategory, newCustomers, newCustomersPrev,
+        recentOrders: allOrders.slice(0, 5), from, to,
+      });
     }
 
     if (pathname === '/api/admin/reports/sales' && req.method === 'POST') {

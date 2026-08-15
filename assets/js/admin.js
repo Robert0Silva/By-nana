@@ -2128,6 +2128,88 @@
       .join('');
   }
 
+  function renderDeltaBadge(el, curr, prev) {
+    if (!el) return;
+    const delta = prev > 0 ? ((curr - prev) / prev) * 100 : curr > 0 ? 100 : 0;
+    const up = delta >= 0;
+    el.className = `admin-stat-delta ${up ? 'is-up' : 'is-down'}`;
+    el.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="${
+      up ? 'M12 19V5M5 12l7-7 7 7' : 'M12 5v14M5 12l7 7 7-7'
+    }"/></svg>${Math.abs(delta).toFixed(0)}%`;
+  }
+
+  function renderLineChart(container, points, valueFormatter) {
+    if (!points.length) {
+      container.innerHTML = '<p class="admin-empty-block">Sem dados no período.</p>';
+      return;
+    }
+    const w = 600, h = 200, pad = 8;
+    const max = Math.max(...points.map((p) => p.value), 1);
+    const stepX = points.length > 1 ? (w - pad * 2) / (points.length - 1) : 0;
+    const coords = points.map((p, i) => [pad + i * stepX, h - pad - (p.value / max) * (h - pad * 2)]);
+    const linePath = coords.map((c, i) => `${i === 0 ? 'M' : 'L'}${c[0].toFixed(1)},${c[1].toFixed(1)}`).join(' ');
+    const areaPath = `${linePath} L${coords[coords.length - 1][0]},${h - pad} L${coords[0][0]},${h - pad} Z`;
+    container.innerHTML = `
+      <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+        <path d="${areaPath}" fill="var(--gold)" opacity="0.12" stroke="none"/>
+        <path d="${linePath}" fill="none" stroke="var(--gold)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        ${coords
+          .map(
+            (c, i) =>
+              `<circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="3" fill="var(--gold)"><title>${escapeHtml(
+                new Date(`${points[i].date}T00:00:00`).toLocaleDateString('pt-BR')
+              )}: ${valueFormatter(points[i].value)}</title></circle>`
+          )
+          .join('')}
+      </svg>`;
+  }
+
+  // paleta categórica validada (contraste + distinção para daltonismo) via skill de dataviz —
+  // as cores da marca (gold/camel/wine) são todas tons de marrom com contraste insuficiente entre si
+  const DONUT_COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4'];
+
+  function renderDonutChart(svgContainer, legendContainer, items, valueFormatter) {
+    if (!items.length) {
+      svgContainer.innerHTML = '';
+      legendContainer.innerHTML = '<p class="admin-empty-block">Sem dados no período.</p>';
+      return;
+    }
+    const total = items.reduce((s, i) => s + i.value, 0) || 1;
+    const r = 70, c = 2 * Math.PI * r;
+    let offset = 0;
+    const circles = items
+      .map((it, i) => {
+        const frac = it.value / total;
+        const dash = frac * c;
+        const circle = `<circle cx="90" cy="90" r="${r}" fill="none" stroke="${DONUT_COLORS[i % DONUT_COLORS.length]}"
+          stroke-width="24" stroke-dasharray="${dash.toFixed(1)} ${(c - dash).toFixed(1)}"
+          stroke-dashoffset="${(-offset).toFixed(1)}" transform="rotate(-90 90 90)"><title>${escapeHtml(
+          it.label
+        )}: ${valueFormatter(it.value)}</title></circle>`;
+        offset += dash;
+        return circle;
+      })
+      .join('');
+    svgContainer.innerHTML = `<svg viewBox="0 0 180 180">${circles}</svg>`;
+    legendContainer.innerHTML = items
+      .map(
+        (it, i) => `
+      <li><span class="swatch" style="background:${DONUT_COLORS[i % DONUT_COLORS.length]}"></span>${escapeHtml(
+          it.label
+        )}<span class="val">${valueFormatter(it.value)}</span></li>`
+      )
+      .join('');
+  }
+
+  function collapseTopNPlusOther(items, n, otherLabel) {
+    const sorted = [...items].sort((a, b) => b.value - a.value);
+    if (sorted.length <= n) return sorted;
+    const top = sorted.slice(0, n);
+    const rest = sorted.slice(n).reduce((s, i) => s + i.value, 0);
+    if (rest > 0) top.push({ label: otherLabel, value: rest });
+    return top;
+  }
+
   function renderTable(container, columns, rows) {
     if (!rows.length) {
       container.innerHTML = '<p class="admin-empty-block">Sem dados no período.</p>';
@@ -2149,6 +2231,28 @@
       document.getElementById('dashTicket').textContent = money(data.summary.avgTicket);
       document.getElementById('dashNewCustomers').textContent = data.newCustomers.newCustomers;
 
+      renderDeltaBadge(document.getElementById('dashRevenueDelta'), data.summary.revenue, data.summaryPrev.revenue);
+      renderDeltaBadge(document.getElementById('dashOrdersDelta'), data.summary.orderCount, data.summaryPrev.orderCount);
+      renderDeltaBadge(document.getElementById('dashTicketDelta'), data.summary.avgTicket, data.summaryPrev.avgTicket);
+      renderDeltaBadge(
+        document.getElementById('dashNewCustomersDelta'),
+        data.newCustomers.newCustomers,
+        data.newCustomersPrev.newCustomers
+      );
+
+      renderLineChart(
+        document.getElementById('dashRevenueChart'),
+        data.byDay.map((d) => ({ date: d.date, value: Number(d.revenue) })),
+        money
+      );
+
+      const catItems = collapseTopNPlusOther(
+        data.byCategory.map((c) => ({ label: c.category, value: Number(c.revenue) })),
+        4,
+        'Outros'
+      );
+      renderDonutChart(document.getElementById('dashCategoryChart'), document.getElementById('dashCategoryLegend'), catItems, money);
+
       renderBarList(
         document.getElementById('dashTopProducts'),
         data.topProducts.map((p) => ({ label: p.name, value: p.qty })),
@@ -2164,7 +2268,7 @@
             (o) => `
           <div class="admin-order-item">
             <div class="admin-order-info">
-              <span class="admin-order-name">${escapeHtml(o.customerName)}</span>
+              <span class="admin-order-name"><span class="admin-order-item-status st-${o.status}"></span>${escapeHtml(o.customerName)}</span>
               <span class="admin-order-meta">${new Date(o.createdAt).toLocaleString('pt-BR')} · ${money(o.total)}</span>
             </div>
           </div>`
