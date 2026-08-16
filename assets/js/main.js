@@ -2839,9 +2839,41 @@
       renderRecentlyViewed();
       renderStoriesRail();
     }
+
+    initScrollReveal();
   }
 
   dataErrorRetry.addEventListener('click', init);
+
+  // ---------- entrada suave das seções ao rolar a página ----------
+  // Classe só é adicionada aqui (nunca no HTML) — sem JS ou sem suporte a IntersectionObserver
+  // os elementos simplesmente não recebem `.reveal` e ficam com a opacidade normal, sempre visíveis.
+  function initScrollReveal() {
+    if (!('IntersectionObserver' in window)) return;
+    const headings = document.querySelectorAll(
+      '.section-head, .spotlight-copy, .spotlight-media, .sobre-img, .sobre-copy, .brand-proof-inner, .cta-inner'
+    );
+    const staggerGroups = document.querySelectorAll('.cat-grid, .product-grid, .editorial-grid, .proof-points');
+    const io = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          entry.target.classList.add('is-visible');
+          io.unobserve(entry.target);
+        });
+      },
+      { threshold: 0.12, rootMargin: '0px 0px -80px 0px' }
+    );
+    headings.forEach((el) => {
+      el.classList.add('reveal');
+      io.observe(el);
+    });
+    staggerGroups.forEach((el) => {
+      if (!el.children.length) return;
+      el.classList.add('reveal-stagger');
+      io.observe(el);
+    });
+  }
 
   function renderPromoBanner() {
     const banner = document.getElementById('promoBanner');

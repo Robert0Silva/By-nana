@@ -54,11 +54,22 @@
   }
 
   function updateCurrentUserDisplay() {
+    const avatar = document.getElementById('adminAvatar');
     if (!CURRENT_ADMIN) {
       adminCurrentUser.textContent = '';
+      if (avatar) avatar.textContent = '';
       return;
     }
     adminCurrentUser.textContent = `${CURRENT_ADMIN.name} · ${CURRENT_ADMIN.role === 'owner' ? 'owner' : 'equipe'}`;
+    if (avatar) {
+      const initials = CURRENT_ADMIN.name
+        .split(' ')
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((w) => w[0].toUpperCase())
+        .join('');
+      avatar.textContent = initials || 'AD';
+    }
     const greeting = document.getElementById('dashGreetingName');
     if (greeting) greeting.textContent = CURRENT_ADMIN.name.split(' ')[0];
   }
@@ -148,6 +159,34 @@
     'avise-me': () => loadStockNotifications(),
   };
 
+  const TAB_SUBTITLES = {
+    dashboard: 'Visão geral do desempenho',
+    categorias: 'Filtros, mega-menu e cards da home',
+    colecoes: 'Agrupe peças por temporada',
+    produtos: 'Cadastro, fotos, grade e estoque',
+    novidades: 'Curadoria da vitrine da home',
+    'leve-tambem': 'Sugestões dentro da sacola',
+    promocoes: 'Descontos por produto, categoria ou loja',
+    cupons: 'Códigos de desconto da sacola',
+    newsletter: 'Contatos captados no rodapé',
+    'avise-me': 'Avisos de reposição de estoque',
+    imagens: 'Fotos fixas da página inicial',
+    stories: 'Carrossel de vídeo no topo do site',
+    pedidos: 'Pedidos fechados pelo WhatsApp',
+    clientes: 'Cadastros feitos pelos clientes',
+    frete: 'Regras de frete por estado',
+    avaliacoes: 'Avaliações enviadas por clientes',
+    'rel-vendas': 'Receita e pedidos por período',
+    'rel-produtos': 'Ranking de produtos vendidos',
+    'rel-promocoes': 'Uso de cupons e promoções',
+    'rel-clientes': 'Novos clientes por período',
+    usuarios: 'Contas com acesso ao painel',
+    atividade: 'Histórico de ações no painel',
+  };
+
+  const pageTitleEl = document.getElementById('adminPageTitle');
+  const pageSubtitleEl = document.getElementById('adminPageSubtitle');
+
   function activateAdminPanel(target) {
       const btn = document.querySelector(`.admin-tab[data-target="${target}"]`);
       if (!btn) return;
@@ -157,6 +196,8 @@
       });
       setActiveTabGroupFor(target);
       closeAllTabGroups();
+      if (pageTitleEl) pageTitleEl.textContent = btn.textContent.trim();
+      if (pageSubtitleEl) pageSubtitleEl.textContent = TAB_SUBTITLES[target] || '';
       if (TAB_LOAD_HANDLERS[target]) TAB_LOAD_HANDLERS[target]();
       window.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -173,6 +214,22 @@
   });
 
   setActiveTabGroupFor('dashboard');
+
+  // ---------- busca global do topo (atalho pra busca de produtos) ----------
+  const globalSearchForm = document.getElementById('globalSearchForm');
+  if (globalSearchForm) {
+    globalSearchForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const term = document.getElementById('globalSearch').value.trim();
+      activateAdminPanel('produtos');
+      const target = document.getElementById('productSearch');
+      if (target) {
+        target.value = term;
+        renderProductList();
+        target.focus();
+      }
+    });
+  }
 
   // ---------- login (admin multiusuário: e-mail + senha, token de sessão) ----------
   async function fetchSession(token) {
@@ -2253,11 +2310,27 @@
       );
       renderDonutChart(document.getElementById('dashCategoryChart'), document.getElementById('dashCategoryLegend'), catItems, money);
 
-      renderBarList(
-        document.getElementById('dashTopProducts'),
-        data.topProducts.map((p) => ({ label: p.name, value: p.qty })),
-        (v) => `${v} un.`
-      );
+      const topProductsEl = document.getElementById('dashTopProducts');
+      if (!data.topProducts.length) {
+        topProductsEl.innerHTML = '<p class="admin-empty-block">Nenhuma venda no período.</p>';
+      } else {
+        topProductsEl.innerHTML = data.topProducts
+          .slice(0, 5)
+          .map((p, i) => {
+            const match = PRODUCTS.find((x) => x.id === p.productId);
+            const thumb = match
+              ? `<img src="${escapeHtml(match.img)}" alt="" />`
+              : `<span class="admin-topprod-thumb-fallback">${escapeHtml((p.name || '?')[0])}</span>`;
+            return `
+          <div class="admin-topprod-row">
+            <span class="admin-topprod-rank">${i + 1}</span>
+            <span class="admin-topprod-thumb">${thumb}</span>
+            <span class="admin-topprod-name">${escapeHtml(p.name)}</span>
+            <span class="admin-topprod-qty">${p.qty} un.</span>
+          </div>`;
+          })
+          .join('');
+      }
 
       const recentEl = document.getElementById('dashRecentOrders');
       if (!data.recentOrders.length) {
@@ -2266,11 +2339,15 @@
         recentEl.innerHTML = data.recentOrders
           .map(
             (o) => `
-          <div class="admin-order-item">
+          <div class="admin-order-item admin-order-item-compact">
             <div class="admin-order-info">
-              <span class="admin-order-name"><span class="admin-order-item-status st-${o.status}"></span>${escapeHtml(o.customerName)}</span>
+              <span class="admin-order-name">
+                <span class="admin-order-code">#${o.id.slice(0, 8).toUpperCase()}</span>
+                ${escapeHtml(o.customerName)}
+              </span>
               <span class="admin-order-meta">${new Date(o.createdAt).toLocaleString('pt-BR')} · ${money(o.total)}</span>
             </div>
+            <span class="admin-order-status-pill st-${o.status}">${ORDER_STATUS_LABELS[o.status] || o.status}</span>
           </div>`
           )
           .join('');

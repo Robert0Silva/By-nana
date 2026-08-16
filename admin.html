@@ -28,30 +28,8 @@
 </div>
 
 <div id="adminApp" class="admin-app" hidden>
-  <header class="admin-header">
-    <a href="/" class="brand"><span class="brand-mark">By NaNa</span></a>
-    <div class="admin-header-actions">
-      <div class="admin-notif-wrap">
-        <button type="button" class="icon-btn admin-notif-bell" id="notifBell" aria-label="Notificações">
-          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-          <span class="admin-notif-badge" id="notifBadge" hidden>0</span>
-        </button>
-        <div class="admin-notif-panel" id="notifPanel" hidden>
-          <p id="notifEmpty" class="admin-empty-block">Nenhuma novidade por aqui.</p>
-          <button type="button" class="admin-notif-item" id="notifOrdersItem" data-jump="pedidos" hidden></button>
-          <button type="button" class="admin-notif-item" id="notifCustomersItem" data-jump="clientes" hidden></button>
-        </div>
-      </div>
-      <span class="admin-current-user" id="adminCurrentUser"></span>
-      <a href="/" target="_blank" class="btn btn-ghost">Ver site</a>
-      <button id="logoutBtn" class="btn btn-outline">Sair</button>
-    </div>
-  </header>
-
-  <main class="admin-main wrap">
-    <h1>Painel Admin — By NaNa</h1>
-    <p class="admin-sub">Gerencie categorias, coleções, produtos, promoções e as fotos fixas do site.</p>
-
+  <aside class="admin-sidebar">
+    <a href="/" class="admin-sidebar-brand"><span class="brand-mark">By NaNa</span></a>
     <nav class="admin-tabs" id="adminTabs">
       <button type="button" class="admin-tab is-active" data-target="dashboard"><span class="admin-tab-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>Dashboard</button>
       <div class="admin-tab-group" data-group="catalogo">
@@ -130,6 +108,43 @@
         </div>
       </div>
     </nav>
+    <a href="/" target="_blank" class="admin-sidebar-viewsite">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14 21 3"/></svg>
+      Ver site
+    </a>
+  </aside>
+
+  <div class="admin-content">
+    <header class="admin-header admin-topbar">
+      <div class="admin-topbar-heading">
+        <h1 id="adminPageTitle">Dashboard</h1>
+        <p class="admin-sub" id="adminPageSubtitle">Visão geral do desempenho</p>
+      </div>
+      <form class="admin-topbar-search" id="globalSearchForm" role="search">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        <input type="search" id="globalSearch" placeholder="Buscar produto, pedido, cliente..." />
+      </form>
+      <div class="admin-header-actions">
+        <div class="admin-notif-wrap">
+          <button type="button" class="icon-btn admin-notif-bell" id="notifBell" aria-label="Notificações">
+            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            <span class="admin-notif-badge" id="notifBadge" hidden>0</span>
+          </button>
+          <div class="admin-notif-panel" id="notifPanel" hidden>
+            <p id="notifEmpty" class="admin-empty-block">Nenhuma novidade por aqui.</p>
+            <button type="button" class="admin-notif-item" id="notifOrdersItem" data-jump="pedidos" hidden></button>
+            <button type="button" class="admin-notif-item" id="notifCustomersItem" data-jump="clientes" hidden></button>
+          </div>
+        </div>
+        <div class="admin-user-chip">
+          <span class="admin-user-avatar" id="adminAvatar">AD</span>
+          <span class="admin-current-user" id="adminCurrentUser"></span>
+        </div>
+        <button id="logoutBtn" class="btn btn-outline">Sair</button>
+      </div>
+    </header>
+
+    <main class="admin-main">
 
     <section class="admin-panel" id="panel-dashboard">
       <div class="admin-dashboard-hero">
@@ -146,21 +161,25 @@
       </div>
       <div class="admin-stat-grid">
         <div class="admin-stat-card">
+          <span class="admin-stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.5c0-1.1 1.1-2 2.5-2s2.5.7 2.5 1.8c0 2.4-5 1.4-5 3.8 0 1.1 1.1 1.9 2.5 1.9s2.5-.9 2.5-2"/></svg></span>
           <span class="admin-stat-label">Receita (30 dias)</span>
           <span class="admin-stat-value" id="dashRevenue">R$ 0,00</span>
           <span class="admin-stat-delta" id="dashRevenueDelta"></span>
         </div>
         <div class="admin-stat-card">
+          <span class="admin-stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></span>
           <span class="admin-stat-label">Pedidos (30 dias)</span>
           <span class="admin-stat-value" id="dashOrders">0</span>
           <span class="admin-stat-delta" id="dashOrdersDelta"></span>
         </div>
         <div class="admin-stat-card">
+          <span class="admin-stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="2"/></svg></span>
           <span class="admin-stat-label">Ticket médio</span>
           <span class="admin-stat-value" id="dashTicket">R$ 0,00</span>
           <span class="admin-stat-delta" id="dashTicketDelta"></span>
         </div>
         <div class="admin-stat-card">
+          <span class="admin-stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
           <span class="admin-stat-label">Novos clientes (30 dias)</span>
           <span class="admin-stat-value" id="dashNewCustomers">0</span>
           <span class="admin-stat-delta" id="dashNewCustomersDelta"></span>
@@ -184,7 +203,7 @@
       <div class="admin-dash-cols">
         <section class="admin-card">
           <h2>Top 5 produtos</h2>
-          <div class="admin-bar-list" id="dashTopProducts"></div>
+          <div class="admin-topprod-list" id="dashTopProducts"></div>
         </section>
         <section class="admin-card">
           <h2>Pedidos recentes</h2>
@@ -757,7 +776,8 @@
         <div class="admin-activity-list" id="activityList"></div>
       </section>
     </section>
-  </main>
+    </main>
+  </div>
 </div>
 
 <script src="assets/js/promo.js"></script>

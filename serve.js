@@ -907,7 +907,7 @@ async function getSalesByCategory(from, to) {
      CROSS JOIN LATERAL jsonb_array_elements(items) AS item
      LEFT JOIN products p ON p.id = item->>'id'
      LEFT JOIN categories cat ON cat.id = p.category_id
-     WHERE status != 'cancelado' AND created_at >= ($1::date)::timestamp AT TIME ZONE 'America/Sao_Paulo' AND created_at < (($2::date + interval '1 day'))::timestamp AT TIME ZONE 'America/Sao_Paulo'
+     WHERE orders.status != 'cancelado' AND orders.created_at >= ($1::date)::timestamp AT TIME ZONE 'America/Sao_Paulo' AND orders.created_at < (($2::date + interval '1 day'))::timestamp AT TIME ZONE 'America/Sao_Paulo'
      GROUP BY 1
      ORDER BY revenue DESC`,
     [from, to]
