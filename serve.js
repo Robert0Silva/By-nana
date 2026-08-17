@@ -9,6 +9,12 @@ const { sendEmail } = require('./email');
 const PromoEngine = require('./assets/js/promo.js');
 const { getActiveProvider } = require('./payment-provider');
 
+// Valor exato de paymentMethod que o front usa pra sinalizar "quero pagar agora, online" (ver
+// index.html/produto.html) — as demais opções (Pix combinado, dinheiro etc.) continuam indo
+// pro fluxo manual/WhatsApp de sempre mesmo com um gateway configurado. Tem que casar
+// caractere a caractere com o value do <input name="payment"> correspondente no HTML.
+const ONLINE_PAYMENT_METHOD = 'Pagamento online (Pix/cartão)';
+
 // numeric -> number, date -> plain 'YYYY-MM-DD' string (avoids timezone drift from Date objects)
 types.setTypeParser(1700, (v) => (v === null ? null : parseFloat(v)));
 types.setTypeParser(1082, (v) => v);
@@ -368,6 +374,14 @@ function buildOrderStatusHtml({ id, customerName, status }) {
   `;
 }
 
+function buildPaymentApprovedHtml({ id, customerName }) {
+  return `
+    <p>Olá, ${escapeHtml(customerName)}!</p>
+    <p>Recebemos a confirmação: o pagamento do seu pedido <strong>${escapeHtml(id)}</strong> foi aprovado. ✅</p>
+    <p>Já vamos preparar tudo — avisamos por aqui quando o status mudar.</p>
+  `;
+}
+
 function buildBackInStockHtml({ productName, variantLabel, url }) {
   return `
     <p>Boa notícia! 💛</p>
@@ -660,7 +674,7 @@ async function getOrders() {
     SELECT id, customer_name AS "customerName", customer_phone AS "customerPhone",
            items, subtotal, discount, shipping, total, coupon_code AS "couponCode",
            payment_method AS "paymentMethod", delivery_method AS "deliveryMethod",
-           address, status, created_at AS "createdAt"
+           address, status, payment_status AS "paymentStatus", created_at AS "createdAt"
     FROM orders
     ORDER BY created_at DESC
     LIMIT 300
@@ -1137,7 +1151,11 @@ async function handleApi(req, res, pathname) {
         getUpsellSuggestions(),
         getBestSellers(),
       ]);
-      return sendJSON(res, 200, { products, categories, collections, promotions, coupons, shippingRules, categoryGroups, categoryContent, stories, novidades, upsell, bestSellers });
+      return sendJSON(res, 200, {
+        products, categories, collections, promotions, coupons, shippingRules, categoryGroups,
+        categoryContent, stories, novidades, upsell, bestSellers,
+        onlinePaymentEnabled: !!getActiveProvider(),
+      });
     }
 
     // ------ admin auth (login multiusuário, papéis, log de atividade) ------
@@ -2138,6 +2156,7 @@ async function handleApi(req, res, pathname) {
       let discountAmount;
       let shippingCost;
       let total;
+      let isOnlinePayment;
       try {
         await client.query('BEGIN');
         items = [];
@@ -2207,11 +2226,15 @@ async function handleApi(req, res, pathname) {
         }
         total = Math.max(0, subtotal - discountAmount) + shippingCost;
 
-        // Sem provedor configurado (caso de hoje — cliente ainda não escolheu gateway), o pedido
-        // nasce 'manual' e o pagamento segue combinado no WhatsApp, como sempre foi. Quando um
-        // gateway for plugado (ver payment-provider.js), passa a nascer 'pending' aqui.
+        // Sem provedor configurado, ou quando a cliente escolheu uma forma de pagamento manual
+        // (Pix combinado, dinheiro etc.), o pedido nasce 'manual' e o pagamento segue combinado
+        // no WhatsApp, como sempre foi. Só nasce 'pending' quando há gateway ativo E a cliente
+        // pediu pagamento online — nesse caso a preferência de checkout é criada depois do
+        // COMMIT (ver isOnlinePayment abaixo), sem segurar a reserva de estoque por causa de
+        // uma chamada de rede pro Mercado Pago.
         const paymentProvider = getActiveProvider();
-        const paymentStatus = paymentProvider ? 'pending' : 'manual';
+        isOnlinePayment = !!paymentProvider && paymentMethod === ONLINE_PAYMENT_METHOD;
+        const paymentStatus = isOnlinePayment ? 'pending' : 'manual';
 
         await client.query(
           `INSERT INTO orders (id, customer_id, customer_name, customer_phone, email, items, subtotal, discount, shipping, total, coupon_code, payment_method, delivery_method, address, payment_status)
@@ -2240,7 +2263,98 @@ async function handleApi(req, res, pathname) {
         ).catch((err) => console.error('[abandoned-carts] falha ao marcar conversão:', err.message));
       }
 
-      return sendJSON(res, 201, { orderId: id });
+      // Preferência de checkout criada depois do COMMIT (estoque já reservado, pedido já
+      // existe) — se a chamada pro Mercado Pago falhar (rede, credencial errada...), a compra
+      // não trava: cai pro fluxo manual de sempre (sem checkoutUrl, o front abre o WhatsApp).
+      let checkoutUrl;
+      if (isOnlinePayment) {
+        try {
+          const session = await getActiveProvider().createCheckoutSession({ orderId: id, total, customerName, customerEmail, items });
+          checkoutUrl = session.checkoutUrl;
+          if (session.providerReference) {
+            await pool.query('UPDATE orders SET payment_reference = $1 WHERE id = $2', [session.providerReference, id]);
+          }
+        } catch (err) {
+          console.error('[mercadopago] falha ao criar checkout, caindo para o fluxo manual:', err.message);
+          // O pedido nasceu 'pending' (ver isOnlinePayment acima) esperando essa preferência dar
+          // certo; sem checkoutUrl a compra segue pelo WhatsApp, então o registro tem que voltar
+          // a refletir isso — senão fica "pendente" pra sempre sem nenhum jeito de ser pago.
+          await pool.query("UPDATE orders SET payment_status = 'manual' WHERE id = $1", [id]);
+        }
+      }
+
+      return sendJSON(res, 201, { orderId: id, checkoutUrl });
+    }
+
+    // ------ webhook do gateway de pagamento (confirma pagamento assíncrono do checkout online) ------
+    // Rota genérica /api/webhooks/<chave> — só processa quando <chave> bate com o
+    // PAYMENT_PROVIDER ativo no momento; qualquer outra coisa (gateway trocado/desligado depois
+    // que a notificação foi enfileirada, provedor desconhecido) só recebe 200 e é ignorada, que
+    // é a resposta esperada pelo provedor pra não ficar re-tentando a notificação para sempre.
+    if (pathname.startsWith('/api/webhooks/') && req.method === 'POST') {
+      const providerKey = pathname.slice('/api/webhooks/'.length);
+      const provider = getActiveProvider();
+      if (!provider || providerKey !== (process.env.PAYMENT_PROVIDER || '').trim()) {
+        return sendJSON(res, 200, { ok: true });
+      }
+
+      // O corpo não é usado (a notificação só carrega type/data.id, tratados via query string —
+      // ver mercadopago.js), mas precisa ser drenado mesmo assim pra não travar a keep-alive
+      // connection numa requisição HTTP1 seguinte.
+      await readBody(req, 1024 * 1024).catch(() => {});
+
+      let result;
+      try {
+        result = await provider.handleWebhook(req);
+      } catch (err) {
+        // Erro nosso ou instabilidade do provedor: loga e ainda assim reconhece com 200 — um
+        // 5xx aqui só faria o provedor re-enviar a mesma notificação, sem chance de dar certo
+        // numa próxima tentativa se o bug for nosso.
+        console.error(`[webhook ${providerKey}] falha ao processar notificação:`, err.message);
+        return sendJSON(res, 200, { ok: true });
+      }
+      if (result === null) return sendJSON(res, 401, { error: 'assinatura inválida' });
+      if (!result || result.ignored || !result.orderId || !result.status) {
+        return sendJSON(res, 200, { ok: true });
+      }
+
+      const { orderId, status, providerReference } = result;
+      const client = await pool.connect();
+      let order;
+      try {
+        await client.query('BEGIN');
+        const { rows } = await client.query(
+          `SELECT payment_status AS "paymentStatus", email, customer_name AS "customerName"
+             FROM orders WHERE id = $1 FOR UPDATE`,
+          [orderId]
+        );
+        if (!rows.length) {
+          await client.query('ROLLBACK');
+          return sendJSON(res, 200, { ok: true });
+        }
+        order = rows[0];
+        await client.query(
+          `UPDATE orders SET payment_status = $1, payment_reference = COALESCE($2, payment_reference),
+                  paid_at = CASE WHEN $1 = 'paid' AND paid_at IS NULL THEN now() ELSE paid_at END
+            WHERE id = $3`,
+          [status, providerReference || null, orderId]
+        );
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+
+      if (status === 'paid' && order.paymentStatus !== 'paid' && order.email) {
+        await sendEmail({
+          to: order.email,
+          subject: `Pagamento aprovado — pedido ${orderId} — By NaNa`,
+          html: buildPaymentApprovedHtml({ id: orderId, customerName: order.customerName }),
+        });
+      }
+      return sendJSON(res, 200, { ok: true });
     }
 
     if (pathname === '/api/orders/list' && req.method === 'POST') {

@@ -27,6 +27,7 @@
 <p class="data-error-banner" id="dataError" hidden>
   Não foi possível carregar o catálogo agora. <button type="button" id="dataErrorRetry" class="data-error-retry">Tentar de novo</button>
 </p>
+<p class="checkout-status-banner" id="checkoutStatusBanner" hidden></p>
 <div class="topbar" id="topbar">
   <span class="topbar-msg is-active">Curadoria independente</span>
   <span class="topbar-msg">Atendimento personalizado pelo WhatsApp</span>
@@ -386,6 +387,7 @@
           <label class="bag-chip"><input type="radio" name="payment" value="Cartão de crédito" />Cartão de crédito</label>
           <label class="bag-chip"><input type="radio" name="payment" value="Cartão de débito" />Cartão de débito</label>
           <label class="bag-chip"><input type="radio" name="payment" value="Dinheiro" />Dinheiro</label>
+          <label class="bag-chip payment-online-chip" hidden><input type="radio" name="payment" value="Pagamento online (Pix/cartão)" />Pagar agora (Pix/cartão)</label>
         </div>
       </div>
 

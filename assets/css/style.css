@@ -103,6 +103,15 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
   font-size:.78rem;cursor:pointer;
 }
 
+/* ---------- aviso ao voltar do checkout online (Mercado Pago) ---------- */
+.checkout-status-banner{
+  text-align:center;font-size:.82rem;font-weight:500;padding:12px;margin:0;
+}
+.checkout-status-banner[hidden]{display:none;}
+.checkout-status-banner.is-success{background:#e3f3e6;color:#2f7d4f;}
+.checkout-status-banner.is-pending{background:#f7e3d8;color:var(--camel);}
+.checkout-status-banner.is-failure{background:#f7e3d8;color:var(--wine);}
+
 /* ---------- skeleton (placeholders enquanto o catálogo carrega) ---------- */
 .skeleton-card{
   background:var(--white);border-radius:var(--radius);border:1px solid var(--line);overflow:hidden;

@@ -13,7 +13,7 @@ module.exports = [
   },
   {
     // scripts Node (servidor, seeds, utilitários de imagem, testes, este próprio config)
-    files: ['serve.js', 'email.js', 'payment-provider.js', 'process-images.js', 'process-new-photos.js', 'db/**/*.js', 'test/**/*.js', 'eslint.config.js', 'playwright.config.js'],
+    files: ['serve.js', 'email.js', 'payment-provider.js', 'payment-providers/**/*.js', 'process-images.js', 'process-new-photos.js', 'db/**/*.js', 'test/**/*.js', 'eslint.config.js', 'playwright.config.js'],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'commonjs',

@@ -488,6 +488,14 @@
   display:inline-block;margin-left:6px;padding:2px 9px;border-radius:999px;
   background:#f7e3d8;color:var(--wine);font-size:.68rem;font-weight:600;vertical-align:middle;
 }
+.admin-order-payment-badge{
+  display:inline-block;margin-left:6px;padding:2px 9px;border-radius:999px;
+  font-size:.68rem;font-weight:600;vertical-align:middle;
+}
+.admin-order-payment-badge.pay-pending{background:#fdf1dc;color:var(--camel);}
+.admin-order-payment-badge.pay-paid{background:#e3f3e6;color:#2f7d4f;}
+.admin-order-payment-badge.pay-failed{background:#f7e3d8;color:var(--wine);}
+.admin-order-payment-badge.pay-refunded{background:#eee;color:var(--ink-soft);}
 .admin-order-meta{font-size:.76rem;color:var(--ink-soft);}
 .admin-order-address{font-size:.76rem;color:var(--ink-soft);}
 .admin-order-items{font-size:.78rem;color:var(--ink-soft);margin:2px 0 0;}

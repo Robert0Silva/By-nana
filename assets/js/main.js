@@ -52,6 +52,11 @@
     return best ? { price: best.price, promo: best } : { price: p.price, promo: null };
   }
 
+  // Dados da compra guardados só entre o redirecionamento pro checkout do Mercado Pago e a
+  // volta pro site (ver handleCheckoutReturn) — a página recarrega nesse meio tempo, então o
+  // estado em memória (checkoutTotal/checkoutItems) não sobrevive, precisa ir pro localStorage.
+  const PENDING_PURCHASE_KEY = 'bynana_pending_purchase';
+
   // ---------- coupon (applied on top of the bag subtotal) ----------
   const COUPON_KEY = 'bynana_coupon';
   let appliedCouponCode = localStorage.getItem(COUPON_KEY) || '';
@@ -1126,7 +1131,7 @@
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Não foi possível reservar o estoque');
-    return data.orderId;
+    return { orderId: data.orderId, checkoutUrl: data.checkoutUrl || null };
   }
 
   // Re-sincroniza só os dados de produto/estoque após uma falha de checkout (ex.: estoque
@@ -1147,6 +1152,47 @@
     renderCart();
     if (document.body.dataset.page === 'produto') initProductPage();
     else if (grid) renderGrid(currentFilter, currentSearch);
+  }
+
+  function showCheckoutBanner(kind, message) {
+    const banner = document.getElementById('checkoutStatusBanner');
+    if (!banner) return;
+    banner.textContent = message;
+    banner.className = `checkout-status-banner is-${kind}`;
+    banner.hidden = false;
+  }
+
+  // Chamado uma vez no início de init(): trata a volta do checkout hospedado no Mercado Pago
+  // (?checkout=success|pending|failure&order=...). A página recarrega do zero nesse redirect,
+  // então o total/itens da compra pra analytics vêm do localStorage (ver PENDING_PURCHASE_KEY),
+  // não da memória — o clique original em "Finalizar" aconteceu num carregamento anterior.
+  function handleCheckoutReturn() {
+    const params = new URLSearchParams(location.search);
+    const state = params.get('checkout');
+    if (!state) return;
+    const orderId = params.get('order') || '';
+    history.replaceState(null, '', location.pathname);
+
+    let pending = null;
+    try { pending = JSON.parse(localStorage.getItem(PENDING_PURCHASE_KEY) || 'null'); } catch { pending = null; }
+
+    if (state === 'success' || state === 'pending') {
+      if (state === 'success' && pending && pending.orderId === orderId) {
+        window.byNanaAnalytics?.trackPurchase(orderId, pending.total, pending.items);
+      }
+      localStorage.removeItem(PENDING_PURCHASE_KEY);
+      cart = {};
+      localStorage.removeItem(CART_KEY);
+      renderCart();
+      showCheckoutBanner(
+        state === 'success' ? 'success' : 'pending',
+        state === 'success'
+          ? `Pagamento aprovado! Seu pedido ${orderId} já está sendo preparado.`
+          : `Recebemos seu pedido ${orderId} — assim que o pagamento for confirmado, avisamos por e-mail.`
+      );
+    } else if (state === 'failure') {
+      showCheckoutBanner('failure', `O pagamento do pedido ${orderId} não foi concluído. Você pode tentar de novo pela sacola ou falar com a gente pelo WhatsApp.`);
+    }
   }
 
   // checkoutBtn é um <a>, então "disabled" não impede clique/Enter por si só (e a classe
@@ -1176,7 +1222,15 @@
       const p = entry ? PRODUCTS.find((x) => x.id === entry.productId) : null;
       return p ? { id: p.id, name: p.name, qty: entry.qty, price: getEffective(p).price } : null;
     }).filter(Boolean);
-    persistOrder(ids).then((orderId) => {
+    persistOrder(ids).then(({ orderId, checkoutUrl }) => {
+      if (checkoutUrl) {
+        // Pagamento online: a confirmação de compra (trackPurchase) só acontece quando a
+        // cliente volta aprovada (ver handleCheckoutReturn em init()) — antes disso o pagamento
+        // ainda nem foi feito, só a preferência de checkout no Mercado Pago.
+        localStorage.setItem(PENDING_PURCHASE_KEY, JSON.stringify({ orderId, total: checkoutTotal, items: checkoutItems }));
+        window.location.href = checkoutUrl;
+        return;
+      }
       window.byNanaAnalytics?.trackPurchase(orderId, checkoutTotal, checkoutItems);
       window.open(waLink(buildOrderMessage(ids)), '_blank', 'noopener');
       checkoutInFlight = false;
@@ -2783,6 +2837,7 @@
   document.getElementById('pdpReviewLoginBtn')?.addEventListener('click', () => openAccountModal());
 
   async function init() {
+    handleCheckoutReturn();
     dataError.hidden = true;
     loadBar.classList.remove('is-done');
     loadBar.classList.add('is-active');
@@ -2805,6 +2860,7 @@
       NOVIDADES = data.novidades || [];
       UPSELL_PRODUCTS = data.upsell || [];
       BEST_SELLERS = data.bestSellers || [];
+      document.querySelectorAll('.payment-online-chip').forEach((el) => { el.hidden = !data.onlinePaymentEnabled; });
     } catch {
       loadBar.classList.remove('is-active');
       if (grid) grid.innerHTML = '';

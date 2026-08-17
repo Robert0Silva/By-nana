@@ -1659,6 +1659,9 @@
   const orderSearch = document.getElementById('orderSearch');
 
   const ORDER_STATUS_LABELS = { novo: 'Novo', em_andamento: 'Em andamento', concluido: 'Concluído', cancelado: 'Cancelado' };
+  // 'manual' (pagamento combinado no WhatsApp) é o caso comum e não precisa de destaque — só os
+  // status de um pagamento online (gateway) ganham selo, pra chamar atenção quando precisar agir.
+  const PAYMENT_STATUS_LABELS = { pending: 'Pagamento pendente', paid: 'Pago', failed: 'Pagamento falhou', refunded: 'Reembolsado' };
 
   async function loadOrders() {
     try {
@@ -1696,7 +1699,7 @@
       div.className = 'admin-order-item';
       div.innerHTML = `
         <div class="admin-order-info">
-          <span class="admin-order-name">${escapeHtml(o.customerName)} · ${escapeHtml(o.customerPhone)}${isStale ? ' <span class="admin-order-stale-badge" title="Sem retorno há mais de 2h">⏰ Aguardando retorno</span>' : ''}</span>
+          <span class="admin-order-name">${escapeHtml(o.customerName)} · ${escapeHtml(o.customerPhone)}${isStale ? ' <span class="admin-order-stale-badge" title="Sem retorno há mais de 2h">⏰ Aguardando retorno</span>' : ''}${o.paymentStatus && o.paymentStatus !== 'manual' ? ` <span class="admin-order-payment-badge pay-${o.paymentStatus}">${escapeHtml(PAYMENT_STATUS_LABELS[o.paymentStatus] || o.paymentStatus)}</span>` : ''}</span>
           <span class="admin-order-meta">${when}${o.couponCode ? ` · cupom ${escapeHtml(o.couponCode)}` : ''} · ${escapeHtml(o.paymentMethod)} · ${escapeHtml(o.deliveryMethod)}${o.shipping ? ` · frete ${money(o.shipping)}` : ''}</span>
           ${addressText ? `<span class="admin-order-address">📍 ${addressText}</span>` : ''}
           <p class="admin-order-items">${itemsText}</p>

@@ -1,25 +1,28 @@
 // Ponto de extensão pra um gateway de pagamento online (Mercado Pago, Stripe, PagSeguro...).
-// A cliente ainda não escolheu qual usar, então por enquanto isso fica "desligado": nenhum
-// provedor configurado, o checkout continua exatamente como é hoje (pedido é registrado e o
-// pagamento é combinado na conversa do WhatsApp — orders.payment_status fica 'manual').
+// Sem PAYMENT_PROVIDER configurado no .env, isso fica "desligado" e o checkout continua como
+// sempre foi: pedido registrado e pagamento combinado na conversa do WhatsApp
+// (orders.payment_status fica 'manual'). Com um provedor ativo, o site oferece "pagamento
+// online" como uma forma de pagamento a mais (ver ONLINE_PAYMENT_METHOD em serve.js) — as
+// demais (Pix combinado, dinheiro na entrega etc.) continuam indo pro fluxo manual de sempre.
 //
-// Como plugar um gateway de verdade quando a cliente decidir:
-//   1. Criar um arquivo, ex. payment-providers/mercadopago.js, exportando um objeto com o
-//      formato de PROVIDERS abaixo (createCheckoutSession + verifyWebhookSignature).
-//   2. Registrar esse objeto em PROVIDERS aqui embaixo com a chave do env var (ex. 'mercadopago').
-//   3. Definir PAYMENT_PROVIDER=mercadopago (+ as chaves de API do provedor) no .env.
+// Como plugar mais um gateway:
+//   1. Criar um arquivo, ex. payment-providers/stripe.js, exportando um objeto com o formato
+//      de PROVIDERS abaixo (createCheckoutSession + handleWebhook).
+//   2. Registrar esse objeto em PROVIDERS aqui embaixo com a chave do env var (ex. 'stripe').
+//   3. Definir PAYMENT_PROVIDER=stripe (+ as chaves de API do provedor) no .env.
 //   4. Nenhuma outra mudança é necessária — serve.js já chama getActiveProvider() na criação do
-//      pedido (ver /api/orders) e grava paymentStatus = 'pending' quando há provedor ativo;
-//      falta só implementar o webhook do provedor chamando algo como
-//      UPDATE orders SET payment_status = 'paid' WHERE id = $1 quando o pagamento confirmar.
+//      pedido (ver /api/orders) pra gerar o checkoutUrl, e encaminha POST /api/webhooks/<chave>
+//      pra provider.handleWebhook() atualizar orders.payment_status.
 //
 // Contrato esperado de cada provedor:
 //   createCheckoutSession({ orderId, total, customerName, customerEmail, items })
 //     -> Promise<{ checkoutUrl: string, providerReference: string }>
-//   verifyWebhookSignature(req, rawBody) -> boolean
+//   handleWebhook(req) -> Promise<{ orderId, status: 'paid'|'pending'|'failed'|'refunded', providerReference } | { ignored: true } | null>
+//     (null = assinatura inválida; o caller responde 401. { ignored: true } = notificação que não
+//     é sobre um pagamento, ou sem dado suficiente; o caller só responde 200 e não faz nada.)
 
 const PROVIDERS = {
-  // mercadopago: require('./payment-providers/mercadopago'),
+  mercadopago: require('./payment-providers/mercadopago'),
   // stripe: require('./payment-providers/stripe'),
 };
 
