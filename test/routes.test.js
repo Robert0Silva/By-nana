@@ -92,6 +92,65 @@ test('não expõe arquivos internos do projeto', async () => {
   }
 });
 
+test('health check confirma disponibilidade do servidor e do banco', async () => {
+  const response = await fetch(`${origin}/api/health`);
+  const data = await response.json();
+  assert.equal(response.status, 200);
+  assert.deepEqual(data, { status: 'ok' });
+});
+
+test('configuração pública entrega apenas dados seguros para a vitrine', async () => {
+  const response = await fetch(`${origin}/api/public-config`);
+  const data = await response.json();
+  assert.equal(response.status, 200);
+  assert.deepEqual(Object.keys(data).sort(), ['ga4MeasurementId', 'metaPixelId']);
+
+  const catalogResponse = await fetch(`${origin}/api/data`);
+  const catalog = await catalogResponse.json();
+  assert.equal(catalogResponse.status, 200);
+  assert.match(catalog.whatsappNumber, /^\d{12,15}$/);
+  assert.equal('DATABASE_URL' in catalog, false);
+  const defaultShipping = catalog.shippingRules.find((rule) => rule.uf === '*');
+  assert.ok(defaultShipping, 'a regra padrão de frete precisa estar configurada');
+  assert.equal(Number(defaultShipping.price), 15);
+  assert.equal(Number(defaultShipping.freeAbove), 499);
+});
+
+test('páginas públicas exibem os dados comerciais confirmados', async () => {
+  const catalogResponse = await fetch(`${origin}/api/data`);
+  const catalog = await catalogResponse.json();
+  assert.ok(catalog.products.length, 'o catálogo precisa ter ao menos um produto');
+  for (const route of ['/', `/produto/${catalog.products[0].id}`]) {
+    const response = await fetch(`${origin}${route}`);
+    const html = await response.text();
+    assert.match(html, /52\.505\.441\/0001-49/);
+    assert.match(html, /Av\. Guanabara, 237/);
+    assert.match(html, /bynanaloja@gmail\.com/);
+    assert.doesNotMatch(html, /value="Dinheiro"/);
+  }
+});
+
+test('envia cabeçalhos de segurança nas páginas públicas', async () => {
+  const response = await fetch(origin);
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-security-policy') || '', /default-src 'self'/);
+  assert.equal(response.headers.get('x-frame-options'), 'DENY');
+  assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+  assert.match(response.headers.get('strict-transport-security') || '', /max-age=/);
+  assert.match(response.headers.get('permissions-policy') || '', /camera=\(\)/);
+});
+
+test('bloqueia acesso anônimo a dados administrativos', async () => {
+  for (const route of ['/api/orders/list', '/api/customers/list', '/api/admin/dashboard']) {
+    const response = await fetch(`${origin}${route}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(response.status, 401, route);
+  }
+});
+
 test('rejeita URL malformada sem derrubar o servidor', async () => {
   const invalid = await fetch(`${origin}/%E0%A4%A`);
   assert.equal(invalid.status, 400);
@@ -308,6 +367,26 @@ test('cadastro de cliente rejeita CPF inválido e permite login depois de cadast
     if (customerCreated) await pool.query('DELETE FROM customers WHERE lower(email) = $1', [email]);
     await pool.end();
   }
+});
+
+test('cadastro rejeita senha com menos de oito caracteres', async () => {
+  const response = await fetch(`${origin}/api/customers`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      firstName: 'Cliente',
+      lastName: 'Teste',
+      email: `senha-curta-${Date.now()}@example.com`,
+      phone: '31999998888',
+      birthDate: '1990-01-01',
+      cpf: generateValidCPF(),
+      password: 'curta7!',
+      privacyAccepted: true,
+    }),
+  });
+  const data = await response.json();
+  assert.equal(response.status, 400);
+  assert.match(data.error, /8 caracteres/);
 });
 
 // Regressão: a lógica de cupom no checkout (serve.js recalculando o desconto a partir do banco,

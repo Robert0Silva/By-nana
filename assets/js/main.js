@@ -1,5 +1,6 @@
 (() => {
-  const WHATSAPP_NUMBER = '5531973053380';
+  // O servidor pode sobrescrever este fallback via WHATSAPP_NUMBER sem exigir novo deploy.
+  let WHATSAPP_NUMBER = '5531973053380';
 
   const WA_ICON =
     '<svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor"><path d="M12.02 2C6.5 2 2 6.48 2 12c0 1.85.5 3.58 1.38 5.07L2 22l5.1-1.34A9.94 9.94 0 0 0 12.02 22C17.5 22 22 17.52 22 12S17.5 2 12.02 2Zm5.87 14.14c-.25.7-1.45 1.34-2 1.42-.53.08-1.13.11-1.83-.12-.42-.14-.96-.32-1.66-.62-2.92-1.26-4.83-4.2-4.98-4.4-.15-.2-1.19-1.58-1.19-3.02 0-1.44.76-2.15 1.03-2.44.27-.29.6-.36.8-.36.2 0 .4 0 .57.01.18.01.43-.07.67.51.25.6.85 2.07.92 2.22.07.15.12.33.02.53-.1.2-.15.32-.3.5-.15.18-.31.4-.44.53-.15.15-.3.31-.13.6.17.3.76 1.25 1.63 2.02 1.12 1 2.06 1.31 2.36 1.46.3.15.47.13.65-.08.18-.2.76-.88.96-1.18.2-.3.4-.25.67-.15.27.1 1.73.82 2.03.97.3.15.5.22.57.35.07.13.07.75-.18 1.45Z"/></svg>';
@@ -21,11 +22,13 @@
   const money = (v) =>
     v == null ? 'Sob consulta' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
-  // parcelamento no cartão exibido junto ao preço — a loja parcela em até 6x sem juros
-  // (combinado no WhatsApp no fechamento do pedido; aqui é só a exibição informativa).
+  // Parcelamento no cartão: até 6x sem juros, respeitando parcela mínima de R$ 50.
   const INSTALLMENT_COUNT = 6;
+  const MIN_INSTALLMENT_VALUE = 50;
   function installmentText(price) {
-    return price == null ? '' : `ou ${INSTALLMENT_COUNT}x de ${money(price / INSTALLMENT_COUNT)} sem juros`;
+    if (price == null) return '';
+    const count = Math.min(INSTALLMENT_COUNT, Math.floor(price / MIN_INSTALLMENT_VALUE));
+    return count >= 2 ? `ou ${count}x de ${money(price / count)} sem juros` : 'pagamento em 1x no cartão';
   }
 
   // dica de preço à vista no Pix, exibida no card/PDP para antecipar o desconto que hoje só
@@ -1142,6 +1145,7 @@
       const res = await fetch('/api/data', { cache: 'no-store' });
       if (!res.ok) return;
       const data = await res.json();
+      WHATSAPP_NUMBER = String(data.whatsappNumber || WHATSAPP_NUMBER).replace(/\D/g, '');
       PRODUCTS = data.products || [];
       PROMOTIONS = data.promotions || [];
       COUPONS = data.coupons || [];
@@ -1342,11 +1346,11 @@
             <div class="bag-item-name">${escapeHtml(p.name)}${variant ? ` <span class="bag-item-variant">(${escapeHtml(variantLabel(variant))})</span>` : ''}</div>
             ${priceHtml}
             <div class="bag-item-qty">
-              <button class="qty-btn" data-key="${key}" data-op="dec">−</button>
+              <button class="qty-btn" data-key="${key}" data-op="dec" aria-label="Diminuir quantidade de ${escapeHtml(p.name)}">−</button>
               <span>${qty}</span>
-              <button class="qty-btn" data-key="${key}" data-op="inc">+</button>
+              <button class="qty-btn" data-key="${key}" data-op="inc" aria-label="Aumentar quantidade de ${escapeHtml(p.name)}">+</button>
             </div>
-            <button class="bag-item-remove" data-key="${key}">remover</button>
+            <button class="bag-item-remove" data-key="${key}" aria-label="Remover ${escapeHtml(p.name)} da sacola">remover</button>
           </div>
         `;
         bagItemsEl.appendChild(row);
