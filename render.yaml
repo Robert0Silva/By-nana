@@ -6,7 +6,7 @@ services:
     region: oregon
     buildCommand: npm install
     startCommand: npm start
-    healthCheckPath: /
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
         value: 20
@@ -33,6 +33,9 @@ services:
       # e-mail de carrinho abandonado. Preencher com a URL pública real (ex.: https://bynana.com.br).
       - key: SITE_URL
         sync: false
+      # WhatsApp de atendimento com DDI + DDD, somente números (ex.: 5531999999999).
+      - key: WHATSAPP_NUMBER
+        value: "5531973053380"
       # Opcionais — deixar em branco por enquanto vira no-op automático no analytics.js.
       - key: GA4_MEASUREMENT_ID
         sync: false

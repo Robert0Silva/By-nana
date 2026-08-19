@@ -1022,6 +1022,18 @@ function validateDiscount(body) {
 // ---------- API ----------
 async function handleApi(req, res, pathname) {
   try {
+    // Readiness check usado pela hospedagem: confirma que processo e banco estão disponíveis,
+    // sem expor versão, credenciais ou detalhes internos em caso de falha.
+    if (pathname === '/api/health' && req.method === 'GET') {
+      try {
+        await pool.query('SELECT 1');
+        return sendJSON(res, 200, { status: 'ok' });
+      } catch (err) {
+        console.error('[health] banco indisponível:', err.message);
+        return sendJSON(res, 503, { status: 'unavailable' });
+      }
+    }
+
     // config pública lida pelo front (analytics.js) — nunca inclui segredo, só os IDs de
     // rastreamento (públicos por natureza: aparecem no HTML de qualquer site que os usa).
     // Sem as env vars configuradas (cliente ainda não tem conta no Google/Meta), volta string
@@ -1154,6 +1166,7 @@ async function handleApi(req, res, pathname) {
       return sendJSON(res, 200, {
         products, categories, collections, promotions, coupons, shippingRules, categoryGroups,
         categoryContent, stories, novidades, upsell, bestSellers,
+        whatsappNumber: (process.env.WHATSAPP_NUMBER || '5531973053380').replace(/\D/g, ''),
         onlinePaymentEnabled: !!getActiveProvider(),
       });
     }
@@ -1207,7 +1220,7 @@ async function handleApi(req, res, pathname) {
       const role = body.role === 'owner' ? 'owner' : 'staff';
       if (!name || !email || !password) return sendJSON(res, 400, { error: 'Nome, e-mail e senha são obrigatórios' });
       if (!/^\S+@\S+\.\S+$/.test(email)) return sendJSON(res, 400, { error: 'E-mail inválido' });
-      if (password.length < 6) return sendJSON(res, 400, { error: 'A senha deve ter ao menos 6 caracteres' });
+      if (password.length < 8) return sendJSON(res, 400, { error: 'A senha deve ter ao menos 8 caracteres' });
 
       const dup = await pool.query('SELECT 1 FROM admin_users WHERE lower(email) = $1', [email]);
       if (dup.rowCount) return sendJSON(res, 409, { error: 'Já existe um usuário admin com esse e-mail' });
@@ -1248,7 +1261,7 @@ async function handleApi(req, res, pathname) {
       if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       const currentPassword = body.currentPassword || '';
       const newPassword = body.newPassword || '';
-      if (newPassword.length < 6) return sendJSON(res, 400, { error: 'A nova senha deve ter ao menos 6 caracteres' });
+      if (newPassword.length < 8) return sendJSON(res, 400, { error: 'A nova senha deve ter ao menos 8 caracteres' });
 
       const { rows } = await pool.query('SELECT password_hash AS "passwordHash" FROM admin_users WHERE id = $1', [admin.id]);
       if (!rows[0] || !verifyPassword(currentPassword, rows[0].passwordHash)) {
@@ -2466,7 +2479,7 @@ async function handleApi(req, res, pathname) {
       }
       if (!/^\S+@\S+\.\S+$/.test(email)) return sendJSON(res, 400, { error: 'E-mail inválido' });
       if (!isValidCPF(cpf)) return sendJSON(res, 400, { error: 'CPF inválido' });
-      if (password.length < 6) return sendJSON(res, 400, { error: 'A senha deve ter ao menos 6 caracteres' });
+      if (password.length < 8) return sendJSON(res, 400, { error: 'A senha deve ter ao menos 8 caracteres' });
       if (body.privacyAccepted !== true) {
         return sendJSON(res, 400, { error: 'É preciso aceitar a política de privacidade' });
       }
@@ -2557,7 +2570,7 @@ async function handleApi(req, res, pathname) {
 
       const currentPassword = body.currentPassword || '';
       const newPassword = body.newPassword || '';
-      if (newPassword.length < 6) return sendJSON(res, 400, { error: 'A nova senha deve ter ao menos 6 caracteres' });
+      if (newPassword.length < 8) return sendJSON(res, 400, { error: 'A nova senha deve ter ao menos 8 caracteres' });
 
       const { rows } = await pool.query('SELECT password_hash AS "passwordHash" FROM customers WHERE id = $1', [customerId]);
       if (!rows[0] || !verifyPassword(currentPassword, rows[0].passwordHash)) {
@@ -2603,7 +2616,7 @@ async function handleApi(req, res, pathname) {
       const token = (body.token || '').trim();
       const newPassword = body.newPassword || '';
       if (!token) return sendJSON(res, 400, { error: 'Token inválido' });
-      if (newPassword.length < 6) return sendJSON(res, 400, { error: 'A nova senha deve ter ao menos 6 caracteres' });
+      if (newPassword.length < 8) return sendJSON(res, 400, { error: 'A nova senha deve ter ao menos 8 caracteres' });
 
       const { rows } = await pool.query(
         `SELECT id FROM customers WHERE reset_token = $1 AND reset_token_expires > now()`,
