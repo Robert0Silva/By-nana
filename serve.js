@@ -3050,7 +3050,7 @@ function serveBadRequest(res) {
 // dentro de assets/. Tudo mais no repo (serve.js, .env, db/, node_modules/, package.json...)
 // nunca deve ser servido como arquivo estático — allowlist em vez de bloquear só ".."
 // porque um arquivo sensível (ex.: .env) pode estar dentro do root sem nenhum ".." envolvido.
-const PUBLIC_STATIC_FILES = new Set(['/index.html', '/admin.html', '/produto.html', '/404.html', '/redefinir-senha.html']);
+const PUBLIC_STATIC_FILES = new Set(['/index.html', '/admin.html', '/produto.html', '/404.html', '/redefinir-senha.html', '/politica-privacidade.html']);
 
 function isPublicStaticPath(filePath) {
   return PUBLIC_STATIC_FILES.has(filePath) || filePath.startsWith('/assets/');
@@ -3123,7 +3123,7 @@ function requestOrigin(req) {
 // com só a home.
 async function buildSitemap(origin) {
   const { rows } = await pool.query('SELECT id FROM products ORDER BY created_at DESC');
-  const urls = ['/', ...rows.map((r) => `/produto/${r.id}`)];
+  const urls = ['/', '/politica-privacidade.html', ...rows.map((r) => `/produto/${r.id}`)];
   const items = urls.map((u) => `  <url><loc>${origin}${u}</loc></url>`).join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${items}\n</urlset>\n`;
 }
