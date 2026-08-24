@@ -285,7 +285,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
 .story-mute,.story-close{
-  background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.4);color:#fff;width:34px;height:34px;
+  background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.4);color:#fff;width:44px;height:44px;
 }
 .story-mute:hover,.story-close:hover{background:rgba(0,0,0,.55);color:#fff;}
 .story-mute #storyMuteWave{display:none;}
@@ -787,7 +787,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 }
 .pdp-gallery-main.is-zooming .pdp-zoom-pane{opacity:1;}
 .pdp-zoom-hint{
-  position:absolute;right:12px;bottom:12px;width:36px;height:36px;border-radius:50%;
+  position:absolute;right:12px;bottom:12px;width:44px;height:44px;border-radius:50%;
   background:rgba(255,255,255,.92);border:1px solid var(--line);display:grid;place-items:center;
   cursor:pointer;color:var(--ink);padding:0;
 }
@@ -822,7 +822,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 .pdp-lightbox-close:hover{background:rgba(0,0,0,.6);color:#fff;}
 .pdp-lightbox-nav{
   position:absolute;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.4);
-  border:1px solid rgba(255,255,255,.4);color:#fff;width:42px;height:42px;border-radius:50%;
+  border:1px solid rgba(255,255,255,.4);color:#fff;width:44px;height:44px;border-radius:50%;
   display:grid;place-items:center;cursor:pointer;padding:0;
 }
 .pdp-lightbox-nav:hover{background:rgba(0,0,0,.6);}
@@ -834,8 +834,8 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
   font-size:.8rem;background:rgba(0,0,0,.4);padding:4px 12px;border-radius:999px;
 }
 @media (max-width:640px){
-  .pdp-lightbox-close{top:12px;right:12px;width:36px;height:36px;}
-  .pdp-lightbox-nav{width:36px;height:36px;}
+  .pdp-lightbox-close{top:12px;right:12px;width:44px;height:44px;}
+  .pdp-lightbox-nav{width:44px;height:44px;}
 }
 .pdp-info{display:flex;flex-direction:column;gap:12px;}
 .pdp-name{font-size:clamp(1.6rem,2.6vw,2.1rem);line-height:1.2;}
@@ -1021,7 +1021,7 @@ body.pdp-buy-bar-open .float-whats{bottom:88px;}
   .brand .brand-mark{font-size:1.7rem;}
   .header-search{display:none;}
   .header-actions{gap:6px;}
-  .header-actions .icon-btn{width:38px;height:38px;}
+  .header-actions .icon-btn{width:44px;height:44px;}
   .whatsapp-quick{display:none;}
   .hero{padding:42px 0 60px;}
   .hero-inner{gap:32px;}
@@ -1054,6 +1054,9 @@ body.pdp-buy-bar-open .float-whats{bottom:88px;}
   .menu-toggle{display:inline-flex;}
   .main-nav .nav-item{width:100%;}
   .nav-trigger{width:100%;text-align:left;}
+  /* alvo de toque recomendado (~44px) — no desktop o padding menor (4px) já basta porque o
+     mouse não exige a mesma folga do dedo. */
+  .main-nav a,.nav-trigger{padding:13px 0;}
   /* no overlay móvel o painel tem fundo claro — os links precisam voltar a ser escuros
      (na versão desktop, dentro da barra escura .header-row-nav, eles ficam claros). Repete o
      prefixo ".header-row-nav" pra empatar a especificidade da regra de tema escuro e vencer por

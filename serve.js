@@ -3,6 +3,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const sharp = require('sharp');
 const { Pool, types } = require('pg');
 const { sendEmail } = require('./email');
@@ -3001,6 +3002,23 @@ async function handleApi(req, res, pathname) {
   }
 }
 
+// Comprime a resposta com gzip quando o cliente aceita — sem isso, main.js (127KB) e
+// style.css (73KB) trafegam inteiros em toda navegação, o que pesa bastante pra quem acessa
+// pelo celular fora do wifi (a maior parte do público desta loja). Não mexe em Cache-Control:
+// continua igual, isso aqui só reduz bytes na rede, não muda o que já foi decidido sobre cache.
+const COMPRESSIBLE_EXT = new Set(['.html', '.css', '.js', '.json', '.svg', '.xml', '.txt']);
+function sendBody(req, res, status, headers, body, { compressible = false } = {}) {
+  const buffer = Buffer.isBuffer(body) ? body : Buffer.from(body, 'utf8');
+  const acceptsGzip = /\bgzip\b/.test(String(req.headers['accept-encoding'] || ''));
+  if (compressible && acceptsGzip && buffer.length > 256) {
+    res.writeHead(status, { ...headers, 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' });
+    res.end(zlib.gzipSync(buffer));
+    return;
+  }
+  res.writeHead(status, headers);
+  res.end(buffer);
+}
+
 // Nomes de arquivo fixos (sobrescritos no lugar pelo admin) não podem ter cache longo,
 // senão o navegador ignora a foto nova depois de trocada em "Imagens do site".
 const FIXED_IMAGE_FILES = new Set(Object.values(SITE_IMAGE_SLOTS).map((cfg) => path.basename(cfg.path)));
@@ -3100,12 +3118,10 @@ function serveStatic(req, res, pathname) {
         .toString('utf8')
         .replace(/<!--HOME_OG_IMAGE-->/g, escapeHtml(`${origin}/assets/img/processed/site-hero-1.jpg`))
         .replace(/<!--HOME_CANONICAL-->/g, escapeHtml(`${origin}/`));
-      res.writeHead(200, { 'Content-Type': types_[ext] || 'application/octet-stream', 'Cache-Control': cacheControlFor(filePath, ext) });
-      res.end(html);
+      sendBody(req, res, 200, { 'Content-Type': types_[ext] || 'application/octet-stream', 'Cache-Control': cacheControlFor(filePath, ext) }, html, { compressible: true });
       return;
     }
-    res.writeHead(200, { 'Content-Type': types_[ext] || 'application/octet-stream', 'Cache-Control': cacheControlFor(filePath, ext) });
-    res.end(data);
+    sendBody(req, res, 200, { 'Content-Type': types_[ext] || 'application/octet-stream', 'Cache-Control': cacheControlFor(filePath, ext) }, data, { compressible: COMPRESSIBLE_EXT.has(ext) });
   });
 }
 
@@ -3179,8 +3195,7 @@ async function serveProductPage(req, res, id) {
       // JSON-LD não passa por escapeHtml (quebraria a sintaxe JSON); JSON.stringify já escapa
       // aspas, e "<" vira "<" abaixo pra um valor de produto nunca poder fechar a tag <script>.
       .replace('<!--PRODUCT_JSONLD-->', jsonLd.replace(/</g, '\\u003c'));
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
-    res.end(html);
+    sendBody(req, res, 200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' }, html, { compressible: true });
   });
 }
 
