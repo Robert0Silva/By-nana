@@ -36,5 +36,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node db/migrate.js
+      - run: npm run configure:business
       - run: npx playwright install --with-deps chromium
       - run: npm run test:ci
