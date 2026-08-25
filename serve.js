@@ -75,6 +75,7 @@ async function processSiteImage(buffer, destPath) {
       .jpeg({ quality: 90, mozjpeg: true })
       .toFile(destPath);
   }
+  await generateResponsiveVariants(destPath);
 }
 
 // Pipeline de imagem de produto (capa e galeria) — era duplicado inline em criar/atualizar
@@ -88,6 +89,14 @@ async function processProductImage(buffer, outPath) {
     .resize({ width: 1000, withoutEnlargement: true })
     .jpeg({ quality: 90, mozjpeg: true })
     .toFile(outPath);
+  await generateResponsiveVariants(outPath);
+}
+
+async function generateResponsiveVariants(sourcePath) {
+  const stem = sourcePath.slice(0, -path.extname(sourcePath).length);
+  await Promise.all(
+    [320, 640, 1000].map((width) => sharp(sourcePath).resize({ width }).webp({ quality: 82, effort: 4 }).toFile(`${stem}-${width}.webp`))
+  );
 }
 
 function decodeImageDataUrl(dataUrl) {
@@ -104,6 +113,7 @@ const types_ = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
   '.svg': 'image/svg+xml',
   '.mp4': 'video/mp4',
   '.webm': 'video/webm',
@@ -3027,7 +3037,7 @@ function sendBody(req, res, status, headers, body, { compressible = false } = {}
 // senão o navegador ignora a foto nova depois de trocada em "Imagens do site".
 const FIXED_IMAGE_FILES = new Set(Object.values(SITE_IMAGE_SLOTS).map((cfg) => path.basename(cfg.path)));
 
-function cacheControlFor(filePath, ext) {
+function cacheControlFor(filePath, ext, versioned = false) {
   if (ext === '.html') return 'no-cache';
   const base = path.basename(filePath);
   if (filePath.startsWith(`${path.sep}assets${path.sep}img${path.sep}processed${path.sep}`) || filePath.startsWith('/assets/img/processed/')) {
@@ -3037,7 +3047,8 @@ function cacheControlFor(filePath, ext) {
   if (filePath.includes(`${path.sep}assets${path.sep}videos${path.sep}`) || filePath.includes('/assets/videos/')) {
     return 'public, max-age=31536000, immutable';
   }
-  if (ext === '.css' || ext === '.js') return 'no-cache'; // sem hash no nome do arquivo, então revalida a cada load em vez de arriscar servir versão antiga
+  if ((ext === '.css' || ext === '.js') && versioned) return 'public, max-age=31536000, immutable';
+  if (ext === '.css' || ext === '.js') return 'no-cache';
   return 'no-cache';
 }
 
@@ -3121,11 +3132,24 @@ function serveStatic(req, res, pathname) {
       const html = data
         .toString('utf8')
         .replace(/<!--HOME_OG_IMAGE-->/g, escapeHtml(`${origin}/assets/img/processed/site-hero-1.jpg`))
-        .replace(/<!--HOME_CANONICAL-->/g, escapeHtml(`${origin}/`));
-      sendBody(req, res, 200, { 'Content-Type': types_[ext] || 'application/octet-stream', 'Cache-Control': cacheControlFor(filePath, ext) }, html, { compressible: true });
+        .replace(/<!--HOME_CANONICAL-->/g, escapeHtml(`${origin}/`))
+        .replace(/<!--HOME_JSONLD-->/g, JSON.stringify({
+          '@context': 'https://schema.org',
+          '@type': 'Organization',
+          name: 'By NaNa',
+          url: `${origin}/`,
+          logo: `${origin}/assets/img/processed/logo.png`,
+        }).replace(/</g, '\\u003c'));
+      sendBody(req, res, 200, { 'Content-Type': types_[ext] || 'application/octet-stream', 'Cache-Control': cacheControlFor(filePath, ext, new URL(req.url, 'http://local').searchParams.has('v')) }, html, { compressible: true });
       return;
     }
-    sendBody(req, res, 200, { 'Content-Type': types_[ext] || 'application/octet-stream', 'Cache-Control': cacheControlFor(filePath, ext) }, data, { compressible: COMPRESSIBLE_EXT.has(ext) });
+    if (filePath === '/politica-privacidade.html') {
+      const canonical = `${requestOrigin(req)}/politica-privacidade.html`;
+      const html = data.toString('utf8').replace(/<!--POLICY_CANONICAL-->/g, escapeHtml(canonical));
+      sendBody(req, res, 200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' }, html, { compressible: true });
+      return;
+    }
+    sendBody(req, res, 200, { 'Content-Type': types_[ext] || 'application/octet-stream', 'Cache-Control': cacheControlFor(filePath, ext, new URL(req.url, 'http://local').searchParams.has('v')) }, data, { compressible: COMPRESSIBLE_EXT.has(ext) });
   });
 }
 
@@ -3142,9 +3166,14 @@ function requestOrigin(req) {
 // dinâmico porque precisa listar /produto/:id de cada produto — antes era uma string fixa
 // com só a home.
 async function buildSitemap(origin) {
-  const { rows } = await pool.query('SELECT id FROM products ORDER BY created_at DESC');
-  const urls = ['/', '/politica-privacidade.html', ...rows.map((r) => `/produto/${r.id}`)];
-  const items = urls.map((u) => `  <url><loc>${origin}${u}</loc></url>`).join('\n');
+  const { rows } = await pool.query('SELECT id, created_at FROM products ORDER BY created_at DESC');
+  const staticLastmod = '2026-08-25';
+  const urls = [
+    { path: '/', lastmod: staticLastmod },
+    { path: '/politica-privacidade.html', lastmod: staticLastmod },
+    ...rows.map((r) => ({ path: `/produto/${r.id}`, lastmod: new Date(r.created_at).toISOString().slice(0, 10) })),
+  ];
+  const items = urls.map((u) => `  <url><loc>${origin}${u.path}</loc><lastmod>${u.lastmod}</lastmod></url>`).join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${items}\n</urlset>\n`;
 }
 
@@ -3206,15 +3235,14 @@ async function serveProductPage(req, res, id) {
 // CSP restrita a 'self' + só os domínios de terceiro que o site realmente usa (Google Fonts,
 // GA4, Meta Pixel — os dois últimos só são efetivamente chamados quando configurados, ver
 // /api/public-config, mas ficam liberados aqui desde já pra não exigir mexer nisso de novo
-// quando a cliente criar as contas). script-src sem 'unsafe-inline': todo <script> do site é
-// arquivo externo (ver redefinir-senha.js) — só style-src precisa de 'unsafe-inline', porque
-// o layout usa atributos style="" inline em alguns pontos (posições de callout, JS que anima
-// elementos). frame-ancestors 'none' bloqueia o site inteiro (inclusive /admin) de ser
+// quando a cliente criar as contas). Scripts e folhas de estilo são externos; nenhuma diretiva
+// depende de 'unsafe-inline'. Alterações visuais dinâmicas usam propriedades CSSOM ou atributos
+// SVG, sem gerar atributos style. frame-ancestors 'none' bloqueia o site inteiro (inclusive /admin) de ser
 // carregado dentro de um <iframe> de outro site — a defesa moderna contra clickjacking.
 const CSP = [
   "default-src 'self'",
   "script-src 'self' https://www.googletagmanager.com https://connect.facebook.net",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "style-src 'self' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com",
   "img-src 'self' data: https://www.facebook.com https://www.google-analytics.com",
   "media-src 'self' data:",

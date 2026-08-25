@@ -65,6 +65,16 @@ test('serve as páginas públicas e os assets principais', async () => {
   }
 });
 
+test('assets versionados usam cache longo e variantes WebP são servidas', async () => {
+  const css = await fetch(`${origin}/assets/css/style.css?v=20260825`);
+  assert.equal(css.status, 200);
+  assert.equal(css.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+
+  const image = await fetch(`${origin}/assets/img/processed/site-hero-1-320.webp`);
+  assert.equal(image.status, 200);
+  assert.equal(image.headers.get('content-type'), 'image/webp');
+});
+
 test('redireciona as URLs HTML para as formas canônicas', async () => {
   const cases = [
     ['/index.html', '/'],
@@ -81,7 +91,7 @@ test('retorna uma página 404 estilizada inclusive em rotas aninhadas', async ()
   const response = await fetch(`${origin}/rota/inexistente`);
   const html = await response.text();
   assert.equal(response.status, 404);
-  assert.match(html, /href="\/assets\/css\/style\.css"/);
+  assert.match(html, /href="\/assets\/css\/style\.css\?v=\d+"/);
   assert.match(html, /href="\/assets\/img\/processed\/logo\.png"/);
 });
 
@@ -138,6 +148,14 @@ test('envia cabeçalhos de segurança nas páginas públicas', async () => {
   assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
   assert.match(response.headers.get('strict-transport-security') || '', /max-age=/);
   assert.match(response.headers.get('permissions-policy') || '', /camera=\(\)/);
+});
+
+test('CSP não permite scripts ou estilos inline inseguros', async () => {
+  const response = await fetch(origin);
+  const csp = response.headers.get('content-security-policy');
+  assert.ok(csp);
+  assert.doesNotMatch(csp, /'unsafe-inline'/);
+  assert.match(csp, /style-src 'self' https:\/\/fonts\.googleapis\.com/);
 });
 
 test('bloqueia acesso anônimo a dados administrativos', async () => {

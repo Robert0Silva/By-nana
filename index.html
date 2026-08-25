@@ -17,7 +17,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,600;1,500&family=Poppins:wght@300;400;500;600&family=Great+Vibes&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/css/style.css" />
+<link rel="stylesheet" href="assets/css/style.css?v=20260825" />
+<script type="application/ld+json"><!--HOME_JSONLD--></script>
 </head>
 <body>
 
@@ -28,6 +29,7 @@
   Não foi possível carregar o catálogo agora. <button type="button" id="dataErrorRetry" class="data-error-retry">Tentar de novo</button>
 </p>
 <p class="checkout-status-banner" id="checkoutStatusBanner" hidden></p>
+<a class="skip-link" href="#main-content">Pular para o conteúdo</a>
 <div class="topbar" id="topbar">
   <span class="topbar-msg is-active">Curadoria independente</span>
   <span class="topbar-msg">Atendimento das 14h às 19h ou com horário agendado</span>
@@ -83,10 +85,10 @@
   </div>
 </header>
 
-<main>
+<main id="main-content">
 
   <section class="hero" aria-labelledby="heroTitle">
-    <img class="hero-image" src="assets/img/processed/site-hero-1.jpg" alt="Look feminino em alfaiataria off-white com bolsa caramelo" fetchpriority="high" />
+    <img class="hero-image" src="assets/img/processed/site-hero-1.jpg" srcset="assets/img/processed/site-hero-1-320.webp 320w, assets/img/processed/site-hero-1-640.webp 640w, assets/img/processed/site-hero-1-1000.webp 1000w" sizes="100vw" width="370" height="542" alt="Look feminino em alfaiataria off-white com bolsa caramelo" fetchpriority="high" />
     <div class="hero-shade" aria-hidden="true"></div>
     <div class="wrap hero-inner">
       <div class="hero-copy">
@@ -128,16 +130,16 @@
         <a href="#colecao" class="text-link" id="spotlightCta">Descobrir este look <span aria-hidden="true">→</span></a>
       </div>
       <div class="spotlight-media">
-        <img src="assets/img/processed/look-alfaiataria-off-white.jpg" alt="Conjunto Alfaiataria Off White" />
-        <div class="callout callout-1" style="top:26%;left:52%;">
+        <img src="assets/img/processed/look-alfaiataria-off-white.jpg" srcset="assets/img/processed/look-alfaiataria-off-white-320.webp 320w, assets/img/processed/look-alfaiataria-off-white-640.webp 640w, assets/img/processed/look-alfaiataria-off-white-1000.webp 1000w" sizes="(max-width:520px) 76vw, 25vw" width="370" height="757" alt="Conjunto Alfaiataria Off White" loading="lazy" decoding="async" />
+        <div class="callout callout-1">
           <span class="callout-dot"></span><span class="callout-line"></span>
           <span class="callout-label">Colete alfaiataria</span>
         </div>
-        <div class="callout callout-2" style="top:44%;left:56%;">
+        <div class="callout callout-2">
           <span class="callout-dot"></span><span class="callout-line"></span>
           <span class="callout-label">Fechamento em botões</span>
         </div>
-        <div class="callout callout-3" style="top:76%;left:46%;">
+        <div class="callout callout-3">
           <span class="callout-dot"></span><span class="callout-line"></span>
           <span class="callout-label">Pantalona no mesmo tom</span>
         </div>
@@ -648,8 +650,8 @@
   <button class="btn btn-primary" id="mobileBarBtn">Ver sacola</button>
 </div>
 
-<script src="assets/js/analytics.js"></script>
-<script src="assets/js/promo.js"></script>
-<script src="assets/js/main.js"></script>
+<script src="assets/js/analytics.js?v=20260825"></script>
+<script src="assets/js/promo.js?v=20260825"></script>
+<script src="assets/js/main.js?v=20260825"></script>
 </body>
 </html>

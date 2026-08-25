@@ -2182,7 +2182,7 @@
         (i) => `
       <div class="admin-bar-row">
         <div class="admin-bar-row-label"><span>${escapeHtml(i.label)}</span><span>${valueFormatter(i.value)}</span></div>
-        <div class="admin-bar-track"><div class="admin-bar-fill" style="width:${max > 0 ? (i.value / max) * 100 : 0}%"></div></div>
+        <div class="admin-bar-track"><svg class="admin-bar-fill" viewBox="0 0 100 8" preserveAspectRatio="none" aria-hidden="true"><rect width="${max > 0 ? (i.value / max) * 100 : 0}" height="8" /></svg></div>
       </div>`
       )
       .join('');
@@ -2254,7 +2254,7 @@
     legendContainer.innerHTML = items
       .map(
         (it, i) => `
-      <li><span class="swatch" style="background:${DONUT_COLORS[i % DONUT_COLORS.length]}"></span>${escapeHtml(
+      <li><svg class="swatch" viewBox="0 0 10 10" aria-hidden="true"><rect width="10" height="10" rx="3" fill="${DONUT_COLORS[i % DONUT_COLORS.length]}" /></svg>${escapeHtml(
           it.label
         )}<span class="val">${valueFormatter(it.value)}</span></li>`
       )

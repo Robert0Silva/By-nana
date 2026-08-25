@@ -1016,7 +1016,8 @@ body.pdp-buy-bar-open .float-whats{bottom:88px;}
   .sobre-img img{aspect-ratio:16/10;}
 }
 @media (max-width:720px){
-  .topbar{font-size:.72rem;padding:7px 16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .topbar{font-size:.72rem;padding:7px 16px;min-width:0;}
+  .topbar-msg{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .header-row-top{height:64px;gap:8px;}
   .brand .brand-mark{font-size:1.7rem;}
   .header-search{display:none;}
@@ -1323,11 +1324,37 @@ body.pdp-buy-bar-open .float-whats{bottom:88px;}
   .product-body{padding:12px 1px 22px;}
   .product-actions{display:block;}
   .ask-btn{display:none;}
-  .add-btn{width:100%;min-height:42px;}
+  .add-btn{width:100%;min-height:44px;}
   .product-name{font-size:.82rem;}
   .variant-picker{gap:4px;}
   .variant-chip{padding:5px 8px;font-size:.68rem;}
   .footer-nav{grid-template-columns:1fr;}
+}
+
+/* VisÃ­vel somente ao receber foco: permite pular o cabeÃ§alho repetitivo pelo teclado. */
+.skip-link{position:fixed;left:16px;top:8px;z-index:1000;transform:translateY(-160%);background:var(--ink);color:#fff;padding:10px 16px;border-radius:3px;}
+.skip-link:focus{transform:translateY(0);}
+
+/* Páginas auxiliares e posições editoriais antes declaradas em blocos/atributos inline. */
+.notfound{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px;}
+.notfound .brand-mark{font-size:2.2rem;color:var(--ink);margin-bottom:18px;}
+.notfound .eyebrow{margin-bottom:.4em;}.notfound h1{font-size:clamp(2.4rem,6vw,4rem);margin-bottom:.2em;}
+.notfound p{max-width:44ch;margin:0 auto 28px;}.notfound .btn-row{display:flex;gap:14px;flex-wrap:wrap;justify-content:center;}
+.policy-wrap{min-height:100vh;padding:48px 24px 80px;}.policy-card{max-width:760px;margin:0 auto;}
+.policy-card .brand-mark{display:block;text-align:center;font-size:2rem;color:var(--ink);margin-bottom:8px;}
+.policy-card .eyebrow{display:block;text-align:center;margin-bottom:.2em;}.policy-card .eyebrow::after{margin-left:auto;margin-right:auto;}
+.policy-card h1{text-align:center;font-size:clamp(1.7rem,4vw,2.2rem);margin-bottom:.2em;}.policy-updated{text-align:center;color:var(--ink-soft);font-size:.85rem;margin-bottom:2.4em;}
+.policy-card h2{font-size:1.15rem;margin:1.8em 0 .5em;color:var(--ink);}.policy-card ul{margin:0 0 1em;padding-left:1.3em;color:var(--ink-soft);line-height:1.7;}
+.policy-card li{margin-bottom:.4em;}.policy-card a{color:var(--gold-text);}.policy-back{display:block;text-align:center;margin-top:2.6em;}
+.reset-wrap{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;}
+.reset-card{width:100%;max-width:380px;text-align:left;}.reset-card .brand-mark{display:block;text-align:center;font-size:2rem;color:var(--ink);margin-bottom:22px;}
+.reset-card h1{font-size:1.4rem;margin-bottom:.3em;}.reset-back{margin-top:18px;}
+.callout-1{top:26%;left:52%;}.callout-2{top:44%;left:56%;}.callout-3{top:76%;left:46%;}
+
+@media (max-width:360px){
+  .bag-coupon{display:grid;grid-template-columns:minmax(0,1fr) auto;}
+  .bag-coupon input{min-width:0;}
+  .bag-coupon .btn{padding-inline:12px;}
 }
 
 /* Customer account overrides are kept last to win over the shared modal defaults. */

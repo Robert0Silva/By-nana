@@ -48,6 +48,23 @@
     return String(str == null ? '' : str).replace(/[&<>"']/g, (c) => ESCAPE_MAP[c]);
   }
 
+  function responsiveImageAttrs(url, sizes = '(max-width: 520px) 50vw, 25vw') {
+    if (!/(?:^|\/)assets\/img\/processed\/[^?#]+\.(?:jpe?g|png)(?:[?#].*)?$/i.test(url)) return '';
+    const clean = url.replace(/[?#].*$/, '');
+    const stem = clean.replace(/\.(?:jpe?g|png)$/i, '');
+    return `srcset="${escapeHtml(stem)}-320.webp 320w, ${escapeHtml(stem)}-640.webp 640w, ${escapeHtml(stem)}-1000.webp 1000w" sizes="${escapeHtml(sizes)}"`;
+  }
+
+  function applyResponsiveImage(image, url, sizes) {
+    image.src = url;
+    const attrs = responsiveImageAttrs(url, sizes);
+    const srcset = attrs.match(/srcset="([^"]+)"/);
+    if (srcset) image.srcset = srcset[1];
+    else image.removeAttribute('srcset');
+    image.sizes = sizes;
+    image.decoding = 'async';
+  }
+
   // Resolves the price a customer actually pays for a product right now (item/category/collection/site promos).
   function getEffective(p) {
     if (p.price == null) return { price: null, promo: null };
@@ -134,7 +151,7 @@
       .map((c) => {
         const hex = colorToHex(c);
         return hex
-          ? `<span class="color-dot" style="background-color:${hex}" title="${escapeHtml(c)}"></span>`
+          ? `<svg class="color-dot" viewBox="0 0 16 16" title="${escapeHtml(c)}" aria-hidden="true"><circle cx="8" cy="8" r="8" fill="${hex}" /></svg>`
           : `<span class="color-dot color-dot-label" title="${escapeHtml(c)}">${escapeHtml(c.slice(0, 3))}</span>`;
       })
       .join('');
@@ -497,7 +514,7 @@
 
     div.innerHTML = `
       <a class="product-media" href="/produto/${p.id}">
-        <img src="${escapeHtml(p.img)}" alt="${escapeHtml(p.name)}" loading="lazy" />
+        <img src="${escapeHtml(p.img)}" ${responsiveImageAttrs(p.img)} alt="${escapeHtml(p.name)}" loading="lazy" decoding="async" />
         <div class="product-badges">
           <span class="product-tag">${escapeHtml(p.tag)}</span>
           ${promo ? `<span class="discount-badge">-${promo.percent}%</span>` : ''}
@@ -701,7 +718,7 @@
       const btn = document.createElement('button');
       btn.className = 'cat-card';
       btn.dataset.filter = cat;
-      btn.innerHTML = `<img src="${rep ? rep.img : fallbackImg}" alt="${escapeHtml(cat)}" /><span>${escapeHtml(cat)}</span>`;
+      btn.innerHTML = `<img src="${rep ? rep.img : fallbackImg}" ${responsiveImageAttrs(rep ? rep.img : fallbackImg, '(max-width: 520px) 76vw, 25vw')} alt="${escapeHtml(cat)}" loading="lazy" decoding="async" /><span>${escapeHtml(cat)}</span>`;
       btn.addEventListener('click', () => {
         setFilter(cat);
         document.getElementById('colecao').scrollIntoView({ behavior: 'smooth' });
@@ -711,7 +728,7 @@
     const allBtn = document.createElement('button');
     allBtn.className = 'cat-card';
     allBtn.dataset.filter = 'Todos';
-    allBtn.innerHTML = `<img src="${PRODUCTS[0] ? PRODUCTS[0].img : fallbackImg}" alt="Ver tudo" /><span>Ver tudo</span>`;
+    allBtn.innerHTML = `<img src="${PRODUCTS[0] ? PRODUCTS[0].img : fallbackImg}" ${responsiveImageAttrs(PRODUCTS[0] ? PRODUCTS[0].img : fallbackImg, '(max-width: 520px) 76vw, 25vw')} alt="Ver tudo" loading="lazy" decoding="async" /><span>Ver tudo</span>`;
     allBtn.addEventListener('click', () => {
       setFilter('Todos');
       document.getElementById('colecao').scrollIntoView({ behavior: 'smooth' });
@@ -763,7 +780,7 @@
         .map((c) => {
           const hex = colorToHex(c);
           const swatch = hex
-            ? `<span class="color-dot" style="background-color:${hex}"></span>`
+            ? `<svg class="color-dot" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="8" fill="${hex}" /></svg>`
             : `<span class="color-dot color-dot-label">${escapeHtml(c.slice(0, 3))}</span>`;
           return `<button type="button" class="color-filter-chip" data-color="${escapeHtml(c)}" title="${escapeHtml(c)}" aria-label="Filtrar por cor ${escapeHtml(c)}">${swatch}</button>`;
         })
@@ -1345,7 +1362,7 @@
         const row = document.createElement('div');
         row.className = 'bag-item';
         row.innerHTML = `
-          <img src="${escapeHtml(p.img)}" alt="${escapeHtml(p.name)}" />
+          <img src="${escapeHtml(p.img)}" ${responsiveImageAttrs(p.img, '96px')} alt="${escapeHtml(p.name)}" loading="lazy" decoding="async" />
           <div class="bag-item-info">
             <div class="bag-item-name">${escapeHtml(p.name)}${variant ? ` <span class="bag-item-variant">(${escapeHtml(variantLabel(variant))})</span>` : ''}</div>
             ${priceHtml}
@@ -1420,7 +1437,7 @@
             const priceLabel = p.price == null ? 'Sob consulta' : money(price);
             return `
               <div class="bag-upsell-item">
-                <a href="/produto/${p.id}" class="bag-upsell-media"><img src="${escapeHtml(p.img)}" alt="${escapeHtml(p.name)}" loading="lazy" /></a>
+                <a href="/produto/${p.id}" class="bag-upsell-media"><img src="${escapeHtml(p.img)}" ${responsiveImageAttrs(p.img, '96px')} alt="${escapeHtml(p.name)}" loading="lazy" decoding="async" /></a>
                 <span class="bag-upsell-name">${escapeHtml(p.name)}</span>
                 <span class="bag-upsell-price">${priceLabel}</span>
                 <button type="button" class="bag-upsell-add" data-id="${p.id}" ${defaultVariant ? `data-variant-id="${defaultVariant.id}"` : ''} aria-label="Adicionar ${escapeHtml(p.name)} à sacola">+</button>
@@ -1549,8 +1566,7 @@
 
   // ---------- foco em modais (trap de Tab + devolve o foco ao fechar) ----------
   const modalFocusState = new Map();
-  function openModalFocus(container) {
-    const previousFocus = document.activeElement;
+  function openModalFocus(container, returnFocus = document.activeElement) {
     const getFocusable = () =>
       container.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
     const keydownHandler = (e) => {
@@ -1568,7 +1584,7 @@
       }
     };
     container.addEventListener('keydown', keydownHandler);
-    modalFocusState.set(container, { previousFocus, keydownHandler });
+    modalFocusState.set(container, { previousFocus: returnFocus, keydownHandler });
     const items = getFocusable();
     (items[0] || container).focus();
   }
@@ -1887,7 +1903,9 @@
     }
     accountOverlay.classList.add('is-open');
     accountModal.classList.add('is-open');
-    openModalFocus(accountModal);
+    // Safari/WebKit não move o foco para um <button> clicado por padrão. Passar o acionador
+    // explicitamente garante a devolução correta ao fechar, inclusive nesse motor.
+    openModalFocus(accountModal, accountBtn);
   }
   function closeAccountModal() {
     if (!accountModal.classList.contains('is-open')) return;
@@ -2454,7 +2472,7 @@
   let pdpLightboxIndex = 0;
 
   function setPdpMainImage(url) {
-    pdpMainImg.src = url;
+    applyResponsiveImage(pdpMainImg, url, '(max-width: 900px) 100vw, 50vw');
     pdpZoomPane.style.backgroundImage = `url("${url}")`;
   }
 
@@ -2595,7 +2613,7 @@
       });
     });
 
-    if (pdpBuyBarImg) pdpBuyBarImg.src = images[0];
+    if (pdpBuyBarImg) applyResponsiveImage(pdpBuyBarImg, images[0], '64px');
     if (pdpBuyBarName) pdpBuyBarName.textContent = p.name;
 
     document.getElementById('pdpBrand').textContent = `${p.brand}${p.collection ? ` · ${p.collection}` : ''}`;

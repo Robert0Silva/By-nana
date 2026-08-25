@@ -72,6 +72,7 @@ test('catálogo abre uma página de produto válida sem erros de navegador', asy
   await expect(page.locator('#pdpLayout')).toBeVisible();
   await expect(page.locator('#pdpName')).toHaveText(productName);
   await expect(page.locator('#pdpMainImg')).toHaveAttribute('alt', productName);
+  await expect(page.locator('#pdpMainImg')).toHaveAttribute('srcset', /\.webp 320w.*\.webp 640w.*\.webp 1000w/);
   expect(errors).toEqual([]);
 });
 
@@ -133,6 +134,31 @@ test('layout móvel não cria rolagem horizontal e o menu pode ser aberto', asyn
     return document.documentElement.scrollWidth - document.documentElement.clientWidth;
   });
   expect(overflow).toBeLessThanOrEqual(1);
+});
+
+test('layout em 320px preserva topbar, cupom e alvos de toque', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 700 });
+  await page.goto(origin);
+
+  const activeTopbar = page.locator('.topbar-msg.is-active');
+  await expect(activeTopbar).toBeVisible();
+  const topbarStyle = await activeTopbar.evaluate((element) => {
+    // eslint-disable-next-line no-undef -- executado no contexto da página.
+    const style = getComputedStyle(element);
+    return { overflow: style.overflow, textOverflow: style.textOverflow, whiteSpace: style.whiteSpace };
+  });
+  expect(topbarStyle).toEqual({ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' });
+
+  const addButtonHeight = await page.locator('.add-btn:not(.is-soldout)').first().evaluate((element) => element.getBoundingClientRect().height);
+  expect(addButtonHeight).toBeGreaterThanOrEqual(44);
+
+  // O objetivo aqui é medir o formulário do drawer; abrir pelo ícone evita depender de estoque/variante.
+  await page.locator('#bagBtn').click();
+  await expect(page.locator('#bagDrawer')).toHaveClass(/is-open/);
+  const couponOverflow = await page.locator('.bag-coupon').evaluate((element) => {
+    return element.scrollWidth - element.clientWidth;
+  });
+  expect(couponOverflow).toBeLessThanOrEqual(1);
 });
 
 test('ativar o botão de checkout várias vezes seguidas dispara só uma tentativa de envio', async ({ page }) => {
