@@ -37,5 +37,7 @@ jobs:
       - run: npm ci
       - run: node db/migrate.js
       - run: npm run configure:business
+      - name: Seed test stock
+        run: psql "$DATABASE_URL" -c "UPDATE product_variants SET stock = 10"
       - run: npx playwright install --with-deps chromium
       - run: npm run test:ci
