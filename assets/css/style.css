@@ -103,7 +103,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
   font-size:.78rem;cursor:pointer;
 }
 
-/* ---------- aviso ao voltar do checkout online (Mercado Pago) ---------- */
+/* ---------- aviso ao voltar do checkout online ---------- */
 .checkout-status-banner{
   text-align:center;font-size:.82rem;font-weight:500;padding:12px;margin:0;
 }

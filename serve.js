@@ -2245,7 +2245,7 @@ async function handleApi(req, res, pathname) {
         // no WhatsApp, como sempre foi. Só nasce 'pending' quando há gateway ativo E a cliente
         // pediu pagamento online — nesse caso a preferência de checkout é criada depois do
         // COMMIT (ver isOnlinePayment abaixo), sem segurar a reserva de estoque por causa de
-        // uma chamada de rede pro Mercado Pago.
+        // uma chamada de rede pro gateway.
         const paymentProvider = getActiveProvider();
         isOnlinePayment = !!paymentProvider && paymentMethod === ONLINE_PAYMENT_METHOD;
         const paymentStatus = isOnlinePayment ? 'pending' : 'manual';
@@ -2278,7 +2278,7 @@ async function handleApi(req, res, pathname) {
       }
 
       // Preferência de checkout criada depois do COMMIT (estoque já reservado, pedido já
-      // existe) — se a chamada pro Mercado Pago falhar (rede, credencial errada...), a compra
+      // existe) — se a chamada pro gateway falhar (rede, credencial errada...), a compra
       // não trava: cai pro fluxo manual de sempre (sem checkoutUrl, o front abre o WhatsApp).
       let checkoutUrl;
       if (isOnlinePayment) {
@@ -2289,7 +2289,7 @@ async function handleApi(req, res, pathname) {
             await pool.query('UPDATE orders SET payment_reference = $1 WHERE id = $2', [session.providerReference, id]);
           }
         } catch (err) {
-          console.error('[mercadopago] falha ao criar checkout, caindo para o fluxo manual:', err.message);
+          console.error(`[${(process.env.PAYMENT_PROVIDER || '').trim()}] falha ao criar checkout, caindo para o fluxo manual:`, err.message);
           // O pedido nasceu 'pending' (ver isOnlinePayment acima) esperando essa preferência dar
           // certo; sem checkoutUrl a compra segue pelo WhatsApp, então o registro tem que voltar
           // a refletir isso — senão fica "pendente" pra sempre sem nenhum jeito de ser pago.
@@ -2312,14 +2312,11 @@ async function handleApi(req, res, pathname) {
         return sendJSON(res, 200, { ok: true });
       }
 
-      // O corpo não é usado (a notificação só carrega type/data.id, tratados via query string —
-      // ver mercadopago.js), mas precisa ser drenado mesmo assim pra não travar a keep-alive
-      // connection numa requisição HTTP1 seguinte.
-      await readBody(req, 1024 * 1024).catch(() => {});
+      const rawBody = await readBody(req, 1024 * 1024).catch(() => Buffer.alloc(0));
 
       let result;
       try {
-        result = await provider.handleWebhook(req);
+        result = await provider.handleWebhook(req, rawBody);
       } catch (err) {
         // Erro nosso ou instabilidade do provedor: loga e ainda assim reconhece com 200 — um
         // 5xx aqui só faria o provedor re-enviar a mesma notificação, sem chance de dar certo

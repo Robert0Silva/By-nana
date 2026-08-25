@@ -345,7 +345,7 @@ CREATE INDEX IF NOT EXISTS idx_abandoned_carts_sweep ON abandoned_carts(updated_
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'manual'
   CHECK (payment_status IN ('manual', 'pending', 'paid', 'failed', 'refunded'));
 
--- referência do gateway (ex.: id da preference/pagamento no Mercado Pago) — usada pelo
+-- referência do gateway (ex.: id do checkout/cobrança no PagBank) — usada pelo
 -- webhook do provedor pra achar o pedido certo, e como link pra conferir o pagamento
 -- direto no painel do gateway se precisar. paid_at fica nulo até o pagamento ser aprovado.
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_reference TEXT;

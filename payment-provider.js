@@ -1,4 +1,4 @@
-// Ponto de extensão pra um gateway de pagamento online (Mercado Pago, Stripe, PagSeguro...).
+// Ponto de extensão pra um gateway de pagamento online (PagBank, Stripe...).
 // Sem PAYMENT_PROVIDER configurado no .env, isso fica "desligado" e o checkout continua como
 // sempre foi: pedido registrado e pagamento combinado na conversa do WhatsApp
 // (orders.payment_status fica 'manual'). Com um provedor ativo, o site oferece "pagamento
@@ -17,12 +17,14 @@
 // Contrato esperado de cada provedor:
 //   createCheckoutSession({ orderId, total, customerName, customerEmail, items })
 //     -> Promise<{ checkoutUrl: string, providerReference: string }>
-//   handleWebhook(req) -> Promise<{ orderId, status: 'paid'|'pending'|'failed'|'refunded', providerReference } | { ignored: true } | null>
+//   handleWebhook(req, rawBody) -> Promise<{ orderId, status: 'paid'|'pending'|'failed'|'refunded', providerReference } | { ignored: true } | null>
 //     (null = assinatura inválida; o caller responde 401. { ignored: true } = notificação que não
-//     é sobre um pagamento, ou sem dado suficiente; o caller só responde 200 e não faz nada.)
+//     é sobre um pagamento, ou sem dado suficiente; o caller só responde 200 e não faz nada.
+//     rawBody é o corpo bruto já drenado pelo caller — necessário pra provedores que assinam a
+//     notificação com hash sobre o corpo exatamente como chegou, ex. PagBank.)
 
 const PROVIDERS = {
-  mercadopago: require('./payment-providers/mercadopago'),
+  pagseguro: require('./payment-providers/pagseguro'),
   // stripe: require('./payment-providers/stripe'),
 };
 

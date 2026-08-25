@@ -55,9 +55,10 @@
     return best ? { price: best.price, promo: best } : { price: p.price, promo: null };
   }
 
-  // Dados da compra guardados só entre o redirecionamento pro checkout do Mercado Pago e a
-  // volta pro site (ver handleCheckoutReturn) — a página recarrega nesse meio tempo, então o
-  // estado em memória (checkoutTotal/checkoutItems) não sobrevive, precisa ir pro localStorage.
+  // Dados da compra guardados só entre o redirecionamento pro checkout online (gateway ativo
+  // em PAYMENT_PROVIDER) e a volta pro site (ver handleCheckoutReturn) — a página recarrega
+  // nesse meio tempo, então o estado em memória (checkoutTotal/checkoutItems) não sobrevive,
+  // precisa ir pro localStorage.
   const PENDING_PURCHASE_KEY = 'bynana_pending_purchase';
 
   // ---------- coupon (applied on top of the bag subtotal) ----------
@@ -1166,10 +1167,13 @@
     banner.hidden = false;
   }
 
-  // Chamado uma vez no início de init(): trata a volta do checkout hospedado no Mercado Pago
-  // (?checkout=success|pending|failure&order=...). A página recarrega do zero nesse redirect,
-  // então o total/itens da compra pra analytics vêm do localStorage (ver PENDING_PURCHASE_KEY),
-  // não da memória — o clique original em "Finalizar" aconteceu num carregamento anterior.
+  // Chamado uma vez no início de init(): trata a volta do checkout hospedado no gateway online
+  // (?checkout=success|pending|failure&order=...) — nem todo gateway distingue os três estados
+  // na URL de retorno (o PagBank, por ex., sempre manda "pending"; a confirmação real chega
+  // pelo webhook no servidor, que dispara o e-mail de "pagamento aprovado"). A página recarrega
+  // do zero nesse redirect, então o total/itens da compra pra analytics vêm do localStorage
+  // (ver PENDING_PURCHASE_KEY), não da memória — o clique original em "Finalizar" aconteceu num
+  // carregamento anterior.
   function handleCheckoutReturn() {
     const params = new URLSearchParams(location.search);
     const state = params.get('checkout');
@@ -1230,7 +1234,7 @@
       if (checkoutUrl) {
         // Pagamento online: a confirmação de compra (trackPurchase) só acontece quando a
         // cliente volta aprovada (ver handleCheckoutReturn em init()) — antes disso o pagamento
-        // ainda nem foi feito, só a preferência de checkout no Mercado Pago.
+        // ainda nem foi feito, só a sessão de checkout foi criada no gateway.
         localStorage.setItem(PENDING_PURCHASE_KEY, JSON.stringify({ orderId, total: checkoutTotal, items: checkoutItems }));
         window.location.href = checkoutUrl;
         return;

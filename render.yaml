@@ -44,8 +44,8 @@ services:
       # Opcional — sem isso, checkout continua 100% manual via WhatsApp (comportamento atual).
       - key: PAYMENT_PROVIDER
         sync: false
-      # Só usados quando PAYMENT_PROVIDER=mercadopago (ver .env.example).
-      - key: MERCADOPAGO_ACCESS_TOKEN
+      # Só usados quando PAYMENT_PROVIDER=pagseguro (ver .env.example).
+      - key: PAGSEGURO_TOKEN
         sync: false
-      - key: MERCADOPAGO_WEBHOOK_SECRET
+      - key: PAGSEGURO_SANDBOX
         sync: false
