@@ -774,10 +774,17 @@ const loginAttempts = new Map();
 
 // Mesmo raciocínio do requestOrigin() (abaixo): atrás de proxy/CDN, req.socket.remoteAddress
 // é sempre o IP do proxy — sem olhar X-Forwarded-For, o rate limit vira "por e-mail" (todo
-// mundo cai no mesmo balde) e uma pessoa consegue bloquear o login de outra.
+// mundo cai no mesmo balde) e uma pessoa consegue bloquear o login de outra. Usa o ÚLTIMO IP
+// da lista, não o primeiro: X-Forwarded-For é preenchido pelo cliente e só recebe um IP novo
+// anexado a cada hop de proxy confiável — o primeiro valor é livremente forjável por quem
+// envia a requisição, então só o último (adicionado pelo proxy da Render, o único hop aqui)
+// é confiável como "IP de quem bateu na nossa borda".
 function clientIp(req) {
   const forwarded = req.headers['x-forwarded-for'];
-  if (forwarded) return forwarded.split(',')[0].trim();
+  if (forwarded) {
+    const ips = forwarded.split(',').map((s) => s.trim()).filter(Boolean);
+    if (ips.length) return ips[ips.length - 1];
+  }
   return req.socket.remoteAddress;
 }
 
