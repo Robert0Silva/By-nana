@@ -48,6 +48,19 @@
     return String(str == null ? '' : str).replace(/[&<>"']/g, (c) => ESCAPE_MAP[c]);
   }
 
+  function safeStoredJson(key, fallback, isValid) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw == null) return fallback;
+      const value = JSON.parse(raw);
+      if (!isValid(value)) throw new Error('formato inválido');
+      return value;
+    } catch {
+      localStorage.removeItem(key);
+      return fallback;
+    }
+  }
+
   function responsiveImageAttrs(url, sizes = '(max-width: 520px) 50vw, 25vw') {
     if (!/(?:^|\/)assets\/img\/processed\/[^?#]+\.(?:jpe?g|png)(?:[?#].*)?$/i.test(url)) return '';
     const clean = url.replace(/[?#].*$/, '');
@@ -391,7 +404,7 @@
 
   // ---------- cart (sacola) ----------
   const CART_KEY = 'bynana_cart';
-  let cart = JSON.parse(localStorage.getItem(CART_KEY) || '{}');
+  let cart = safeStoredJson(CART_KEY, {}, (value) => value && typeof value === 'object' && !Array.isArray(value));
 
   // migra o formato antigo ({ [productId]: quantidade }) para o novo ({ [chave]: {productId,variantId,qty} })
   // — sem isso, quem já tinha itens na sacola antes desta atualização veria a sacola "sumir".
@@ -412,7 +425,7 @@
 
   // ---------- favorites ----------
   const FAV_KEY = 'bynana_favs';
-  let favs = new Set(JSON.parse(localStorage.getItem(FAV_KEY) || '[]'));
+  let favs = new Set(safeStoredJson(FAV_KEY, [], Array.isArray));
   function saveFavs() {
     localStorage.setItem(FAV_KEY, JSON.stringify([...favs]));
   }
@@ -1807,7 +1820,7 @@
     }).catch(() => {});
   });
 
-  let currentCustomer = JSON.parse(localStorage.getItem(CUSTOMER_KEY) || 'null');
+  let currentCustomer = safeStoredJson(CUSTOMER_KEY, null, (value) => value === null || (typeof value === 'object' && !Array.isArray(value)));
 
   function setFormMsg(el, text, kind) {
     el.textContent = text;

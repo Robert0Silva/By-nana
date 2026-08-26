@@ -224,6 +224,23 @@ test('pedido sem e-mail continua sendo rejeitado só por falta dos campos obriga
   assert.doesNotMatch(data.error, /e-?mail/i);
 });
 
+test('entrega exige endereço completo antes de reservar estoque', async () => {
+  const response = await fetch(`${origin}/api/orders`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      customerName: 'Cliente Teste',
+      customerPhone: '31999999999',
+      paymentMethod: 'Pix',
+      deliveryMethod: 'Entrega',
+      items: [{ id: 'produto-inexistente', variantId: 'variante-inexistente', qty: 1 }],
+    }),
+  });
+  const data = await response.json();
+  assert.equal(response.status, 400);
+  assert.match(data.error, /endereço/i);
+});
+
 // Regressão: uma variável de e-mail perdida num merge anterior fazia TODO pedido bem-sucedido
 // retornar 500 (ReferenceError), e nenhum teste existente exercitava o caminho de sucesso —
 // só o de rejeição por campo faltando, que nunca chega perto do bug. Este teste cria um pedido
@@ -405,6 +422,51 @@ test('cadastro rejeita senha com menos de oito caracteres', async () => {
   const data = await response.json();
   assert.equal(response.status, 400);
   assert.match(data.error, /8 caracteres/);
+});
+
+test('trocar a senha invalida imediatamente o token anterior do cliente', async () => {
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const email = `sessao-teste-${Date.now()}@example.com`;
+  const password = 'senhaDeTeste123';
+  const newPassword = 'senhaNovaTeste456';
+  let customerCreated = false;
+  try {
+    const signup = await fetch(`${origin}/api/customers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firstName: 'Sessão', lastName: 'Teste', email, phone: '31999997777',
+        birthDate: '1990-01-01', cpf: generateValidCPF(), password, privacyAccepted: true,
+      }),
+    });
+    const signupData = await signup.json();
+    assert.equal(signup.status, 201, JSON.stringify(signupData));
+    customerCreated = true;
+
+    const change = await fetch(`${origin}/api/customers/password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: signupData.token, currentPassword: password, newPassword }),
+    });
+    assert.equal(change.status, 200);
+
+    const stale = await fetch(`${origin}/api/customers/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: signupData.token }),
+    });
+    assert.equal(stale.status, 401);
+
+    const login = await fetch(`${origin}/api/customers/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: newPassword }),
+    });
+    assert.equal(login.status, 200);
+  } finally {
+    if (customerCreated) await pool.query('DELETE FROM customers WHERE lower(email) = $1', [email]);
+    await pool.end();
+  }
 });
 
 // Regressão: a lógica de cupom no checkout (serve.js recalculando o desconto a partir do banco,

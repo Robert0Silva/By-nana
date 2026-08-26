@@ -729,9 +729,11 @@ async function getCustomerFavorites(customerId) {
 
 // Resolve a identidade do cliente sempre a partir do token assinado — nunca de um id
 // enviado no corpo da requisição, para que ninguém possa ler/alterar dados de outra conta.
-function resolveCustomerId(body) {
+async function resolveCustomerId(body) {
   const payload = verifySessionToken(body.token);
-  return payload ? payload.id : null;
+  if (!payload) return null;
+  const { rows } = await pool.query('SELECT session_version AS "sessionVersion" FROM customers WHERE id = $1', [payload.id]);
+  return rows[0] && rows[0].sessionVersion === (payload.v || 0) ? payload.id : null;
 }
 
 async function getStories(onlyActive) {
@@ -816,7 +818,7 @@ function resetLoginAttempts(req, email) {
 
 // ---------- admin auth (login multiusuário: e-mail+senha, token assinado, papéis) ----------
 function signAdminSessionToken(adminUser) {
-  const payload = { id: adminUser.id, role: adminUser.role, scope: 'admin', exp: Date.now() + ADMIN_SESSION_MAX_AGE_MS };
+  const payload = { id: adminUser.id, role: adminUser.role, scope: 'admin', v: adminUser.sessionVersion || 0, exp: Date.now() + ADMIN_SESSION_MAX_AGE_MS };
   const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const sig = crypto.createHmac('sha256', ADMIN_SESSION_SECRET).update(body).digest('base64url');
   return `${body}.${sig}`;
@@ -845,11 +847,11 @@ async function requireAdmin(body) {
   const payload = verifyAdminSessionToken(body.adminToken);
   if (!payload) return null;
   const { rows } = await pool.query(
-    'SELECT id, name, email, role, active, notifications_seen_at AS "notificationsSeenAt" FROM admin_users WHERE id = $1',
+    'SELECT id, name, email, role, active, session_version AS "sessionVersion", notifications_seen_at AS "notificationsSeenAt" FROM admin_users WHERE id = $1',
     [payload.id]
   );
   const user = rows[0];
-  if (!user || !user.active) return null;
+  if (!user || !user.active || user.sessionVersion !== (payload.v || 0)) return null;
   return user;
 }
 
@@ -1005,8 +1007,8 @@ function verifyPassword(password, stored) {
   return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
 
-function signSessionToken(customerId) {
-  const payload = { id: customerId, exp: Date.now() + SESSION_MAX_AGE_MS };
+function signSessionToken(customerId, sessionVersion = 0) {
+  const payload = { id: customerId, v: sessionVersion, exp: Date.now() + SESSION_MAX_AGE_MS };
   const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const sig = crypto.createHmac('sha256', SESSION_SECRET).update(body).digest('base64url');
   return `${body}.${sig}`;
@@ -1200,7 +1202,7 @@ async function handleApi(req, res, pathname) {
       }
 
       const { rows } = await pool.query(
-        'SELECT id, name, email, password_hash AS "passwordHash", role, active FROM admin_users WHERE lower(email) = $1',
+        'SELECT id, name, email, password_hash AS "passwordHash", role, active, session_version AS "sessionVersion" FROM admin_users WHERE lower(email) = $1',
         [email]
       );
       const row = rows[0];
@@ -1208,8 +1210,9 @@ async function handleApi(req, res, pathname) {
         return sendJSON(res, 401, { error: 'E-mail ou senha inválidos' });
       }
       resetLoginAttempts(req, email);
+      const tokenUser = { id: row.id, name: row.name, email: row.email, role: row.role, sessionVersion: row.sessionVersion };
       const adminUser = { id: row.id, name: row.name, email: row.email, role: row.role };
-      return sendJSON(res, 200, { adminUser, token: signAdminSessionToken(adminUser) });
+      return sendJSON(res, 200, { adminUser, token: signAdminSessionToken(tokenUser) });
     }
 
     if (pathname === '/api/admin/session' && req.method === 'POST') {
@@ -1285,7 +1288,7 @@ async function handleApi(req, res, pathname) {
       if (!rows[0] || !verifyPassword(currentPassword, rows[0].passwordHash)) {
         return sendJSON(res, 401, { error: 'Senha atual incorreta' });
       }
-      await pool.query('UPDATE admin_users SET password_hash = $1 WHERE id = $2', [hashPassword(newPassword), admin.id]);
+      await pool.query('UPDATE admin_users SET password_hash = $1, session_version = session_version + 1 WHERE id = $2', [hashPassword(newPassword), admin.id]);
       return sendJSON(res, 200, { ok: true });
     }
 
@@ -2155,11 +2158,19 @@ async function handleApi(req, res, pathname) {
       }
       const couponCodeInput = (body.couponCode || '').trim().toUpperCase() || null;
       const address = body.address && typeof body.address === 'object' ? body.address : null;
+      if (deliveryMethod === 'Entrega') {
+        const requiredAddressFields = ['cep', 'rua', 'numero', 'bairro', 'cidade', 'estado'];
+        const missingAddress = !address || requiredAddressFields.some((field) => !String(address[field] || '').trim());
+        const cepDigits = address ? String(address.cep || '').replace(/\D/g, '') : '';
+        const uf = address ? String(address.estado || '').trim().toUpperCase() : '';
+        if (missingAddress || cepDigits.length !== 8 || !/^[A-Z]{2}$/.test(uf)) {
+          return sendJSON(res, 400, { error: 'Informe um endereço de entrega completo e válido' });
+        }
+      }
 
       let customerId = null;
       if (body.customerToken) {
-        const payload = verifySessionToken(body.customerToken);
-        if (payload) customerId = payload.id;
+        customerId = await resolveCustomerId({ token: body.customerToken });
       }
 
       // Preço, cupom, frete e total nunca são aceitos do navegador — sempre recalculados aqui a
@@ -2167,6 +2178,13 @@ async function handleApi(req, res, pathname) {
       // (assets/js/promo.js), pra um pedido não poder ser fechado com desconto/total desatualizado
       // ou manipulado no cliente.
       const [promotions, coupons, shippingRules] = await Promise.all([getPromotions(), getCoupons(), getShippingRules()]);
+      if (deliveryMethod === 'Entrega') {
+        const uf = String(address.estado).trim().toUpperCase();
+        const activeRules = shippingRules.filter((rule) => rule.active);
+        if (!activeRules.some((rule) => rule.uf.toUpperCase() === uf || rule.uf === '*')) {
+          return sendJSON(res, 400, { error: 'Ainda não entregamos para o estado informado' });
+        }
+      }
       let coupon = PromoEngine.findCoupon(coupons, couponCodeInput);
 
       // cupom "só 1ª compra": vale pra quem nunca teve um pedido não-cancelado — por
@@ -2180,7 +2198,7 @@ async function handleApi(req, res, pathname) {
         if (priorOrder.rowCount) coupon = null;
       }
 
-      const id = `pedido-${Date.now().toString(36)}`;
+      const id = `pedido-${crypto.randomUUID()}`;
       const client = await pool.connect();
       let items;
       let subtotal;
@@ -2335,11 +2353,10 @@ async function handleApi(req, res, pathname) {
       try {
         result = await provider.handleWebhook(req, rawBody);
       } catch (err) {
-        // Erro nosso ou instabilidade do provedor: loga e ainda assim reconhece com 200 — um
-        // 5xx aqui só faria o provedor re-enviar a mesma notificação, sem chance de dar certo
-        // numa próxima tentativa se o bug for nosso.
+        // Erro nosso ou instabilidade do provedor: responde 503 para que o gateway tente
+        // novamente. As atualizações abaixo são idempotentes, então a reentrega é segura.
         console.error(`[webhook ${providerKey}] falha ao processar notificação:`, err.message);
-        return sendJSON(res, 200, { ok: true });
+        return sendJSON(res, 503, { error: 'Falha temporária ao processar a notificação' });
       }
       if (result === null) return sendJSON(res, 401, { error: 'assinatura inválida' });
       if (!result || result.ignored || !result.orderId || !result.status) {
@@ -2536,7 +2553,7 @@ async function handleApi(req, res, pathname) {
       }
 
       const { rows } = await pool.query(
-        'SELECT id, first_name AS "firstName", last_name AS "lastName", email, phone, marketing_opt_in AS "marketingOptIn", password_hash AS "passwordHash" FROM customers WHERE lower(email) = $1',
+        'SELECT id, first_name AS "firstName", last_name AS "lastName", email, phone, marketing_opt_in AS "marketingOptIn", password_hash AS "passwordHash", session_version AS "sessionVersion" FROM customers WHERE lower(email) = $1',
         [email]
       );
       const row = rows[0];
@@ -2545,22 +2562,22 @@ async function handleApi(req, res, pathname) {
       }
       resetLoginAttempts(req, email);
       // eslint-disable-next-line no-unused-vars -- descarta passwordHash de propósito, pra nunca ir na resposta ao cliente.
-      const { passwordHash, ...customer } = row;
-      return sendJSON(res, 200, { customer, token: signSessionToken(customer.id) });
+      const { passwordHash, sessionVersion, ...customer } = row;
+      return sendJSON(res, 200, { customer, token: signSessionToken(customer.id, row.sessionVersion) });
     }
 
     if (pathname === '/api/customers/session' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      const payload = verifySessionToken(body.token);
-      if (!payload) return sendJSON(res, 401, { error: 'Sessão inválida' });
-      const customer = await getCustomerById(payload.id);
+      const customerId = await resolveCustomerId(body);
+      if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
+      const customer = await getCustomerById(customerId);
       if (!customer) return sendJSON(res, 401, { error: 'Sessão inválida' });
       return sendJSON(res, 200, { customer });
     }
 
     if (pathname === '/api/customers/update' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      const customerId = resolveCustomerId(body);
+      const customerId = await resolveCustomerId(body);
       if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
 
       const firstName = (body.firstName || '').trim();
@@ -2580,7 +2597,7 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === '/api/customers/password' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      const customerId = resolveCustomerId(body);
+      const customerId = await resolveCustomerId(body);
       if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
 
       const currentPassword = body.currentPassword || '';
@@ -2591,7 +2608,7 @@ async function handleApi(req, res, pathname) {
       if (!rows[0] || !verifyPassword(currentPassword, rows[0].passwordHash)) {
         return sendJSON(res, 401, { error: 'Senha atual incorreta' });
       }
-      await pool.query('UPDATE customers SET password_hash = $1 WHERE id = $2', [hashPassword(newPassword), customerId]);
+      await pool.query('UPDATE customers SET password_hash = $1, session_version = session_version + 1 WHERE id = $2', [hashPassword(newPassword), customerId]);
       return sendJSON(res, 200, { ok: true });
     }
 
@@ -2615,12 +2632,17 @@ async function handleApi(req, res, pathname) {
             `UPDATE customers SET reset_token = $1, reset_token_expires = now() + interval '1 hour' WHERE id = $2`,
             [token, customer.id]
           );
-          const link = `${requestOrigin(req)}/redefinir-senha.html?token=${token}`;
-          await sendEmail({
-            to: email,
-            subject: 'Redefinição de senha — By NaNa',
-            html: `<p>Olá, ${escapeHtml(customer.firstName)}!</p><p>Clique no link abaixo para definir uma nova senha. Ele expira em 1 hora.</p><p><a href="${escapeHtml(link)}">${escapeHtml(link)}</a></p><p>Se você não pediu isso, ignore este e-mail.</p>`,
-          });
+          const origin = configuredPublicOrigin(req);
+          if (origin) {
+            const link = `${origin}/redefinir-senha.html?token=${token}`;
+            await sendEmail({
+              to: email,
+              subject: 'Redefinição de senha — By NaNa',
+              html: `<p>Olá, ${escapeHtml(customer.firstName)}!</p><p>Clique no link abaixo para definir uma nova senha. Ele expira em 1 hora.</p><p><a href="${escapeHtml(link)}">${escapeHtml(link)}</a></p><p>Se você não pediu isso, ignore este e-mail.</p>`,
+            });
+          } else {
+            console.error('[forgot-password] SITE_URL precisa estar configurada em produção');
+          }
         }
       }
       return sendJSON(res, 200, { ok: true });
@@ -2640,7 +2662,7 @@ async function handleApi(req, res, pathname) {
       if (!rows[0]) return sendJSON(res, 400, { error: 'Link inválido ou expirado. Solicite a redefinição novamente.' });
 
       await pool.query(
-        'UPDATE customers SET password_hash = $1, reset_token = NULL, reset_token_expires = NULL WHERE id = $2',
+        'UPDATE customers SET password_hash = $1, session_version = session_version + 1, reset_token = NULL, reset_token_expires = NULL WHERE id = $2',
         [hashPassword(newPassword), rows[0].id]
       );
       return sendJSON(res, 200, { ok: true });
@@ -2648,7 +2670,7 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === '/api/customers/orders' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      const customerId = resolveCustomerId(body);
+      const customerId = await resolveCustomerId(body);
       if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
       return sendJSON(res, 200, { orders: await getCustomerOrders(customerId) });
     }
@@ -2663,7 +2685,7 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === '/api/reviews' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      const customerId = resolveCustomerId(body);
+      const customerId = await resolveCustomerId(body);
       if (!customerId) return sendJSON(res, 401, { error: 'Entre na sua conta para avaliar esse produto' });
 
       const productId = (body.productId || '').trim();
@@ -2707,14 +2729,14 @@ async function handleApi(req, res, pathname) {
     // ------ endereços salvos do cliente ------
     if (pathname === '/api/customers/addresses/list' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      const customerId = resolveCustomerId(body);
+      const customerId = await resolveCustomerId(body);
       if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
       return sendJSON(res, 200, { addresses: await getCustomerAddresses(customerId) });
     }
 
     if (pathname === '/api/customers/addresses' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      const customerId = resolveCustomerId(body);
+      const customerId = await resolveCustomerId(body);
       if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
 
       const label = (body.label || '').trim();
@@ -2743,7 +2765,7 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === '/api/customers/addresses/update' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      const customerId = resolveCustomerId(body);
+      const customerId = await resolveCustomerId(body);
       if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
       if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
 
@@ -2770,7 +2792,7 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === '/api/customers/addresses/default' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      const customerId = resolveCustomerId(body);
+      const customerId = await resolveCustomerId(body);
       if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
       if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
 
@@ -2785,7 +2807,7 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === '/api/customers/addresses' && req.method === 'DELETE') {
       const body = await readJSONBody(req);
-      const customerId = resolveCustomerId(body);
+      const customerId = await resolveCustomerId(body);
       if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
       if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
 
@@ -2796,14 +2818,14 @@ async function handleApi(req, res, pathname) {
     // ------ favoritos do cliente (sincroniza a lista de desejos entre dispositivos) ------
     if (pathname === '/api/customers/favorites/list' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      const customerId = resolveCustomerId(body);
+      const customerId = await resolveCustomerId(body);
       if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
       return sendJSON(res, 200, { favorites: await getCustomerFavorites(customerId) });
     }
 
     if (pathname === '/api/customers/favorites' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      const customerId = resolveCustomerId(body);
+      const customerId = await resolveCustomerId(body);
       if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
       if (!body.productId) return sendJSON(res, 400, { error: 'productId é obrigatório' });
 
@@ -2816,7 +2838,7 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === '/api/customers/favorites' && req.method === 'DELETE') {
       const body = await readJSONBody(req);
-      const customerId = resolveCustomerId(body);
+      const customerId = await resolveCustomerId(body);
       if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
       if (!body.productId) return sendJSON(res, 400, { error: 'productId é obrigatório' });
 
@@ -2828,7 +2850,7 @@ async function handleApi(req, res, pathname) {
     // favoritos que o servidor já tinha e o dispositivo atual não conhecia (merge aditivo).
     if (pathname === '/api/customers/favorites/sync' && req.method === 'POST') {
       const body = await readJSONBody(req);
-      const customerId = resolveCustomerId(body);
+      const customerId = await resolveCustomerId(body);
       if (!customerId) return sendJSON(res, 401, { error: 'Sessão inválida' });
       const productIds = Array.isArray(body.productIds) ? body.productIds.filter((id) => typeof id === 'string' && id) : [];
 
@@ -3161,6 +3183,21 @@ const robotsTxt = (origin) => `User-agent: *\nDisallow: /admin\nDisallow: /api/\
 function requestOrigin(req) {
   const proto = req.headers['x-forwarded-proto'] || (req.socket.encrypted ? 'https' : 'http');
   return `${proto}://${req.headers.host}`;
+}
+
+// Links enviados por e-mail nunca devem confiar no Host informado pelo cliente em produção.
+// Em desenvolvimento, o fallback preserva portas efêmeras usadas pelos testes locais.
+function configuredPublicOrigin(req) {
+  const configured = String(process.env.SITE_URL || '').trim().replace(/\/$/, '');
+  if (configured) {
+    try {
+      const url = new URL(configured);
+      if (url.protocol === 'https:' || url.protocol === 'http:') return url.origin;
+    } catch {
+      console.error('[config] SITE_URL inválida; links externos não serão enviados');
+    }
+  }
+  return process.env.NODE_ENV === 'production' ? null : requestOrigin(req);
 }
 
 // dinâmico porque precisa listar /produto/:id de cada produto — antes era uma string fixa

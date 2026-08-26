@@ -161,6 +161,16 @@ test('layout em 320px preserva topbar, cupom e alvos de toque', async ({ page })
   expect(couponOverflow).toBeLessThanOrEqual(1);
 });
 
+test('dados corrompidos no localStorage não impedem a loja de iniciar', async ({ page }) => {
+  await page.addInitScript(() => {
+    globalThis.localStorage.setItem('bynana_cart', '{inválido');
+    globalThis.localStorage.setItem('bynana_favorites', 'não-json');
+    globalThis.localStorage.setItem('bynana_customer', '[');
+  });
+  await page.goto(origin);
+  await expect(page.locator('#productGrid, #novidadesGrid').first()).toBeVisible();
+});
+
 test('ativar o botão de checkout várias vezes seguidas dispara só uma tentativa de envio', async ({ page }) => {
   await page.goto(origin);
 

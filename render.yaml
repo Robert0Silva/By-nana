@@ -5,7 +5,8 @@ services:
     plan: free
     region: oregon
     buildCommand: npm install
-    startCommand: npm start
+    # Aplica ALTERs idempotentes antes de subir uma versão que dependa do novo esquema.
+    startCommand: node db/migrate.js && npm start
     healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION

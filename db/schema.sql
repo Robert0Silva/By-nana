@@ -176,6 +176,7 @@ CREATE TABLE IF NOT EXISTS customers (
   gender              TEXT NOT NULL DEFAULT 'nao_informado'
                         CHECK (gender IN ('feminino', 'masculino', 'nao_informado')),
   password_hash       TEXT NOT NULL,
+  session_version     INTEGER NOT NULL DEFAULT 0,
   marketing_opt_in    BOOLEAN NOT NULL DEFAULT false,
   privacy_accepted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -350,3 +351,7 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT
 -- direto no painel do gateway se precisar. paid_at fica nulo até o pagamento ser aprovado.
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_reference TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
+
+-- Permite invalidar imediatamente tokens antigos depois de uma troca de senha.
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 0;
