@@ -60,7 +60,7 @@ async function main() {
   );
   for (const product of productsWithoutVariants) {
     const isShoe = product.category.toLocaleLowerCase('pt-BR').includes('calçado');
-    const sizes = isShoe ? ['34', '35', '36', '37', '38', '39'] : ['P', 'M', 'G', 'GG'];
+    const sizes = isShoe ? ['34', '35', '36', '37', '38', '39', '40', '41', '42', '43', '44'] : ['P', 'M', 'G', 'GG'];
     for (let position = 0; position < sizes.length; position += 1) {
       const size = sizes[position];
       const variantId = `variant-${product.id}-${size.toLowerCase()}`;

@@ -235,7 +235,7 @@ async function getProductGallery(productId) {
 
 const defaultSizesForCategory = (category) =>
   String(category || '').toLocaleLowerCase('pt-BR').includes('calçado')
-    ? ['34', '35', '36', '37', '38', '39']
+    ? ['34', '35', '36', '37', '38', '39', '40', '41', '42', '43', '44']
     : ['P', 'M', 'G', 'GG'];
 
 async function createDefaultVariants(client, productId, category) {

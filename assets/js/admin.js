@@ -505,7 +505,7 @@
   let galleryImages = [];
   const gradePresets = {
     clothing: ['PP', 'P', 'M', 'G', 'GG', 'XGG'],
-    shoes: ['33', '34', '35', '36', '37', '38', '39', '40'],
+    shoes: ['33', '34', '35', '36', '37', '38', '39', '40', '41', '42', '43', '44'],
     unique: ['Único'],
     custom: [],
   };

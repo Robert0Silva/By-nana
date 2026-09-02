@@ -515,7 +515,7 @@
     const soldOut = p.hasVariants && inStock.length === 0;
     const defaultVariant = inStock[0] || null;
     const lowStock = isLowStock(p, soldOut);
-    const variantHtml = p.hasVariants
+    const variantHtml = variants.length > 1
       ? `<div class="variant-picker">
           ${variants
             .map(
@@ -2672,7 +2672,7 @@
     document.getElementById('pdpColorDots').innerHTML = colorDotsHtml(variants);
 
     const variantPicker = document.getElementById('pdpVariantPicker');
-    if (p.hasVariants) {
+    if (variants.length > 1) {
       variantPicker.hidden = false;
       variantPicker.innerHTML = variants
         .map(
