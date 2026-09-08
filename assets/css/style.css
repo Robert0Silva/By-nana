@@ -155,7 +155,11 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
   transition:box-shadow .25s ease,background .25s ease;
 }
 .site-header.is-scrolled{background:rgba(246,243,236,.96);box-shadow:var(--shadow-soft);}
-.header-row-top{display:flex;align-items:center;justify-content:space-between;height:76px;gap:20px;}
+/* o menu mobile aberto (.main-nav.is-open) fica dentro do stacking context do header (z-index:40)
+   — sem isso, botões fixos fora do header com z-index maior (WhatsApp flutuante, barra de compra
+   fixa no rodapé) aparecem por cima do menu aberto e escondem os últimos links. */
+.site-header.nav-open{z-index:55;}
+.header-row-top{display:flex;align-items:center;justify-content:space-between;gap:20px;}
 .brand-mark{font-family:var(--script);font-weight:400;line-height:1;}
 .brand .brand-mark{font-size:2.1rem;color:var(--ink);}
 
@@ -232,6 +236,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
   display:flex;align-items:center;justify-content:center;padding:0 3px;
 }
 .menu-toggle{display:none;}
+.search-toggle{display:none;}
 .account-btn.is-logged{background:var(--ink);color:var(--white);}
 
 /* ---------- stories (carrossel de vídeo estilo Instagram) ---------- */
@@ -1018,9 +1023,20 @@ body.pdp-buy-bar-open .float-whats{bottom:88px;}
 @media (max-width:720px){
   .topbar{font-size:.72rem;padding:7px 16px;min-width:0;}
   .topbar-msg{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .header-row-top{height:64px;gap:8px;}
+  .header-row-top{gap:8px;position:relative;}
   .brand .brand-mark{font-size:1.7rem;}
-  .header-search{display:none;}
+  /* busca vira um overlay que nasce colado embaixo da linha do topo (mesma lógica do
+     .main-nav mobile: position:absolute + top:100% ancorado no ancestral posicionado mais
+     próximo — por isso .header-row-top ganhou position:relative acima). As propriedades visuais
+     (fundo, borda, padding...) vão em ".header-search.is-open" — mais específico que a regra
+     unscoped ".header-search{background:transparent;...}" do refresh editorial, que senão vence
+     por especificidade igual + ordem no arquivo e deixa o overlay transparente. */
+  .header-search{display:none;position:absolute;left:0;right:0;top:100%;z-index:38;}
+  .header-search.is-open{
+    display:flex;margin:0;padding:14px 20px;background:var(--cream);
+    border:none;border-top:1px solid var(--line);border-radius:0;max-width:none;
+  }
+  .search-toggle{display:inline-flex;}
   .header-actions{gap:6px;}
   .header-actions .icon-btn{width:44px;height:44px;}
   .whatsapp-quick{display:none;}
@@ -1052,6 +1068,8 @@ body.pdp-buy-bar-open .float-whats{bottom:88px;}
     transition:max-height .3s ease,padding .3s ease;z-index:39;align-items:stretch;
   }
   .main-nav.is-open{max-height:80vh;overflow-y:auto;padding:20px 24px;}
+  /* trava o scroll do body atrás do menu mobile aberto pra não rolar os dois ao mesmo tempo */
+  body.nav-open{overflow:hidden;}
   .menu-toggle{display:inline-flex;}
   .main-nav .nav-item{width:100%;}
   .nav-trigger{width:100%;text-align:left;}
@@ -1287,7 +1305,18 @@ body.pdp-buy-bar-open .float-whats{bottom:88px;}
 
 @media (max-width:720px){
   .header-row-top{height:66px;}
-  .brand .brand-mark{font-size:2rem;}
+  /* 2rem quebrava "By NaNa" em duas linhas depois que o ícone de busca virou o 4º botão da
+     linha (4×44px + gaps não deixava mais espaço de sobra pra fonte script nesse tamanho). */
+  .brand .brand-mark{font-size:1.6rem;}
+  /* ".header-row-nav .main-nav{padding:13px 0}" (regra do refresh editorial, sem media query)
+     empata em especificidade com a regra fechada ".main-nav{padding:0 24px}" e com
+     ".main-nav.is-open{padding:20px 24px}" e vence as duas por ordem no arquivo — tanto fechado
+     quanto aberto herdam esse padding:13px 0 errado. Repete os dois estados aqui, mais abaixo no
+     arquivo, pra vencer: sem isso o menu FECHADO (max-height:0) fica com ~26px de padding
+     vertical de verdade (padding conta na caixa mesmo com max-height:0) e vira uma faixa
+     clicável/opaca por cima do conteúdo logo abaixo do header, escondendo o que estiver ali. */
+  .header-row-nav .main-nav{padding:0 24px;}
+  .header-row-nav .main-nav.is-open{padding:20px 24px;}
   .hero{height:680px;padding:0;}
   .hero-image{inset:0;width:100%;object-position:58% center;}
   .hero-shade{background:linear-gradient(0deg,rgba(12,10,8,.82) 0%,rgba(12,10,8,.48) 55%,rgba(12,10,8,.12) 100%);}

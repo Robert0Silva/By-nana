@@ -920,6 +920,7 @@
   const headerSearchInput = document.getElementById('headerSearchInput');
   headerSearchForm.addEventListener('submit', (e) => {
     e.preventDefault();
+    setMobileSearch(false);
     const term = headerSearchInput.value.trim();
     const colecao = document.getElementById('colecao');
     if (colecao && searchInput) {
@@ -1615,6 +1616,7 @@
   const bagDrawer = document.getElementById('bagDrawer');
   const bagOverlay = document.getElementById('bagOverlay');
   function openBag() {
+    setMobileMenu(false);
     prefillBagContact();
     bagDrawer.classList.add('is-open');
     bagOverlay.classList.add('is-open');
@@ -1908,6 +1910,7 @@
   }
 
   function openAccountModal() {
+    setMobileMenu(false);
     const view = currentCustomer ? 'profile' : 'login';
     showAccountView(view);
     if (view === 'profile') {
@@ -2404,16 +2407,32 @@
   const nav = document.getElementById('mainNav');
   const siteHeader = document.querySelector('.site-header');
   const menuToggle = document.getElementById('menuToggle');
+  const searchToggle = document.getElementById('searchToggle');
   const megaTrigger = document.getElementById('megaTrigger');
   const megaItem = megaTrigger.closest('.nav-item');
 
   function setMobileMenu(open) {
     nav.classList.toggle('is-open', open);
+    siteHeader.classList.toggle('nav-open', open);
+    document.body.classList.toggle('nav-open', open);
     menuToggle.setAttribute('aria-expanded', String(open));
     menuToggle.setAttribute('aria-label', open ? 'Fechar menu' : 'Abrir menu');
+    if (open) setMobileSearch(false);
   }
 
   menuToggle.addEventListener('click', () => setMobileMenu(!nav.classList.contains('is-open')));
+
+  // ---------- busca do cabeçalho no mobile (overlay embaixo da linha do topo) ----------
+  function setMobileSearch(open) {
+    headerSearchForm.classList.toggle('is-open', open);
+    searchToggle.setAttribute('aria-expanded', String(open));
+    if (open) {
+      setMobileMenu(false);
+      headerSearchInput.focus();
+    }
+  }
+
+  searchToggle.addEventListener('click', () => setMobileSearch(!headerSearchForm.classList.contains('is-open')));
 
   function syncHeaderState() {
     siteHeader.classList.toggle('is-scrolled', window.scrollY > 12);
@@ -2437,6 +2456,7 @@
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       setMobileMenu(false);
+      setMobileSearch(false);
       closeMegaMenu();
       closeAccountModal();
       closeStoryViewer();
