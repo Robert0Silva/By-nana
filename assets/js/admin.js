@@ -189,6 +189,8 @@
     loadAdminUsers();
     loadActivity();
     loadDashboard();
+    loadStockNotifications();
+    renderDashTodo();
   }
 
   // ---------- tabs (menu "Catálogo/Marketing/Conteúdo/Vendas" com submenus em dropdown) ----------
@@ -967,6 +969,7 @@
   }
 
   function afterProductsChanged() {
+    renderDashTodo();
     renderProductList();
     renderPromoTargetOptions();
     renderStoryProductSelect();
@@ -1797,6 +1800,7 @@
       const data = await api('/api/admin/stock-notifications/list', 'POST', {});
       STOCK_NOTIFICATIONS = data.stockNotifications || [];
       renderStockNotifications();
+      renderDashTodo();
     } catch (err) {
       stockNotifyList.innerHTML = `<p class="admin-empty-block">${escapeHtml(err.message)}</p>`;
     }
@@ -1879,6 +1883,7 @@
       const data = await api('/api/orders/list', 'POST', {});
       ORDERS = data.orders || [];
       renderOrderList();
+      renderDashTodo();
     } catch (err) {
       orderList.innerHTML = `<p class="admin-empty-block">${escapeHtml(err.message)}</p>`;
     }
@@ -2007,6 +2012,7 @@
           toast(err.message, 'error');
         }
         renderOrderList();
+        renderDashTodo();
       });
       orderList.appendChild(div);
     });
@@ -2569,6 +2575,114 @@
         <tbody>${rows.map((r) => `<tr>${columns.map((c) => `<td>${c.render(r)}</td>`).join('')}</tr>`).join('')}</tbody>
       </table>
     `;
+  }
+
+  // ---------- "Para fazer hoje": pendências calculadas com os dados já carregados no painel ----------
+  function daysUntil(isoDate) {
+    if (!isoDate) return null;
+    const end = new Date(`${String(isoDate).slice(0, 10)}T12:00:00`);
+    const today = new Date(`${todayISO()}T12:00:00`);
+    return Math.round((end - today) / (24 * 60 * 60 * 1000));
+  }
+
+  function renderDashTodo() {
+    const container = document.getElementById('dashTodo');
+    if (!container) return;
+    const items = [];
+
+    const newOrders = ORDERS.filter((o) => o.status === 'novo');
+    const staleOrders = newOrders.filter(isStaleOrder);
+    if (newOrders.length) {
+      items.push({
+        tone: staleOrders.length ? 'urgent' : 'warn',
+        text: `${newOrders.length} pedido${newOrders.length > 1 ? 's' : ''} novo${newOrders.length > 1 ? 's' : ''} para responder`
+          + (staleOrders.length ? ` — ${staleOrders.length} há mais de 2h sem retorno` : ''),
+        action: 'Ver pedidos',
+        onClick: () => {
+          orderStatusFilter = 'novo';
+          activateAdminPanel('pedidos');
+          renderOrderList();
+        },
+      });
+    }
+
+    const visible = PRODUCTS.filter((p) => p.active !== false);
+    const emptyProducts = visible.filter((p) => productStockState(p) === 'empty');
+    const lowProducts = visible.filter((p) => productStockState(p) === 'low');
+    const jumpToProducts = (status) => () => {
+      activateAdminPanel('produtos');
+      productStatusFilter.value = status;
+      renderProductList();
+      productList.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    if (emptyProducts.length) {
+      items.push({
+        tone: 'urgent',
+        text: `${emptyProducts.length} produto${emptyProducts.length > 1 ? 's' : ''} visíve${emptyProducts.length > 1 ? 'is' : 'l'} na loja, mas esgotado${emptyProducts.length > 1 ? 's' : ''}`,
+        action: 'Repor ou ocultar',
+        onClick: jumpToProducts('empty'),
+      });
+    }
+    if (lowProducts.length) {
+      items.push({
+        tone: 'warn',
+        text: `${lowProducts.length} produto${lowProducts.length > 1 ? 's' : ''} com estoque baixo ou tamanho esgotado`,
+        action: 'Ver estoque',
+        onClick: jumpToProducts('low'),
+      });
+    }
+
+    // e-mail é avisado automaticamente na reposição; WhatsApp depende de alguém chamar.
+    const waitingNotify = STOCK_NOTIFICATIONS.filter((n) => n.channel === 'whatsapp' && Number(n.stock) > 0);
+    if (waitingNotify.length) {
+      items.push({
+        tone: 'warn',
+        text: `${waitingNotify.length} cliente${waitingNotify.length > 1 ? 's' : ''} do "avise-me" para chamar no WhatsApp — a peça já voltou ao estoque`,
+        action: 'Ver avisos',
+        onClick: () => activateAdminPanel('avise-me'),
+      });
+    }
+
+    const endsWithinWeek = (endDate) => {
+      const d = daysUntil(endDate);
+      return d !== null && d >= 0 && d <= 7;
+    };
+    const expiringCoupons = COUPONS.filter((c) => c.active !== false && endsWithinWeek(c.endDate));
+    const expiringPromos = PROMOTIONS.filter((pr) => pr.active !== false && endsWithinWeek(pr.endDate));
+    if (expiringCoupons.length) {
+      items.push({
+        tone: 'info',
+        text: `${expiringCoupons.length} cupo${expiringCoupons.length > 1 ? 'ns vencem' : 'm vence'} nos próximos 7 dias (${expiringCoupons.map((c) => c.code).slice(0, 3).join(', ')})`,
+        action: 'Ver cupons',
+        onClick: () => activateAdminPanel('cupons'),
+      });
+    }
+    if (expiringPromos.length) {
+      items.push({
+        tone: 'info',
+        text: `${expiringPromos.length} promoç${expiringPromos.length > 1 ? 'ões terminam' : 'ão termina'} nos próximos 7 dias`,
+        action: 'Ver promoções',
+        onClick: () => activateAdminPanel('promocoes'),
+      });
+    }
+
+    if (!items.length) {
+      container.innerHTML = '<p class="admin-todo-done">Nenhuma pendência agora. Tudo em dia! ✓</p>';
+      return;
+    }
+    container.innerHTML = '';
+    items.forEach((item) => {
+      const row = document.createElement('div');
+      row.className = `admin-todo-item is-${item.tone}`;
+      row.innerHTML = `<span class="admin-todo-dot" aria-hidden="true"></span><span class="admin-todo-text">${escapeHtml(item.text)}</span>`;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-ghost admin-todo-action';
+      btn.textContent = item.action;
+      btn.addEventListener('click', item.onClick);
+      row.appendChild(btn);
+      container.appendChild(row);
+    });
   }
 
   async function loadDashboard() {
