@@ -156,6 +156,13 @@
     const res = await fetch('/api/data', { cache: 'no-store' });
     const data = await res.json();
     PRODUCTS = data.products || [];
+    try {
+      // /api/data omite produtos ocultos; o painel precisa deles para poder republicar.
+      const adminProducts = await api('/api/admin/products/list', 'POST', {});
+      PRODUCTS = adminProducts.products || PRODUCTS;
+    } catch (err) {
+      toast(`Não foi possível carregar os produtos ocultos: ${err.message}`, 'error');
+    }
     CATEGORIES = data.categories || [];
     CATEGORY_GROUPS = data.categoryGroups || [];
     CATEGORY_CONTENT = data.categoryContent || [];
@@ -792,6 +799,7 @@
     document.getElementById('pPrice').value = p.price == null ? '' : p.price;
     document.getElementById('pDesc').value = p.desc;
     pComposition.value = p.composition || '';
+    document.getElementById('pActive').checked = p.active !== false;
     imageDataUrl = '';
     pImage.value = '';
     pPreview.src = p.img;
@@ -892,6 +900,7 @@
         price: document.getElementById('pPrice').value,
         desc: document.getElementById('pDesc').value.trim(),
         composition: pComposition.value.trim(),
+        active: document.getElementById('pActive').checked,
         image: imageDataUrl,
         variants,
       };
@@ -916,7 +925,8 @@
 
       const wasEditing = editing;
       endEditProduct();
-      setMsg(wasEditing ? 'Produto atualizado ✓' : 'Produto publicado no catálogo ✓', 'ok');
+      const savedHidden = !payload.active;
+      setMsg(wasEditing ? 'Produto atualizado ✓' : savedHidden ? 'Rascunho salvo — o produto está oculto na loja ✓' : 'Produto publicado no catálogo ✓', 'ok');
     } catch (err) {
       setMsg(err.message, 'error');
     } finally {
@@ -930,7 +940,104 @@
   const productCount = document.getElementById('productCount');
   const productSearch = document.getElementById('productSearch');
   const productCategoryFilter = document.getElementById('productCategoryFilter');
+  const productStatusFilter = document.getElementById('productStatusFilter');
   const productSort = document.getElementById('productSort');
+
+  // mesmo limite da vitrine ("Últimas unidades" em main.js) — abaixo disso vale repor.
+  const LOW_STOCK_THRESHOLD = 3;
+
+  // 'empty' | 'low' | 'ok' — produto sem grade cadastrada não controla estoque, fica 'ok'.
+  function productStockState(p) {
+    const variants = p.variants || [];
+    if (!variants.length) return 'ok';
+    const total = Number(p.totalStock || 0);
+    if (total <= 0) return 'empty';
+    if (total <= LOW_STOCK_THRESHOLD || variants.some((v) => Number(v.stock) <= 0)) return 'low';
+    return 'ok';
+  }
+
+  function stockBadgeHtml(p) {
+    const state = productStockState(p);
+    if (state === 'empty') return '<span class="admin-product-badge is-empty">Esgotado</span>';
+    if (state === 'low') {
+      const soldOutSizes = (p.variants || []).filter((v) => Number(v.stock) <= 0).length;
+      return `<span class="admin-product-badge is-low">${soldOutSizes ? `${soldOutSizes} tam. esgotado${soldOutSizes > 1 ? 's' : ''}` : 'Estoque baixo'}</span>`;
+    }
+    return '';
+  }
+
+  function afterProductsChanged() {
+    renderProductList();
+    renderPromoTargetOptions();
+    renderStoryProductSelect();
+    renderFeaturedList();
+    renderUpsellList();
+  }
+
+  async function setProductVisibility(p, active) {
+    try {
+      const data = await api('/api/products/visibility', 'POST', { id: p.id, active });
+      PRODUCTS = data.products;
+      afterProductsChanged();
+      toast(active ? `"${p.name}" está visível na loja.` : `"${p.name}" foi ocultado da loja.`, 'success', {
+        label: 'Desfazer',
+        onClick: () => setProductVisibility(p, !active),
+      });
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  // ajuste rápido: só a quantidade de cada tamanho, sem abrir o editor completo.
+  function renderQuickStock(p, container) {
+    const variants = p.variants || [];
+    if (!variants.length) {
+      container.innerHTML = '<p class="admin-field-help">Sem grade cadastrada — use "Editar produto" para gerar os tamanhos.</p>';
+      return;
+    }
+    container.innerHTML = `
+      <div class="admin-quick-stock-rows">
+        ${variants.map((v) => `
+          <label class="admin-quick-stock-row${Number(v.stock) <= 0 ? ' is-empty' : ''}">
+            <span>${escapeHtml(v.size || '—')}${v.color ? ` · ${escapeHtml(v.color)}` : ''}</span>
+            <input type="number" min="0" step="1" value="${Number(v.stock) || 0}" data-variant-id="${escapeHtml(v.id)}" aria-label="Estoque do tamanho ${escapeHtml(v.size || '')}" />
+          </label>`).join('')}
+      </div>
+      <button type="button" class="btn btn-primary admin-quick-stock-save">Salvar estoque</button>`;
+    container.querySelector('.admin-quick-stock-save').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const changed = [...container.querySelectorAll('input[data-variant-id]')]
+        .map((input) => ({ input, variant: variants.find((v) => v.id === input.dataset.variantId) }))
+        .filter(({ input, variant }) => variant && Math.max(0, Math.floor(Number(input.value) || 0)) !== Number(variant.stock));
+      if (!changed.length) {
+        toast('Nenhuma quantidade foi alterada.', 'info');
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = 'Salvando...';
+      try {
+        let data = null;
+        // em série: cada ajuste grava um movimento de estoque e pode disparar o "avise-me"
+        for (const { input, variant } of changed) {
+          data = await api('/api/products/variants/update', 'POST', {
+            id: variant.id,
+            size: variant.size,
+            color: variant.color || '',
+            sku: variant.sku || '',
+            stock: Math.max(0, Math.floor(Number(input.value) || 0)),
+            note: 'Ajuste rápido pela lista de produtos',
+          });
+        }
+        if (data && data.products) PRODUCTS = data.products;
+        afterProductsChanged();
+        toast(`Estoque de "${p.name}" atualizado (${changed.length} tamanho${changed.length > 1 ? 's' : ''}).`);
+      } catch (err) {
+        toast(err.message, 'error');
+        btn.disabled = false;
+        btn.textContent = 'Salvar estoque';
+      }
+    });
+  }
 
   function renderProductList() {
     const selectedCategory = productCategoryFilter.value;
@@ -941,6 +1048,11 @@
       ? PRODUCTS.filter((p) => `${p.name} ${p.brand} ${p.category} ${p.collection || ''}`.toLowerCase().includes(term))
       : [...PRODUCTS];
     if (productCategoryFilter.value) list = list.filter((product) => product.category === productCategoryFilter.value);
+    const statusFilter = productStatusFilter.value;
+    if (statusFilter === 'visible') list = list.filter((p) => p.active !== false);
+    if (statusFilter === 'hidden') list = list.filter((p) => p.active === false);
+    if (statusFilter === 'low') list = list.filter((p) => productStockState(p) === 'low');
+    if (statusFilter === 'empty') list = list.filter((p) => productStockState(p) === 'empty');
     if (productSort.value === 'name') list.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
     if (productSort.value === 'stock-low') list.sort((a, b) => Number(a.totalStock || 0) - Number(b.totalStock || 0));
     if (productSort.value === 'price-high') list.sort((a, b) => Number(b.price || 0) - Number(a.price || 0));
@@ -956,10 +1068,17 @@
       const priceHtml = promo
         ? `<span class="admin-product-item-price"><s>${money(p.price)}</s> ${money(promo.price)} <em>(-${promo.percent}%)</em></span>`
         : `<span class="admin-product-item-price">${money(p.price)}</span>`;
+      const hidden = p.active === false;
       const div = document.createElement('div');
-      div.className = `admin-product-item${pEditId.value === p.id ? ' is-editing' : ''}`;
+      div.className = `admin-product-item${pEditId.value === p.id ? ' is-editing' : ''}${hidden ? ' is-hidden' : ''}`;
       div.innerHTML = `
-        <img src="${escapeHtml(p.img)}" alt="${escapeHtml(p.name)}" />
+        <div class="admin-product-item-media">
+          <img src="${escapeHtml(p.img)}" alt="${escapeHtml(p.name)}" />
+          <div class="admin-product-badges">
+            ${hidden ? '<span class="admin-product-badge is-hidden">Oculto</span>' : ''}
+            ${stockBadgeHtml(p)}
+          </div>
+        </div>
         <div class="admin-product-item-body">
           <span class="admin-product-item-name">${escapeHtml(p.name)}</span>
           <span class="admin-product-item-meta">${escapeHtml(p.category)}${p.collection ? ` · ${escapeHtml(p.collection)}` : ''}</span>
@@ -967,22 +1086,39 @@
           ${priceHtml}
           <div class="admin-product-item-actions">
             <button type="button" class="admin-product-item-edit" data-id="${p.id}">Editar produto</button>
+            <button type="button" class="admin-product-item-stock" aria-expanded="false">Estoque</button>
+            <button type="button" class="admin-product-item-visibility">${hidden ? 'Mostrar na loja' : 'Ocultar'}</button>
             <button type="button" class="admin-product-item-remove" data-id="${p.id}">Remover</button>
           </div>
+          <div class="admin-quick-stock" hidden></div>
         </div>
       `;
       div.querySelector('.admin-product-item-edit').addEventListener('click', () => startEditProduct(p));
+      const stockBtn = div.querySelector('.admin-product-item-stock');
+      const quickStock = div.querySelector('.admin-quick-stock');
+      stockBtn.addEventListener('click', () => {
+        const open = quickStock.hidden;
+        quickStock.hidden = !open;
+        stockBtn.setAttribute('aria-expanded', String(open));
+        if (open) {
+          renderQuickStock(p, quickStock);
+          const firstInput = quickStock.querySelector('input');
+          if (firstInput) firstInput.focus();
+        }
+      });
+      div.querySelector('.admin-product-item-visibility').addEventListener('click', () => setProductVisibility(p, hidden));
       div.querySelector('.admin-product-item-remove').addEventListener('click', async () => {
-        if (!(await confirmDialog(`Remover "${p.name}" do catálogo?`))) return;
+        const ok = await confirmDialog(
+          `Remover "${p.name}" do catálogo de vez? Se a ideia é só tirar do ar por um tempo, use "Ocultar" — assim você não perde fotos, grade e avaliações.`,
+          { confirmLabel: 'Remover de vez' }
+        );
+        if (!ok) return;
         try {
           const data = await api('/api/products', 'DELETE', { id: p.id });
           PRODUCTS = data.products;
           if (pEditId.value === p.id) endEditProduct();
-          renderProductList();
-          renderPromoTargetOptions();
-          renderStoryProductSelect();
-          renderFeaturedList();
-          renderUpsellList();
+          afterProductsChanged();
+          toast(`"${p.name}" foi removido do catálogo.`);
         } catch (err) {
           toast(err.message, 'error');
         }
@@ -993,6 +1129,7 @@
 
   productSearch.addEventListener('input', renderProductList);
   productCategoryFilter.addEventListener('change', renderProductList);
+  productStatusFilter.addEventListener('change', renderProductList);
   productSort.addEventListener('change', renderProductList);
 
 
@@ -2255,6 +2392,8 @@
     'product.create': 'criou o produto',
     'product.update': 'editou o produto',
     'product.delete': 'removeu o produto',
+    'product.hide': 'ocultou da loja o produto',
+    'product.show': 'publicou na loja o produto',
     'promotion.create': 'criou a promoção',
     'promotion.update': 'editou a promoção',
     'promotion.delete': 'removeu a promoção',

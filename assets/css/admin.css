@@ -762,3 +762,28 @@
 .admin-status-tab.is-active{background:var(--ink);border-color:var(--ink);color:var(--white);}
 .admin-status-tab.is-active span{background:rgba(255,255,255,.18);}
 .admin-order-whats{padding:8px 14px;font-size:.78rem;white-space:nowrap;}
+
+/* ---------- lista de produtos: selos, ocultos e estoque rápido ---------- */
+.admin-product-item-media{position:relative;}
+.admin-product-badges{position:absolute;top:8px;left:8px;right:8px;display:flex;gap:6px;flex-wrap:wrap;}
+.admin-product-badge{
+  font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.03em;
+  padding:4px 9px;border-radius:999px;background:var(--white);color:var(--ink);box-shadow:var(--shadow-soft);
+}
+.admin-product-badge.is-hidden{background:var(--ink);color:var(--white);}
+.admin-product-badge.is-low{background:#fdf1dc;color:#8a5b18;}
+.admin-product-badge.is-empty{background:#f7e3d8;color:var(--wine);}
+.admin-product-item.is-hidden img{opacity:.55;filter:grayscale(.4);}
+.admin-product-item-visibility{color:var(--ink-soft) !important;}
+.admin-product-item-visibility:hover{background:var(--ink) !important;color:#fff !important;border-color:var(--ink) !important;}
+.admin-quick-stock{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px;}
+.admin-quick-stock-rows{display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:6px;}
+.admin-quick-stock-row{display:flex;flex-direction:column;gap:3px;font-size:.7rem;color:var(--ink-soft);font-weight:600;}
+.admin-quick-stock-row input{
+  width:100%;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--white);
+  font-family:var(--sans);font-size:.85rem;color:var(--ink);
+}
+.admin-quick-stock-row.is-empty input{border-color:#e4b5a2;background:#fdf5f1;}
+.admin-product-item .admin-quick-stock-save{margin-top:0;background:var(--ink);color:var(--white);border-color:var(--ink);font-weight:600;}
+.admin-product-item .admin-quick-stock-save:hover{background:var(--wine);border-color:var(--wine);}
+.admin-visibility-check{margin:4px 0 14px;padding:12px 14px;border-radius:10px;background:var(--cream);font-size:.84rem;}

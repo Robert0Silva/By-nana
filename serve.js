@@ -443,15 +443,16 @@ async function notifyBackInStock(variantId, origin) {
   }
 }
 
-async function getProducts() {
+async function getProducts({ includeHidden = false } = {}) {
   const { rows } = await pool.query(`
     SELECT p.id, p.name, p.brand, c.name AS category, COALESCE(col.name, '') AS collection,
            p.tag, p.price, p.img, p.description AS desc, p.composition,
            p.is_featured AS "isFeatured", p.featured_position AS "featuredPosition",
-           p.is_upsell AS "isUpsell", p.upsell_position AS "upsellPosition"
+           p.is_upsell AS "isUpsell", p.upsell_position AS "upsellPosition", p.active
     FROM products p
     JOIN categories c ON c.id = p.category_id
     LEFT JOIN collections col ON col.id = p.collection_id
+    ${includeHidden ? '' : 'WHERE p.active'}
     ORDER BY p.created_at DESC
   `);
   if (!rows.length) return rows;
@@ -468,6 +469,8 @@ async function getProducts() {
   return rows.map((p) => ({ ...p, ...variantsById.get(p.id), ...imagesById.get(p.id), ...reviewsById.get(p.id) }));
 }
 
+// painel admin enxerga também os produtos ocultos (products.active = false); a vitrine não.
+const getAdminProducts = () => getProducts({ includeHidden: true });
 // Só o necessário pra montar o <head> da página de produto (título/meta/OG/JSON-LD) no
 // servidor — não passa por attachVariants/attachImages completos (caros demais pra uma
 // checagem de rota), só a soma de estoque e o resumo de avaliação que o JSON-LD precisa.
@@ -486,7 +489,7 @@ async function getProductMeta(id) {
          SELECT product_id, ROUND(AVG(rating)::numeric, 1) AS rating, COUNT(*)::int AS review_count
          FROM product_reviews GROUP BY product_id
        ) r ON r.product_id = p.id
-      WHERE p.id = $1`,
+      WHERE p.id = $1 AND p.active`,
     [id]
   );
   return rows[0] || null;
@@ -535,7 +538,7 @@ async function getNovidades() {
     FROM products p
     JOIN categories c ON c.id = p.category_id
     LEFT JOIN collections col ON col.id = p.collection_id
-    WHERE p.is_featured = true
+    WHERE p.is_featured = true AND p.active
     ORDER BY p.featured_position ASC
   `);
   if (featured.rowCount) return attachReviewSummary(await attachVariants(featured.rows));
@@ -546,6 +549,7 @@ async function getNovidades() {
     FROM products p
     JOIN categories c ON c.id = p.category_id
     LEFT JOIN collections col ON col.id = p.collection_id
+    WHERE p.active
     ORDER BY p.created_at DESC
     LIMIT 8
   `);
@@ -565,7 +569,7 @@ async function getUpsellSuggestions() {
     FROM products p
     JOIN categories c ON c.id = p.category_id
     LEFT JOIN collections col ON col.id = p.collection_id
-    WHERE p.is_upsell = true
+    WHERE p.is_upsell = true AND p.active
     ORDER BY p.upsell_position ASC
   `);
   if (curated.rowCount) return attachReviewSummary(await attachVariants(curated.rows));
@@ -576,8 +580,8 @@ async function getUpsellSuggestions() {
     FROM products p
     JOIN categories c ON c.id = p.category_id
     LEFT JOIN collections col ON col.id = p.collection_id
-    WHERE NOT EXISTS (SELECT 1 FROM product_variants pv WHERE pv.product_id = p.id)
-       OR EXISTS (SELECT 1 FROM product_variants pv WHERE pv.product_id = p.id AND pv.stock > 0)
+    WHERE p.active AND (NOT EXISTS (SELECT 1 FROM product_variants pv WHERE pv.product_id = p.id)
+       OR EXISTS (SELECT 1 FROM product_variants pv WHERE pv.product_id = p.id AND pv.stock > 0))
     ORDER BY p.price ASC NULLS LAST
     LIMIT 8
   `);
@@ -1300,6 +1304,14 @@ async function handleApi(req, res, pathname) {
     }
 
     // ------ dashboard / relatórios ------
+    // /api/data é público e não traz produtos ocultos — o painel carrega a lista completa daqui.
+    if (pathname === '/api/admin/products/list' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      return sendJSON(res, 200, { products: await getAdminProducts() });
+    }
+
     if (pathname === '/api/admin/dashboard' && req.method === 'POST') {
       const body = await readJSONBody(req);
       const admin = await requireAdmin(body);
@@ -1432,9 +1444,9 @@ async function handleApi(req, res, pathname) {
           await client.query('INSERT INTO collections(name) VALUES ($1) ON CONFLICT (lower(name)) DO NOTHING', [collection]);
         }
         await client.query(
-          `INSERT INTO products (id, name, brand, category_id, collection_id, tag, price, img, description, composition)
-           VALUES ($1, $2, $3, (SELECT id FROM categories WHERE lower(name) = lower($4)), (SELECT id FROM collections WHERE lower(name) = lower($5)), $6, $7, $8, $9, $10)`,
-          [id, name, brand, category, collection || null, tag, price, img, desc, composition]
+          `INSERT INTO products (id, name, brand, category_id, collection_id, tag, price, img, description, composition, active)
+           VALUES ($1, $2, $3, (SELECT id FROM categories WHERE lower(name) = lower($4)), (SELECT id FROM collections WHERE lower(name) = lower($5)), $6, $7, $8, $9, $10, $11)`,
+          [id, name, brand, category, collection || null, tag, price, img, desc, composition, body.active !== false]
         );
         if (variants) await syncProductVariants(client, id, variants, admin.id);
         else await createDefaultVariants(client, id, category);
@@ -1447,7 +1459,7 @@ async function handleApi(req, res, pathname) {
         client.release();
       }
 
-      const product = (await getProducts()).find((p) => p.id === id);
+      const product = (await getAdminProducts()).find((p) => p.id === id);
       const [categories, collections] = await Promise.all([getCategories(), getCollections()]);
       logActivity(admin, 'product.create', 'product', id, { name });
       return sendJSON(res, 201, { product, categories, collections });
@@ -1504,9 +1516,10 @@ async function handleApi(req, res, pathname) {
           `UPDATE products SET name=$1, brand=$2,
              category_id=(SELECT id FROM categories WHERE lower(name)=lower($3)),
              collection_id=(SELECT id FROM collections WHERE lower(name)=lower($4)),
-             tag=$5, price=$6, description=$7, img=COALESCE($8, img), composition=$9
+             tag=$5, price=$6, description=$7, img=COALESCE($8, img), composition=$9,
+             active=COALESCE($11, active)
            WHERE id=$10`,
-          [name, brand, category, collection || null, tag, price, desc, img, composition, body.id]
+          [name, brand, category, collection || null, tag, price, desc, img, composition, body.id, typeof body.active === 'boolean' ? body.active : null]
         );
         if (!rowCount) {
           await client.query('ROLLBACK');
@@ -1522,7 +1535,7 @@ async function handleApi(req, res, pathname) {
         client.release();
       }
       logActivity(admin, 'product.update', 'product', body.id, { name });
-      return sendJSON(res, 200, { products: await getProducts() });
+      return sendJSON(res, 200, { products: await getAdminProducts() });
     }
 
     // ------ galeria de fotos adicionais do produto (a capa/products.img não muda aqui) ------
@@ -1591,7 +1604,7 @@ async function handleApi(req, res, pathname) {
         updated = await pool.query('UPDATE products SET is_featured = false, featured_position = NULL WHERE id = $1', [body.id]);
       }
       if (!updated.rowCount) return sendJSON(res, 404, { error: 'Produto não encontrado' });
-      return sendJSON(res, 200, { products: await getProducts(), novidades: await getNovidades() });
+      return sendJSON(res, 200, { products: await getAdminProducts(), novidades: await getNovidades() });
     }
 
     if (pathname === '/api/products/featured/reorder' && req.method === 'POST') {
@@ -1608,14 +1621,14 @@ async function handleApi(req, res, pathname) {
       if (idx === -1) return sendJSON(res, 404, { error: 'Produto não está em Novidades' });
       const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
       if (swapIdx < 0 || swapIdx >= featured.length) {
-        return sendJSON(res, 200, { products: await getProducts(), novidades: await getNovidades() });
+        return sendJSON(res, 200, { products: await getAdminProducts(), novidades: await getNovidades() });
       }
 
       const a = featured[idx];
       const b = featured[swapIdx];
       await pool.query('UPDATE products SET featured_position = $1 WHERE id = $2', [b.featuredPosition, a.id]);
       await pool.query('UPDATE products SET featured_position = $1 WHERE id = $2', [a.featuredPosition, b.id]);
-      return sendJSON(res, 200, { products: await getProducts(), novidades: await getNovidades() });
+      return sendJSON(res, 200, { products: await getAdminProducts(), novidades: await getNovidades() });
     }
 
     if (pathname === '/api/products/upsell' && req.method === 'POST') {
@@ -1632,7 +1645,7 @@ async function handleApi(req, res, pathname) {
         updated = await pool.query('UPDATE products SET is_upsell = false, upsell_position = NULL WHERE id = $1', [body.id]);
       }
       if (!updated.rowCount) return sendJSON(res, 404, { error: 'Produto não encontrado' });
-      return sendJSON(res, 200, { products: await getProducts(), upsell: await getUpsellSuggestions() });
+      return sendJSON(res, 200, { products: await getAdminProducts(), upsell: await getUpsellSuggestions() });
     }
 
     if (pathname === '/api/products/upsell/reorder' && req.method === 'POST') {
@@ -1649,14 +1662,14 @@ async function handleApi(req, res, pathname) {
       if (idx === -1) return sendJSON(res, 404, { error: 'Produto não está em Leve também' });
       const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
       if (swapIdx < 0 || swapIdx >= upsell.length) {
-        return sendJSON(res, 200, { products: await getProducts(), upsell: await getUpsellSuggestions() });
+        return sendJSON(res, 200, { products: await getAdminProducts(), upsell: await getUpsellSuggestions() });
       }
 
       const a = upsell[idx];
       const b = upsell[swapIdx];
       await pool.query('UPDATE products SET upsell_position = $1 WHERE id = $2', [b.upsellPosition, a.id]);
       await pool.query('UPDATE products SET upsell_position = $1 WHERE id = $2', [a.upsellPosition, b.id]);
-      return sendJSON(res, 200, { products: await getProducts(), upsell: await getUpsellSuggestions() });
+      return sendJSON(res, 200, { products: await getAdminProducts(), upsell: await getUpsellSuggestions() });
     }
 
     // ------ estoque/variação (tamanho, cor) — isolado do contrato de /api/products ------
@@ -1718,7 +1731,7 @@ async function handleApi(req, res, pathname) {
       return sendJSON(res, 201, {
         variants: await getProductVariants(productId),
         movements: await getInventoryMovements(productId),
-        products: await getProducts(),
+        products: await getAdminProducts(),
       });
     }
 
@@ -1767,7 +1780,7 @@ async function handleApi(req, res, pathname) {
         return sendJSON(res, 200, {
           variants: await getProductVariants(result.rows[0].productId),
           movements: await getInventoryMovements(result.rows[0].productId),
-          products: await getProducts(),
+          products: await getAdminProducts(),
         });
       } catch (err) {
         if (err.code === '23505') return sendJSON(res, 409, { error: 'Já existe uma variação com esse tamanho/cor ou SKU' });
@@ -1799,8 +1812,22 @@ async function handleApi(req, res, pathname) {
       return sendJSON(res, 200, {
         variants: await getProductVariants(productId),
         movements: await getInventoryMovements(productId),
-        products: await getProducts(),
+        products: await getAdminProducts(),
       });
+    }
+
+    // ocultar/publicar sem apagar — o produto some da vitrine, busca, sitemap e checkout, mas
+    // pedidos, avaliações e histórico de estoque continuam intactos.
+    if (pathname === '/api/products/visibility' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
+      if (typeof body.active !== 'boolean') return sendJSON(res, 400, { error: 'active deve ser true ou false' });
+      const { rowCount } = await pool.query('UPDATE products SET active = $1 WHERE id = $2', [body.active, body.id]);
+      if (!rowCount) return sendJSON(res, 404, { error: 'Produto não encontrado' });
+      logActivity(admin, body.active ? 'product.show' : 'product.hide', 'product', body.id, null);
+      return sendJSON(res, 200, { products: await getAdminProducts() });
     }
 
     if (pathname === '/api/products' && req.method === 'DELETE') {
@@ -1812,7 +1839,7 @@ async function handleApi(req, res, pathname) {
       const { rowCount } = await pool.query('DELETE FROM products WHERE id = $1', [body.id]);
       if (!rowCount) return sendJSON(res, 404, { error: 'Produto não encontrado' });
       logActivity(admin, 'product.delete', 'product', body.id, null);
-      return sendJSON(res, 200, { products: await getProducts() });
+      return sendJSON(res, 200, { products: await getAdminProducts() });
     }
 
     // ------ categories ------
@@ -2222,13 +2249,13 @@ async function handleApi(req, res, pathname) {
                JOIN products p ON p.id = v.product_id
                JOIN categories c ON c.id = p.category_id
                LEFT JOIN collections col ON col.id = p.collection_id
-              WHERE v.id = $1 FOR UPDATE OF v`,
+              WHERE v.id = $1 AND p.active FOR UPDATE OF v`,
             [item.variantId]
           );
           const variant = locked.rows[0];
           if (!variant || variant.productId !== item.id) {
             await client.query('ROLLBACK');
-            return sendJSON(res, 400, { error: `Tamanho inválido para ${item.name || 'o produto'}` });
+            return sendJSON(res, 400, { error: `${item.name || 'Esse produto'} não está mais disponível nesse tamanho — atualize a sacola` });
           }
           if (variant.stock < qty) {
             await client.query('ROLLBACK');
@@ -3203,7 +3230,7 @@ function configuredPublicOrigin(req) {
 // dinâmico porque precisa listar /produto/:id de cada produto — antes era uma string fixa
 // com só a home.
 async function buildSitemap(origin) {
-  const { rows } = await pool.query('SELECT id, created_at FROM products ORDER BY created_at DESC');
+  const { rows } = await pool.query('SELECT id, created_at FROM products WHERE active ORDER BY created_at DESC');
   const staticLastmod = '2026-08-25';
   const urls = [
     { path: '/', lastmod: staticLastmod },

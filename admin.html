@@ -367,6 +367,10 @@
             <p class="admin-field-help">O SKU pode ficar vazio. O estoque informado aqui cria o saldo inicial; alterações posteriores ficam registradas no histórico.</p>
           </section>
 
+          <label class="account-check admin-visibility-check">
+            <input type="checkbox" id="pActive" checked />
+            <span><strong>Visível na loja</strong> — desmarque para salvar como rascunho ou tirar do ar sem apagar.</span>
+          </label>
           <div class="admin-form-actions admin-product-savebar">
             <div>
               <strong id="pReviewTitle">Produto pronto para publicar?</strong>
@@ -386,6 +390,13 @@
         <div class="admin-catalog-toolbar">
           <input type="search" id="productSearch" class="admin-search" placeholder="Buscar por nome, categoria ou coleção..." />
           <select id="productCategoryFilter" class="admin-select" aria-label="Filtrar produtos por categoria"><option value="">Todas as categorias</option></select>
+          <select id="productStatusFilter" class="admin-select" aria-label="Filtrar produtos por situação">
+            <option value="">Todas as situações</option>
+            <option value="visible">Visíveis na loja</option>
+            <option value="hidden">Ocultos / rascunhos</option>
+            <option value="low">Estoque baixo</option>
+            <option value="empty">Esgotados</option>
+          </select>
           <select id="productSort" class="admin-select" aria-label="Ordenar produtos">
             <option value="recent">Mais recentes</option>
             <option value="name">Nome A–Z</option>

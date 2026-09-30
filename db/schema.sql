@@ -48,6 +48,10 @@ CREATE INDEX IF NOT EXISTS idx_products_upsell ON products(upsell_position) WHER
 -- página de produto; não é estruturado porque é conteúdo descritivo, não é filtrado/consultado.
 ALTER TABLE products ADD COLUMN IF NOT EXISTS composition TEXT;
 
+-- "Visível na loja": ocultar tira o produto da vitrine, busca, sitemap e checkout sem apagar
+-- histórico (pedidos, avaliações, estoque). Também serve de rascunho antes de publicar.
+ALTER TABLE products ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+
 -- fotos adicionais da galeria da página de produto; a capa de sempre (products.img) continua
 -- sendo a 1ª imagem da galeria (ver attachImages() em serve.js) — não duplicamos ela aqui.
 CREATE TABLE IF NOT EXISTS product_images (
