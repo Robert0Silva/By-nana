@@ -652,7 +652,14 @@
         if (pb == null) return -1;
         return currentSort === 'price-asc' ? pa - pb : pb - pa;
       });
+    } else if (currentSort === 'best-sellers') {
+      // ranking dos últimos 90 dias (/api/data → bestSellers); o resto segue em "mais recentes".
+      const rank = new Map(BEST_SELLERS.map((b, i) => [b.productId, i]));
+      list = [...list].sort((a, b) => (rank.has(a.id) ? rank.get(a.id) : Infinity) - (rank.has(b.id) ? rank.get(b.id) : Infinity));
     }
+    // esgotados sempre no fim, em qualquer ordenação — a cliente vê primeiro o que pode comprar.
+    // sort estável: dentro de cada grupo a ordem escolhida acima é preservada.
+    list = [...list].sort((a, b) => Number(isProductSoldOut(a)) - Number(isProductSoldOut(b)));
 
     if (list.length === 0) {
       if (currentSearch) {
@@ -669,6 +676,8 @@
     list.forEach((p) => grid.appendChild(productCard(p)));
     syncAddButtons();
     renderCategorySeoBlock(filter);
+    syncCatalogUrl();
+    updateCatalogFilterCount();
   }
 
   // ---------- filters + search (built dynamically from categories/collections) ----------
@@ -815,6 +824,7 @@
 
     sortSelect.innerHTML = `
       <option value="recent">Mais recentes</option>
+      ${BEST_SELLERS.length ? '<option value="best-sellers">Mais vendidos</option>' : ''}
       <option value="price-asc">Menor preço</option>
       <option value="price-desc">Maior preço</option>
     `;
@@ -836,6 +846,80 @@
         renderGrid(currentFilter, currentSearch);
       });
     }
+  }
+
+  // ---------- filtros refletidos na URL (link compartilhável + voltar da página de produto) ----------
+  const collectionSelectEl = () => (collectionWrap ? collectionWrap.querySelector('select') : null);
+
+  function syncCatalogUrl() {
+    if (!grid) return;
+    const params = new URLSearchParams(location.search);
+    const values = {
+      categoria: currentFilter && currentFilter !== 'Todos' ? currentFilter : '',
+      colecao: currentCollection,
+      tamanho: currentSize,
+      cor: currentColor,
+      preco: currentPriceRange,
+      ordem: currentSort !== 'recent' ? currentSort : '',
+      busca: currentSearch,
+    };
+    // só mexe nas próprias chaves — outros parâmetros (ex.: retorno do checkout) ficam intactos.
+    Object.entries(values).forEach(([key, value]) => (value ? params.set(key, value) : params.delete(key)));
+    const query = params.toString();
+    const url = `${location.pathname}${query ? `?${query}` : ''}${location.hash}`;
+    if (url !== `${location.pathname}${location.search}${location.hash}`) history.replaceState(history.state, '', url);
+  }
+
+  function applyCatalogParams(params) {
+    const size = params.get('tamanho') || '';
+    if (size && sizeFiltersEl && availableSizes().includes(size)) {
+      currentSize = size;
+      sizeFiltersEl.querySelectorAll('[data-size]').forEach((b) => b.classList.toggle('is-active', b.dataset.size === size));
+    }
+    const color = (params.get('cor') || '').toLowerCase();
+    const colorBtn = color && colorFiltersEl
+      ? [...colorFiltersEl.querySelectorAll('[data-color]')].find((b) => b.dataset.color.toLowerCase() === color)
+      : null;
+    if (colorBtn) {
+      currentColor = colorBtn.dataset.color;
+      colorFiltersEl.querySelectorAll('[data-color]').forEach((b) => b.classList.toggle('is-active', b === colorBtn));
+    }
+    const price = params.get('preco') || '';
+    if (price && priceFilterSelect && PRICE_RANGES.some((r) => r.id === price)) {
+      currentPriceRange = price;
+      priceFilterSelect.value = price;
+    }
+    const sort = params.get('ordem') || '';
+    if (sort && sortSelect && [...sortSelect.options].some((o) => o.value === sort)) {
+      currentSort = sort;
+      sortSelect.value = sort;
+    }
+    const collection = params.get('colecao') || '';
+    const select = collectionSelectEl();
+    if (collection && select && COLLECTIONS.includes(collection)) {
+      currentCollection = collection;
+      select.value = collection;
+    }
+  }
+
+  // ---------- filtros no celular: recolhidos atrás de um botão com contador ----------
+  const catalogFilterToggle = document.getElementById('catalogFilterToggle');
+  const catalogFilters = document.getElementById('catalogFilters');
+  const catalogFilterCount = document.getElementById('catalogFilterCount');
+  if (catalogFilterToggle && catalogFilters) {
+    catalogFilterToggle.addEventListener('click', () => {
+      const open = !catalogFilters.classList.contains('is-open');
+      catalogFilters.classList.toggle('is-open', open);
+      catalogFilterToggle.setAttribute('aria-expanded', String(open));
+    });
+  }
+
+  function updateCatalogFilterCount() {
+    if (!catalogFilterCount) return;
+    const count = [currentSize, currentColor, currentPriceRange, currentSort !== 'recent' ? currentSort : ''].filter(Boolean).length;
+    catalogFilterCount.textContent = count;
+    catalogFilterCount.hidden = count === 0;
+    catalogFilterToggle.setAttribute('aria-label', count ? `Filtrar e ordenar (${count} ativo${count > 1 ? 's' : ''})` : 'Filtrar e ordenar');
   }
 
   // ---------- mega-menu (categorias agrupadas no header) ----------
@@ -3026,6 +3110,7 @@
       buildCatCards();
       buildCollectionFilter();
       buildSecondaryFilters();
+      applyCatalogParams(params);
       if (searchInput) searchInput.value = initialSearch;
       renderGrid(initialCategory, initialSearch);
       filtersEl.querySelectorAll('.filter-chip').forEach((c) => c.classList.toggle('is-active', c.dataset.filter === initialCategory));

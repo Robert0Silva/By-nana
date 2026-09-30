@@ -478,9 +478,17 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 .color-filter-chip.is-active{border-color:var(--gold);}
 .catalog-toolbar-secondary .collection-select{font-size:.82rem;padding:8px 14px;}
 .catalog-toolbar-secondary .btn-sm{align-self:flex-end;}
+.catalog-filter-toggle{display:none;}
+.catalog-filter-count{
+  display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;border-radius:999px;
+  background:var(--ink);color:#fff;font-size:.7rem;font-weight:700;
+}
+.catalog-filter-count[hidden]{display:none;}
 @media (max-width:720px){
   .catalog-toolbar-secondary{flex-direction:column;align-items:stretch;gap:16px;}
   .catalog-toolbar-secondary .btn-sm{align-self:stretch;justify-content:center;}
+  .catalog-filter-toggle{display:inline-flex;align-items:center;gap:8px;width:100%;justify-content:center;margin-bottom:16px;}
+  .catalog-toolbar-secondary:not(.is-open){display:none;}
 }
 
 .empty-state{text-align:center;color:var(--ink-soft);padding:40px 0;font-size:.95rem;}

@@ -212,7 +212,11 @@
         </div>
       </div>
 
-      <div class="catalog-toolbar-secondary">
+      <button type="button" class="btn btn-ghost catalog-filter-toggle" id="catalogFilterToggle" aria-expanded="false" aria-controls="catalogFilters">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+        Filtrar e ordenar <span class="catalog-filter-count" id="catalogFilterCount" hidden></span>
+      </button>
+      <div class="catalog-toolbar-secondary" id="catalogFilters">
         <div class="filter-group">
           <span class="filter-group-label">Tamanho</span>
           <div class="filters filters-sm" id="sizeFilters"><!-- gerado via JS --></div>
