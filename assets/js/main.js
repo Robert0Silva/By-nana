@@ -2163,7 +2163,8 @@
       setFormMsg(signupMsg, 'É preciso aceitar a política de privacidade.', 'error');
       return;
     }
-    if (!isValidCPF(document.getElementById('suCpf').value)) {
+    const cpfValue = document.getElementById('suCpf').value.trim();
+    if (cpfValue && !isValidCPF(cpfValue)) {
       setFormMsg(signupMsg, 'CPF inválido.', 'error');
       return;
     }

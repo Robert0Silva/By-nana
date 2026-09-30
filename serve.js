@@ -658,6 +658,7 @@ async function getCategoryContent() {
 }
 
 function maskCpf(cpf) {
+  if (!cpf) return ''; // CPF é opcional no cadastro
   const digits = (cpf || '').replace(/\D/g, '');
   if (digits.length < 2) return '***.***.**-**';
   return `***.***.**-${digits.slice(-2)}`;
@@ -2527,24 +2528,28 @@ async function handleApi(req, res, pathname) {
       const lastName = (body.lastName || '').trim();
       const email = (body.email || '').trim().toLowerCase();
       const phone = (body.phone || '').trim();
-      const birthDate = (body.birthDate || '').trim();
-      const cpf = (body.cpf || '').replace(/\D/g, '');
+      const birthDate = (body.birthDate || '').trim() || null;
+      const cpf = (body.cpf || '').replace(/\D/g, '') || null;
       const password = body.password || '';
       const gender = ['feminino', 'masculino'].includes(body.gender) ? body.gender : 'nao_informado';
       const marketingOptIn = body.marketingOptIn === true;
 
-      if (!firstName || !lastName || !email || !phone || !birthDate || !cpf || !password) {
+      if (!firstName || !lastName || !email || !phone || !password) {
         return sendJSON(res, 400, { error: 'Preencha todos os campos obrigatórios' });
       }
       if (!/^\S+@\S+\.\S+$/.test(email)) return sendJSON(res, 400, { error: 'E-mail inválido' });
-      if (!isValidCPF(cpf)) return sendJSON(res, 400, { error: 'CPF inválido' });
+      // CPF e nascimento são opcionais, mas se vierem precisam ser válidos.
+      if (cpf && !isValidCPF(cpf)) return sendJSON(res, 400, { error: 'CPF inválido' });
+      if (birthDate && (!/^\d{4}-\d{2}-\d{2}$/.test(birthDate) || Number.isNaN(Date.parse(birthDate)))) {
+        return sendJSON(res, 400, { error: 'Data de nascimento inválida' });
+      }
       if (password.length < 8) return sendJSON(res, 400, { error: 'A senha deve ter ao menos 8 caracteres' });
       if (body.privacyAccepted !== true) {
         return sendJSON(res, 400, { error: 'É preciso aceitar a política de privacidade' });
       }
 
       const dup = await pool.query(
-        'SELECT 1 FROM customers WHERE lower(email) = $1 OR cpf = $2',
+        'SELECT 1 FROM customers WHERE lower(email) = $1 OR ($2::text IS NOT NULL AND cpf = $2)',
         [email, cpf]
       );
       if (dup.rowCount) return sendJSON(res, 409, { error: 'Já existe uma conta com esse e-mail ou CPF' });

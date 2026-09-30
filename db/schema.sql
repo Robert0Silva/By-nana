@@ -188,6 +188,11 @@ CREATE TABLE IF NOT EXISTS customers (
 CREATE UNIQUE INDEX IF NOT EXISTS customers_email_lower_idx ON customers (lower(email));
 CREATE UNIQUE INDEX IF NOT EXISTS customers_cpf_idx ON customers (cpf);
 
+-- CPF e data de nascimento viraram opcionais no cadastro (menos atrito pra criar conta);
+-- o índice único acima continua valendo pra quem informa (NULLs não colidem entre si).
+ALTER TABLE customers ALTER COLUMN birth_date DROP NOT NULL;
+ALTER TABLE customers ALTER COLUMN cpf DROP NOT NULL;
+
 -- endereços salvos pelo cliente na área da conta, para reaproveitar no checkout sem redigitar.
 CREATE TABLE IF NOT EXISTS customer_addresses (
   id          UUID PRIMARY KEY,

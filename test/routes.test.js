@@ -630,3 +630,31 @@ test('produto oculto some da loja e do checkout, mas o painel ainda o enxerga e 
     await pool.end();
   }
 });
+
+// CPF e data de nascimento são opcionais — cadastro só com nome, contato e senha funciona.
+test('cadastro sem CPF e sem data de nascimento é aceito', async () => {
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const email = `cliente-sem-cpf-${Date.now()}@example.com`;
+  try {
+    const response = await fetch(`${origin}/api/customers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firstName: 'Cliente',
+        lastName: 'Sem CPF',
+        email,
+        phone: '31999997777',
+        password: 'senhaDeTeste123',
+        privacyAccepted: true,
+      }),
+    });
+    const data = await response.json();
+    assert.equal(response.status, 201, JSON.stringify(data));
+    const row = await pool.query('SELECT cpf, birth_date FROM customers WHERE lower(email) = $1', [email]);
+    assert.equal(row.rows[0].cpf, null);
+    assert.equal(row.rows[0].birth_date, null);
+  } finally {
+    await pool.query('DELETE FROM customers WHERE lower(email) = $1', [email]);
+    await pool.end();
+  }
+});

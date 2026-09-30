@@ -1701,7 +1701,7 @@
       div.innerHTML = `
         <div class="admin-customer-info">
           <span class="admin-customer-name">${escapeHtml(c.firstName)} ${escapeHtml(c.lastName)}</span>
-          <span class="admin-customer-meta">${escapeHtml(c.email)} · ${escapeHtml(c.phone)} · CPF ${escapeHtml(c.cpf)} · cliente desde ${formatDate(c.createdAt.slice(0, 10))}</span>
+          <span class="admin-customer-meta">${escapeHtml(c.email)} · ${escapeHtml(c.phone)}${c.cpf ? ` · CPF ${escapeHtml(c.cpf)}` : ''} · cliente desde ${formatDate(c.createdAt.slice(0, 10))}</span>
         </div>
         <div class="admin-customer-actions">
           <span class="admin-customer-badge ${c.marketingOptIn ? '' : 'is-off'}">${c.marketingOptIn ? 'Recebe novidades' : 'Não recebe novidades'}</span>
