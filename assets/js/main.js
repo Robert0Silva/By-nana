@@ -953,6 +953,10 @@
   const mobileBarText = document.getElementById('mobileBarText');
   const checkoutBtn = document.getElementById('bagCheckout');
   const bagFormError = document.getElementById('bagFormError');
+  const bagTotalLabelEl = document.getElementById('bagTotalLabel');
+  const bagConsultNoteEl = document.getElementById('bagConsultNote');
+  const bagSecurityBadgeEl = document.querySelector('#bagDrawer .bag-security-badge');
+  const ONLINE_PAYMENT_VALUE = 'Pagamento online (Pix/cartão)';
 
   function saveCart() {
     localStorage.setItem(CART_KEY, JSON.stringify(cart));
@@ -1069,23 +1073,88 @@
     });
   });
 
-  function validateCheckout() {
-    if (!bagNameInput.value.trim()) return 'Informe seu nome.';
-    if (!bagPhoneInput.value.trim()) return 'Informe seu telefone.';
+  // Retorna { message, field } do primeiro problema (field = id do campo/grupo a destacar) ou null.
+  function validateContact() {
+    if (!bagNameInput.value.trim()) return { message: 'Informe seu nome.', field: 'bagName' };
+    if (bagPhoneInput.value.replace(/\D/g, '').length < 10) {
+      return { message: 'Informe um telefone com DDD, ex.: (31) 90000-0000.', field: 'bagPhone' };
+    }
     const email = bagEmailInput.value.trim();
-    if (email && !/^\S+@\S+\.\S+$/.test(email)) return 'Informe um e-mail válido (ou deixe em branco).';
-    if (!selectedPayment) return 'Selecione a forma de pagamento.';
-    if (!selectedDelivery) return 'Selecione retirada em loja ou entrega.';
+    if (email && !/^\S+@\S+\.\S+$/.test(email)) return { message: 'Informe um e-mail válido (ou deixe em branco).', field: 'bagEmail' };
+    return null;
+  }
+
+  function validateDelivery() {
+    if (!selectedPayment) return { message: 'Selecione a forma de pagamento.', field: 'paymentRow' };
+    if (!selectedDelivery) return { message: 'Selecione retirada em loja ou entrega.', field: 'deliveryRow' };
     if (selectedDelivery === 'Entrega') {
-      if (address.cep.replace(/\D/g, '').length !== 8) return 'Informe um CEP válido.';
-      if (!address.rua.trim()) return 'Preencha a rua (confira o CEP ou digite manualmente).';
-      if (!address.numero.trim()) return 'Informe o número do endereço.';
+      if (address.cep.replace(/\D/g, '').length !== 8) return { message: 'Informe um CEP válido.', field: 'cepInput' };
+      if (!address.rua.trim()) return { message: 'Preencha a rua (confira o CEP ou digite manualmente).', field: 'addrRua' };
+      if (!address.numero.trim()) return { message: 'Informe o número do endereço.', field: 'addrNumero' };
       if (SHIPPING_RULES.some((r) => r.active) && !shippingQuote(Object.keys(cart)).applicable) {
-        return 'No momento não entregamos nessa região. Escolha retirada em loja ou fale no WhatsApp.';
+        return { message: 'No momento não entregamos nessa região. Escolha retirada em loja ou fale no WhatsApp.', field: 'deliveryRow' };
       }
     }
-    return '';
+    return null;
   }
+
+  function validateCheckout() {
+    return validateContact() || validateDelivery();
+  }
+
+  // ---------- erros no próprio campo + indicador de etapas da sacola ----------
+  function clearFieldErrors() {
+    document.querySelectorAll('#bagDrawer .is-invalid').forEach((el) => {
+      el.classList.remove('is-invalid');
+      el.removeAttribute('aria-invalid');
+      el.removeAttribute('aria-describedby');
+    });
+    document.querySelectorAll('#bagDrawer .bag-field-error').forEach((el) => el.remove());
+  }
+
+  function showFieldError({ message, field }) {
+    clearFieldErrors();
+    bagFormError.textContent = message;
+    bagFormError.hidden = false;
+    const el = document.getElementById(field);
+    if (!el) return;
+    // endereço escondido (ex.: CEP ainda não buscado) não pode receber foco — mostra antes.
+    if (el.closest('#bagAddressFields')) bagAddressFields.hidden = false;
+    el.classList.add('is-invalid');
+    el.setAttribute('aria-invalid', 'true');
+    const note = document.createElement('p');
+    note.className = 'bag-field-error';
+    note.id = `${field}Error`;
+    note.textContent = message;
+    el.setAttribute('aria-describedby', note.id);
+    // dentro do <label> (coluna flex) pra não virar uma célula extra nas grades de campos.
+    const label = el.closest('label');
+    if (label) label.appendChild(note);
+    else (el.closest('.bag-cep-row') || el).insertAdjacentElement('afterend', note);
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const focusTarget = el.matches('input, select, textarea') ? el : el.querySelector('input');
+    if (focusTarget) focusTarget.focus({ preventScroll: true });
+  }
+
+  const bagSteps = document.getElementById('bagSteps');
+  function updateBagSteps() {
+    if (!bagSteps) return;
+    const contactOk = !validateContact();
+    const deliveryOk = contactOk && !validateDelivery();
+    bagSteps.querySelector('[data-step="contact"]').classList.toggle('is-done', contactOk);
+    bagSteps.querySelector('[data-step="delivery"]').classList.toggle('is-done', deliveryOk);
+    bagSteps.querySelector('[data-step="contact"]').classList.toggle('is-current', !contactOk);
+    bagSteps.querySelector('[data-step="delivery"]').classList.toggle('is-current', contactOk && !deliveryOk);
+  }
+
+  document.getElementById('bagDrawer').addEventListener('input', () => {
+    clearFieldErrors();
+    updateBagSteps();
+  });
+  document.getElementById('bagDrawer').addEventListener('change', () => {
+    clearFieldErrors();
+    updateBagSteps();
+  });
 
   function buildOrderMessage(keys) {
     let msg = 'Olá! Vim pelo site da By NaNa e quero fazer um pedido:\n\n';
@@ -1245,10 +1314,10 @@
     if (checkoutInFlight) return;
     const error = validateCheckout();
     if (error) {
-      bagFormError.textContent = error;
-      bagFormError.hidden = false;
+      showFieldError(error);
       return;
     }
+    clearFieldErrors();
     bagFormError.hidden = true;
     checkoutInFlight = true;
     checkoutBtn.classList.add('is-loading');
@@ -1411,6 +1480,16 @@
       bagShippingValueEl.textContent = quote.free ? 'Grátis' : money(quote.cost);
     }
     bagTotalEl.textContent = money(final);
+    // "sob consulta" não entra na soma — só avisa quando a sacola realmente tem uma peça assim.
+    const hasConsultItem = keys.some((key) => {
+      const p = PRODUCTS.find((x) => x.id === cart[key].productId);
+      return p && p.price == null;
+    });
+    bagTotalLabelEl.textContent = hasConsultItem ? 'Total (itens com preço)' : 'Total';
+    bagConsultNoteEl.hidden = !hasConsultItem;
+    bagSecurityBadgeEl.textContent = selectedPayment === ONLINE_PAYMENT_VALUE
+      ? '🔒 Pagamento processado com segurança pelo PagBank'
+      : '💬 Você confirma tudo com a gente no WhatsApp antes de pagar';
 
     bagDetails.hidden = keys.length === 0;
     if (keys.length === 0) {
@@ -1618,6 +1697,7 @@
   function openBag() {
     setMobileMenu(false);
     prefillBagContact();
+    updateBagSteps();
     bagDrawer.classList.add('is-open');
     bagOverlay.classList.add('is-open');
     openModalFocus(bagDrawer);

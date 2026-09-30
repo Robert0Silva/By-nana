@@ -236,6 +236,11 @@
     <div class="bag-upsell" id="bagUpsell" hidden><!-- gerado via JS --></div>
 
     <div class="bag-details" id="bagDetails" hidden>
+      <ol class="bag-steps" id="bagSteps" aria-label="Etapas para finalizar">
+        <li class="is-done" data-step="bag"><span>1</span>Sacola</li>
+        <li data-step="contact"><span>2</span>Seus dados</li>
+        <li data-step="delivery"><span>3</span>Entrega e pagamento</li>
+      </ol>
       <div class="bag-field-group">
         <span class="bag-group-label">Seus dados</span>
         <div class="bag-contact-fields">
@@ -310,11 +315,11 @@
       <span id="bagShippingValue">R$ 0,00</span>
     </div>
     <div class="bag-total">
-      <span>Total (itens com preço)</span>
+      <span id="bagTotalLabel">Total</span>
       <strong id="bagTotal">R$ 0,00</strong>
     </div>
-    <p class="bag-note">Peças "sob consulta" têm valor combinado no WhatsApp.</p>
-    <p class="bag-form-error" id="bagFormError" hidden></p>
+    <p class="bag-note" id="bagConsultNote" hidden>Peças "sob consulta" têm valor combinado no WhatsApp e não entram no total.</p>
+    <p class="bag-form-error" id="bagFormError" role="alert" hidden></p>
     <p class="bag-security-badge">🔒 Compra 100% segura</p>
     <a href="#" id="bagCheckout" target="_blank" rel="noopener" class="btn btn-primary btn-block">Finalizar no WhatsApp</a>
   </div>

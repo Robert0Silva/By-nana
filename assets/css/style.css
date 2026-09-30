@@ -755,6 +755,25 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 .bag-total[hidden]{display:none;}
 .bag-note{font-size:.75rem;color:var(--ink-soft);margin-bottom:14px;}
 .bag-form-error{font-size:.8rem;color:var(--wine);margin:-6px 0 14px;}
+
+/* etapas da sacola + erro no próprio campo */
+.bag-steps{list-style:none;margin:10px 0 0;padding:0;display:flex;gap:6px;counter-reset:none;}
+.bag-steps li{
+  flex:1;display:flex;align-items:center;gap:6px;font-size:.72rem;color:var(--ink-soft);font-weight:500;
+  padding-top:8px;border-top:3px solid var(--line);line-height:1.25;
+}
+.bag-steps li span{
+  flex:none;display:grid;place-items:center;width:18px;height:18px;border-radius:50%;
+  background:var(--cream-dark);color:var(--ink-soft);font-size:.66rem;font-weight:700;
+}
+.bag-steps li.is-current{color:var(--ink);border-top-color:var(--gold);}
+.bag-steps li.is-current span{background:var(--gold);color:#fff;}
+.bag-steps li.is-done{color:var(--ink);border-top-color:#2f7d4f;}
+.bag-steps li.is-done span{background:#2f7d4f;color:#fff;font-size:0;}
+.bag-steps li.is-done span::before{content:"✓";font-size:.66rem;}
+#bagDrawer input.is-invalid{border-color:var(--wine);background:#fdf5f1;}
+#bagDrawer .bag-chip-row.is-invalid .bag-chip{border-color:var(--wine);}
+.bag-field-error{font-size:.74rem;color:var(--wine);margin:2px 0 0;line-height:1.4;}
 .bag-security-badge{
   display:flex;align-items:center;justify-content:center;gap:6px;
   font-size:.75rem;color:var(--ink-soft);margin:0 0 10px;
