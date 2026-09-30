@@ -182,12 +182,7 @@
     renderPromoList();
     renderCouponList();
     renderShippingList();
-    loadSiteImages();
-    loadCustomers();
-    loadStories();
     loadOrders();
-    loadAdminUsers();
-    loadActivity();
     loadDashboard();
     loadStockNotifications();
     renderDashTodo();
@@ -239,6 +234,14 @@
     avaliacoes: () => loadReviews(),
     newsletter: () => loadNewsletter(),
     'avise-me': () => loadStockNotifications(),
+    // carregados só quando a aba é aberta (e recarregados a cada visita) — o login não
+    // precisa esperar dados que a maioria das sessões nem chega a ver.
+    pedidos: () => loadOrders(),
+    clientes: () => loadCustomers(),
+    stories: () => loadStories(),
+    imagens: () => loadSiteImages(),
+    usuarios: () => loadAdminUsers(),
+    atividade: () => loadActivity(),
   };
 
   const TAB_SUBTITLES = {
