@@ -747,3 +747,18 @@
 .admin-confirm-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;}
 .btn-danger{background:var(--wine);color:var(--white);}
 .btn-danger:hover{background:#5e1f2c;box-shadow:var(--shadow);}
+
+/* ---------- pedidos: abas de status + ação de WhatsApp ---------- */
+.admin-status-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;}
+.admin-status-tab{
+  display:inline-flex;align-items:center;gap:7px;padding:7px 14px;border-radius:999px;
+  border:1px solid var(--line);background:var(--white);color:var(--ink-soft);cursor:pointer;
+  font-family:var(--sans);font-size:.8rem;font-weight:500;
+}
+.admin-status-tab span{
+  min-width:20px;padding:1px 6px;border-radius:999px;background:var(--cream);font-size:.72rem;font-weight:700;text-align:center;
+}
+.admin-status-tab:hover{border-color:var(--ink);color:var(--ink);}
+.admin-status-tab.is-active{background:var(--ink);border-color:var(--ink);color:var(--white);}
+.admin-status-tab.is-active span{background:rgba(255,255,255,.18);}
+.admin-order-whats{padding:8px 14px;font-size:.78rem;white-space:nowrap;}

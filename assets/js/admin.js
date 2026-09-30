@@ -1747,54 +1747,129 @@
     }
   }
 
+  // abas de status: "Em aberto" (novo + em andamento) é a fila de trabalho do dia e vem por padrão.
+  const ORDER_STATUS_TABS = [
+    { id: 'abertos', label: 'Em aberto', match: (o) => o.status === 'novo' || o.status === 'em_andamento' },
+    { id: 'novo', label: 'Novos', match: (o) => o.status === 'novo' },
+    { id: 'em_andamento', label: 'Em andamento', match: (o) => o.status === 'em_andamento' },
+    { id: 'concluido', label: 'Concluídos', match: (o) => o.status === 'concluido' },
+    { id: 'cancelado', label: 'Cancelados', match: (o) => o.status === 'cancelado' },
+    { id: 'todos', label: 'Todos', match: () => true },
+  ];
+  let orderStatusFilter = 'abertos';
+  const orderStatusTabs = document.getElementById('orderStatusTabs');
+
+  function renderOrderStatusTabs() {
+    orderStatusTabs.innerHTML = ORDER_STATUS_TABS.map((t) => {
+      const count = ORDERS.filter(t.match).length;
+      const active = t.id === orderStatusFilter;
+      return `<button type="button" class="admin-status-tab${active ? ' is-active' : ''}" data-status-tab="${t.id}" aria-pressed="${active}">${t.label} <span>${count}</span></button>`;
+    }).join('');
+  }
+
+  orderStatusTabs.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-status-tab]');
+    if (!btn) return;
+    orderStatusFilter = btn.dataset.statusTab;
+    renderOrderList();
+  });
+
+  const orderCode = (id) => `#${String(id).slice(0, 8).toUpperCase()}`;
+
+  // pedido "novo" há mais de 2h sem virar em_andamento provavelmente não recebeu retorno
+  // no WhatsApp ainda — sinalizado pra não passar batido numa loja de poucas vendas/dia.
+  const isStaleOrder = (o) => o.status === 'novo' && Date.now() - new Date(o.createdAt).getTime() > 2 * 60 * 60 * 1000;
+
+  // telefone digitado pela cliente no checkout ("(31) 99999-0000") → número internacional p/ wa.me
+  function whatsappLinkFor(o) {
+    let digits = String(o.customerPhone || '').replace(/\D/g, '');
+    if (!digits) return '';
+    if (digits.length <= 11) digits = `55${digits}`;
+    const firstName = String(o.customerName || '').trim().split(/\s+/)[0] || '';
+    const text = `Olá${firstName ? `, ${firstName}` : ''}! Aqui é da By NaNa, sobre o seu pedido ${orderCode(o.id)}.`;
+    return `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
+  }
+
+  function orderMatchesTerm(o, term) {
+    if (!term) return true;
+    const items = (o.items || []).map((it) => `${it.name} ${it.variantLabel || ''}`).join(' ');
+    const phoneDigits = String(o.customerPhone || '').replace(/\D/g, '');
+    const haystack = `${o.id} ${orderCode(o.id)} ${o.customerName} ${o.customerPhone} ${phoneDigits} ${items}`.toLowerCase();
+    return haystack.includes(term);
+  }
+
   function renderOrderList() {
     const term = (orderSearch.value || '').trim().toLowerCase();
-    const list = term
-      ? ORDERS.filter((o) => `${o.customerName} ${o.customerPhone}`.toLowerCase().includes(term))
-      : ORDERS;
+    const tab = ORDER_STATUS_TABS.find((t) => t.id === orderStatusFilter) || ORDER_STATUS_TABS[0];
+    // buscando um termo, procura em todos os status — quem busca "#AB12" quer achar o pedido onde estiver
+    const list = ORDERS.filter((o) => (term ? true : tab.match(o)) && orderMatchesTerm(o, term));
 
     orderCount.textContent = ORDERS.length;
+    renderOrderStatusTabs();
     orderList.innerHTML = '';
     if (!list.length) {
-      orderList.innerHTML = '<p class="admin-empty-block">Nenhum pedido encontrado.</p>';
+      let emptyText = 'Nenhum pedido neste status.';
+      if (term) emptyText = 'Nenhum pedido encontrado para essa busca.';
+      else if (orderStatusFilter === 'abertos') emptyText = 'Nenhum pedido em aberto. Tudo em dia!';
+      orderList.innerHTML = `<p class="admin-empty-block">${emptyText}</p>`;
       return;
     }
     list.forEach((o) => {
       const itemsText = (o.items || []).map((it) => `${escapeHtml(it.qty)}x ${escapeHtml(it.name)}${it.variantLabel ? ` (${escapeHtml(it.variantLabel)})` : ''}`).join(', ');
       const when = new Date(o.createdAt).toLocaleString('pt-BR');
-      // pedido "novo" há mais de 2h sem virar em_andamento provavelmente não recebeu retorno
-      // no WhatsApp ainda — sinalizado aqui pra não passar batido numa loja de poucas vendas/dia.
-      const isStale = o.status === 'novo' && Date.now() - new Date(o.createdAt).getTime() > 2 * 60 * 60 * 1000;
+      const isStale = isStaleOrder(o);
       const a = o.address;
       const addressText = a
         ? `${escapeHtml(a.rua || '')}, ${escapeHtml(a.numero || '')}${a.complemento ? ` - ${escapeHtml(a.complemento)}` : ''} - ${escapeHtml(a.bairro || '')}, ${escapeHtml(a.cidade || '')}/${escapeHtml(a.estado || '')} - CEP ${escapeHtml(a.cep || '')}`
         : '';
+      const waHref = whatsappLinkFor(o);
       const div = document.createElement('div');
       div.className = 'admin-order-item';
       div.innerHTML = `
         <div class="admin-order-info">
-          <span class="admin-order-name">${escapeHtml(o.customerName)} · ${escapeHtml(o.customerPhone)}${isStale ? ' <span class="admin-order-stale-badge" title="Sem retorno há mais de 2h">⏰ Aguardando retorno</span>' : ''}${o.paymentStatus && o.paymentStatus !== 'manual' ? ` <span class="admin-order-payment-badge pay-${o.paymentStatus}">${escapeHtml(PAYMENT_STATUS_LABELS[o.paymentStatus] || o.paymentStatus)}</span>` : ''}</span>
+          <span class="admin-order-name"><span class="admin-order-code">${orderCode(o.id)}</span>${escapeHtml(o.customerName)} · ${escapeHtml(o.customerPhone)}${isStale ? ' <span class="admin-order-stale-badge" title="Sem retorno há mais de 2h">⏰ Aguardando retorno</span>' : ''}${o.paymentStatus && o.paymentStatus !== 'manual' ? ` <span class="admin-order-payment-badge pay-${o.paymentStatus}">${escapeHtml(PAYMENT_STATUS_LABELS[o.paymentStatus] || o.paymentStatus)}</span>` : ''}</span>
           <span class="admin-order-meta">${when}${o.couponCode ? ` · cupom ${escapeHtml(o.couponCode)}` : ''} · ${escapeHtml(o.paymentMethod)} · ${escapeHtml(o.deliveryMethod)}${o.shipping ? ` · frete ${money(o.shipping)}` : ''}</span>
           ${addressText ? `<span class="admin-order-address">📍 ${addressText}</span>` : ''}
           <p class="admin-order-items">${itemsText}</p>
           <span class="admin-order-total">${money(o.total)}</span>
         </div>
         <div class="admin-order-actions">
-          <select class="admin-order-status-select st-${o.status}" aria-label="Status do pedido">
+          <select class="admin-order-status-select st-${o.status}" aria-label="Status do pedido ${orderCode(o.id)}">
             ${Object.entries(ORDER_STATUS_LABELS).map(([value, label]) => `<option value="${value}" ${value === o.status ? 'selected' : ''}>${label}</option>`).join('')}
           </select>
+          ${waHref ? `<a class="btn btn-ghost admin-order-whats" href="${escapeHtml(waHref)}" target="_blank" rel="noopener">Chamar no WhatsApp</a>` : ''}
         </div>
       `;
-      div.querySelector('.admin-order-status-select').addEventListener('change', async (e) => {
-        const status = e.target.value;
-        e.target.className = `admin-order-status-select st-${status}`;
+      const select = div.querySelector('.admin-order-status-select');
+      select.addEventListener('change', async () => {
+        const status = select.value;
+        // cancelar devolve o estoque e reativar um cancelado baixa de novo (e os dois avisam a
+        // cliente por e-mail) — um clique errado no select não pode passar direto.
+        let question = '';
+        if (status === 'cancelado') {
+          question = `Cancelar o pedido ${orderCode(o.id)} de ${o.customerName}? As peças voltam para o estoque e a cliente é avisada por e-mail, se tiver informado um.`;
+        } else if (o.status === 'cancelado') {
+          question = `Reativar o pedido ${orderCode(o.id)}? As peças serão baixadas do estoque novamente.`;
+        }
+        if (question) {
+          const ok = await confirmDialog(question, {
+            confirmLabel: status === 'cancelado' ? 'Cancelar pedido' : 'Reativar pedido',
+            danger: status === 'cancelado',
+          });
+          if (!ok) {
+            select.value = o.status;
+            return;
+          }
+        }
+        select.disabled = true;
         try {
           const data = await api('/api/orders/status', 'POST', { id: o.id, status });
           ORDERS = data.orders;
+          toast(`Pedido ${orderCode(o.id)} agora está "${ORDER_STATUS_LABELS[status]}".`);
         } catch (err) {
           toast(err.message, 'error');
-          renderOrderList();
         }
+        renderOrderList();
       });
       orderList.appendChild(div);
     });

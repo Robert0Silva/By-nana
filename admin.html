@@ -568,7 +568,8 @@
       <section class="admin-card admin-card-wide">
         <h2>Pedidos (<span id="orderCount">0</span>)</h2>
         <p class="admin-card-hint">Pedidos fechados pelo cliente na sacola do site, registrados no instante em que ele abre o WhatsApp para confirmar. Atualize o status conforme for atendendo.</p>
-        <input type="search" id="orderSearch" class="admin-search" placeholder="Buscar por nome ou telefone..." />
+        <div class="admin-status-tabs" id="orderStatusTabs" aria-label="Filtrar pedidos por status"></div>
+        <input type="search" id="orderSearch" class="admin-search" placeholder="Buscar por nº do pedido, nome, telefone ou peça..." />
         <div class="admin-order-list" id="orderList"></div>
       </section>
     </section>
