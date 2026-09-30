@@ -673,11 +673,48 @@
       }
     }
     emptyState.hidden = list.length !== 0;
-    list.forEach((p) => grid.appendChild(productCard(p)));
+    // paginação no cliente: mudou filtro/busca/ordem → volta pro 1º bloco; re-render com os
+    // mesmos filtros (ex.: favoritar uma peça) mantém aberto o que a cliente já tinha carregado.
+    const gridKey = [filter, currentSearch, currentCollection, currentSize, currentColor, currentPriceRange, currentSort].join('|');
+    if (gridKey !== lastGridKey) gridVisibleCount = GRID_PAGE_SIZE;
+    lastGridKey = gridKey;
+    currentGridList = list;
+    list.slice(0, gridVisibleCount).forEach((p) => grid.appendChild(productCard(p)));
+    updateLoadMore();
     syncAddButtons();
     renderCategorySeoBlock(filter);
     syncCatalogUrl();
     updateCatalogFilterCount();
+  }
+
+  // ---------- "Ver mais peças" ----------
+  const GRID_PAGE_SIZE = 24;
+  let gridVisibleCount = GRID_PAGE_SIZE;
+  let lastGridKey = '';
+  let currentGridList = [];
+  const loadMoreBtn = document.getElementById('loadMoreBtn');
+
+  function updateLoadMore() {
+    if (!loadMoreBtn) return;
+    const remaining = currentGridList.length - gridVisibleCount;
+    loadMoreBtn.hidden = remaining <= 0;
+    if (remaining > 0) {
+      loadMoreBtn.textContent = `Ver mais peças (${remaining} restante${remaining > 1 ? 's' : ''})`;
+    }
+  }
+
+  if (loadMoreBtn) {
+    loadMoreBtn.addEventListener('click', () => {
+      const start = gridVisibleCount;
+      gridVisibleCount += GRID_PAGE_SIZE;
+      const fresh = currentGridList.slice(start, gridVisibleCount).map((p) => productCard(p));
+      fresh.forEach((card) => grid.appendChild(card));
+      syncAddButtons();
+      updateLoadMore();
+      // foco na 1ª peça nova, pra quem navega por teclado/leitor de tela continuar de onde parou
+      const firstLink = fresh[0] && fresh[0].querySelector('a, button');
+      if (firstLink) firstLink.focus({ preventScroll: true });
+    });
   }
 
   // ---------- filters + search (built dynamically from categories/collections) ----------
@@ -1424,7 +1461,11 @@
         return;
       }
       window.byNanaAnalytics?.trackPurchase(orderId, checkoutTotal, checkoutItems);
-      window.open(waLink(buildOrderMessage(ids)), '_blank', 'noopener');
+      const orderWhatsLink = waLink(buildOrderMessage(ids));
+      // abrir depois de um await pode ser barrado pelo bloqueador de pop-up — a tela de
+      // confirmação sempre oferece o link de novo.
+      window.open(orderWhatsLink, '_blank', 'noopener');
+      showOrderConfirmation(orderId, orderWhatsLink);
       checkoutInFlight = false;
       checkoutBtn.classList.remove('is-loading');
       checkoutBtn.removeAttribute('aria-disabled');
@@ -1438,6 +1479,36 @@
       checkoutBtn.textContent = 'Finalizar no WhatsApp';
       refreshProductData();
     });
+  });
+
+  // ---------- confirmação depois de fechar o pedido ----------
+  // o pedido já reservou o estoque no servidor: a sacola é esvaziada pra evitar pedido duplicado
+  // e a cliente fica com o nº do pedido + o link do WhatsApp à mão.
+  const bagConfirmation = document.getElementById('bagConfirmation');
+  const orderShortCode = (id) => `#${String(id).replace(/^pedido-/, '').slice(0, 8).toUpperCase()}`;
+
+  function showOrderConfirmation(orderId, whatsLink) {
+    document.getElementById('bagConfirmationCode').textContent = orderShortCode(orderId);
+    document.getElementById('bagConfirmationWhats').href = whatsLink;
+    document.getElementById('bagConfirmationOrders').hidden = !currentCustomer;
+    cart = {};
+    saveCart();
+    bagConfirmation.hidden = false;
+    bagDrawer.classList.add('is-confirmed');
+    bagConfirmation.scrollIntoView({ block: 'start' });
+    announce(`Pedido ${orderShortCode(orderId)} registrado.`);
+  }
+
+  function hideOrderConfirmation() {
+    if (!bagConfirmation || bagConfirmation.hidden) return;
+    bagConfirmation.hidden = true;
+    bagDrawer.classList.remove('is-confirmed');
+  }
+
+  document.getElementById('bagConfirmationOrders').addEventListener('click', () => {
+    closeBag();
+    openAccountModal();
+    showProfileTab('pedidos');
   });
 
   // ---------- coupon input ----------
@@ -1492,6 +1563,7 @@
   function renderCart() {
     const keys = Object.keys(cart);
     const totalQty = keys.reduce((sum, key) => sum + cart[key].qty, 0);
+    if (keys.length) hideOrderConfirmation();
     bagCount.textContent = totalQty;
 
     const shipInfo = totalQty > 0 ? freeShippingInfo(keys) : null;
@@ -1788,6 +1860,7 @@
   }
   function closeBag() {
     bagDrawer.classList.remove('is-open');
+    hideOrderConfirmation();
     bagOverlay.classList.remove('is-open');
     closeModalFocus(bagDrawer);
   }
@@ -2312,7 +2385,7 @@
         const statusLabel = PROFILE_ORDER_STATUS_LABELS[o.status] || o.status;
         return `
           <div class="profile-order-item">
-            <div class="profile-order-header"><span>${when}</span><span>${money(o.total)}</span></div>
+            <div class="profile-order-header"><span><strong>${orderShortCode(o.id)}</strong> · ${when}</span><span>${money(o.total)}</span></div>
             <p class="profile-order-items">${itemsText}</p>
             <span class="profile-order-meta">${escapeHtml(o.paymentMethod)} · ${escapeHtml(o.deliveryMethod)}${o.couponCode ? ` · cupom ${escapeHtml(o.couponCode)}` : ''}${o.shipping ? ` · frete ${money(o.shipping)}` : ''}</span>
             <span class="profile-order-status st-${o.status}">${statusLabel}</span>

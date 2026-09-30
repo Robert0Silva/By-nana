@@ -479,6 +479,8 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 .catalog-toolbar-secondary .collection-select{font-size:.82rem;padding:8px 14px;}
 .catalog-toolbar-secondary .btn-sm{align-self:flex-end;}
 .catalog-filter-toggle{display:none;}
+.load-more-wrap{display:flex;justify-content:center;margin-top:36px;}
+.load-more-btn[hidden]{display:none;}
 .catalog-filter-count{
   display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;border-radius:999px;
   background:var(--ink);color:#fff;font-size:.7rem;font-weight:700;
@@ -1439,3 +1441,15 @@ body.pdp-buy-bar-open .float-whats{bottom:88px;}
   .profile-subnav{position:sticky;top:0;z-index:2;display:flex;flex-direction:row;overflow-x:auto;padding:10px 14px;border:0;border-bottom:1px solid var(--line);scrollbar-width:none;}
   .profile-subnav-btn{width:auto;flex:none;padding:9px 12px;}.profile-content{padding:24px 20px 34px;}.profile-fav-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.profile-logout{padding:14px 20px;}
 }
+
+/* ---------- confirmação do pedido dentro da sacola ---------- */
+.bag-confirmation{
+  margin:18px 24px 6px;padding:20px;border-radius:var(--radius-sm);background:#eef6f0;
+  border:1px solid #cfe5d6;display:flex;flex-direction:column;gap:10px;
+}
+.bag-confirmation[hidden]{display:none;}
+.bag-confirmation-title{margin:0;color:var(--ink);font-size:1rem;}
+.bag-confirmation-text{margin:0;font-size:.84rem;}
+.bag-confirmation-orders{align-self:center;}
+.bag-drawer.is-confirmed .bag-foot{display:none;}
+.bag-drawer.is-confirmed .bag-empty{display:none;}

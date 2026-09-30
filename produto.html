@@ -227,6 +227,12 @@
     </button>
   </div>
   <div class="bag-scroll">
+    <div class="bag-confirmation" id="bagConfirmation" role="status" hidden>
+      <p class="bag-confirmation-title">Pedido <strong id="bagConfirmationCode"></strong> registrado 🤍</p>
+      <p class="bag-confirmation-text">Abrimos o WhatsApp com o resumo do seu pedido. É só enviar a mensagem para a gente confirmar disponibilidade, pagamento e entrega.</p>
+      <a class="btn btn-primary btn-block" id="bagConfirmationWhats" href="#" target="_blank" rel="noopener">Abrir o WhatsApp de novo</a>
+      <button type="button" class="account-link bag-confirmation-orders" id="bagConfirmationOrders" hidden>Acompanhar em Minha conta › Pedidos</button>
+    </div>
     <div class="bag-shipping-progress" id="bagShippingProgress" hidden>
       <p class="bag-shipping-progress-text" id="bagShippingProgressText"></p>
       <div class="bag-shipping-progress-track"><span id="bagShippingProgressFill"></span></div>
