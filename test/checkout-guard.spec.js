@@ -107,6 +107,9 @@ test('checkout incompleto mostra validação e não envia pedido', async ({ page
   await page.locator('#bagCheckout').click();
 
   await expect(page.locator('#bagFormError')).toBeVisible();
+  // o primeiro campo com problema é destacado e recebe o foco (não só a mensagem no rodapé)
+  await expect(page.locator('#bagName')).toHaveAttribute('aria-invalid', 'true');
+  await expect(page.locator('#bagName')).toBeFocused();
   expect(orderRequests).toBe(0);
 });
 

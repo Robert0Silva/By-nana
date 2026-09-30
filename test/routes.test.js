@@ -159,7 +159,7 @@ test('CSP não permite scripts ou estilos inline inseguros', async () => {
 });
 
 test('bloqueia acesso anônimo a dados administrativos', async () => {
-  for (const route of ['/api/orders/list', '/api/customers/list', '/api/admin/dashboard']) {
+  for (const route of ['/api/orders/list', '/api/customers/list', '/api/admin/dashboard', '/api/admin/products/list', '/api/products/visibility']) {
     const response = await fetch(`${origin}${route}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -554,6 +554,78 @@ test('cupom válido aplica desconto no pedido; código inexistente é ignorado s
       await pool.query('UPDATE product_variants SET stock = $1 WHERE id = $2', [originalStock, variantId]);
     }
     await pool.query('DELETE FROM coupons WHERE code = $1', [couponCode]);
+    await pool.query('DELETE FROM admin_users WHERE id = $1', [adminId]);
+    await pool.end();
+  }
+});
+
+// Produto oculto (products.active = false) sai da vitrine, da página de produto e do checkout,
+// mas continua visível no painel e pode ser republicado — insere um produto descartável direto
+// no banco pra não mexer na vitrine real.
+test('produto oculto some da loja e do checkout, mas o painel ainda o enxerga e republica', async () => {
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const productId = `teste-oculto-${Date.now()}`;
+  const variantId = crypto.randomUUID();
+  const adminId = crypto.randomUUID();
+  const email = `admin-oculto-${Date.now()}@example.com`;
+  const password = 'senhaDeTeste123';
+  try {
+    const category = await pool.query('SELECT id FROM categories ORDER BY id LIMIT 1');
+    assert.ok(category.rows.length, 'precisa existir ao menos uma categoria');
+    await pool.query(
+      `INSERT INTO products (id, name, category_id, price, img, description, active)
+       VALUES ($1, 'Produto Oculto de Teste', $2, 10, 'assets/img/processed/logo.png', 'teste', false)`,
+      [productId, category.rows[0].id]
+    );
+    await pool.query('INSERT INTO product_variants (id, product_id, size, stock) VALUES ($1, $2, $3, 5)', [variantId, productId, 'U']);
+    await pool.query(
+      'INSERT INTO admin_users (id, name, email, password_hash, role) VALUES ($1,$2,$3,$4,$5)',
+      [adminId, 'Admin Teste', email, hashPasswordForTest(password), 'staff']
+    );
+
+    const publicData = await (await fetch(`${origin}/api/data`)).json();
+    assert.ok(!publicData.products.some((p) => p.id === productId), 'oculto não pode aparecer em /api/data');
+    const page = await fetch(`${origin}/produto/${productId}`);
+    assert.equal(page.status, 404);
+
+    const order = await fetch(`${origin}/api/orders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        customerName: 'Teste Automatizado',
+        customerPhone: `31900${Date.now().toString().slice(-6)}`,
+        items: [{ id: productId, variantId, qty: 1, name: 'Produto Oculto de Teste' }],
+        paymentMethod: 'Pix',
+        deliveryMethod: 'Retirada em loja',
+      }),
+    });
+    assert.equal(order.status, 400, 'checkout não pode vender produto oculto');
+
+    const login = await (await fetch(`${origin}/api/admin/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    })).json();
+    const adminList = await (await fetch(`${origin}/api/admin/products/list`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adminToken: login.token }),
+    })).json();
+    const hidden = adminList.products.find((p) => p.id === productId);
+    assert.ok(hidden, 'o painel precisa listar o produto oculto');
+    assert.equal(hidden.active, false);
+
+    const show = await fetch(`${origin}/api/products/visibility`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adminToken: login.token, id: productId, active: true }),
+    });
+    assert.equal(show.status, 200);
+    const afterShow = await (await fetch(`${origin}/api/data`)).json();
+    assert.ok(afterShow.products.some((p) => p.id === productId), 'republicado deve voltar para /api/data');
+  } finally {
+    await pool.query("DELETE FROM admin_activity_log WHERE entity_id = $1", [productId]).catch(() => {});
+    await pool.query('DELETE FROM products WHERE id = $1', [productId]);
     await pool.query('DELETE FROM admin_users WHERE id = $1', [adminId]);
     await pool.end();
   }

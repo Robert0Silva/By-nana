@@ -1916,7 +1916,8 @@
     renderOrderList();
   });
 
-  const orderCode = (id) => `#${String(id).slice(0, 8).toUpperCase()}`;
+  // ids são "pedido-<uuid>" — o código curto usa o começo do uuid, não o prefixo.
+  const orderCode = (id) => `#${String(id).replace(/^pedido-/, '').slice(0, 8).toUpperCase()}`;
 
   // pedido "novo" há mais de 2h sem virar em_andamento provavelmente não recebeu retorno
   // no WhatsApp ainda — sinalizado pra não passar batido numa loja de poucas vendas/dia.
@@ -2747,7 +2748,7 @@
           <div class="admin-order-item admin-order-item-compact">
             <div class="admin-order-info">
               <span class="admin-order-name">
-                <span class="admin-order-code">#${o.id.slice(0, 8).toUpperCase()}</span>
+                <span class="admin-order-code">${orderCode(o.id)}</span>
                 ${escapeHtml(o.customerName)}
               </span>
               <span class="admin-order-meta">${new Date(o.createdAt).toLocaleString('pt-BR')} · ${money(o.total)}</span>

@@ -725,8 +725,9 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 .bag-chip input{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none;}
 .bag-chip.is-active{background:var(--ink);color:#fff;border-color:var(--ink);}
 .bag-contact-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
-.bag-contact-fields label{display:flex;flex-direction:column;gap:4px;font-size:.74rem;color:var(--ink-soft);font-weight:500;}
+.bag-contact-fields label{display:flex;flex-direction:column;gap:4px;font-size:.74rem;color:var(--ink-soft);font-weight:500;min-width:0;}
 .bag-contact-fields input{
+  width:100%;box-sizing:border-box;min-width:0;
   padding:9px 12px;border-radius:8px;border:1px solid var(--line);
   font-family:var(--sans);font-size:.85rem;background:var(--cream);color:var(--ink);
 }
