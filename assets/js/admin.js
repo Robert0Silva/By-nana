@@ -36,6 +36,79 @@
     return String(str == null ? '' : str).replace(/[&<>"']/g, (c) => ESCAPE_MAP[c]);
   }
 
+  // ---------- feedback: toasts e confirmação próprios (no lugar de alert()/confirm() do navegador) ----------
+  const toastStack = document.createElement('div');
+  toastStack.className = 'admin-toast-stack';
+  toastStack.setAttribute('role', 'status');
+  toastStack.setAttribute('aria-live', 'polite');
+  document.body.appendChild(toastStack);
+
+  // kind: 'success' | 'error' | 'info'. action opcional: { label, onClick } (ex.: "Desfazer").
+  function toast(message, kind = 'success', action = null) {
+    const el = document.createElement('div');
+    el.className = `admin-toast is-${kind}`;
+    el.innerHTML = `<span>${escapeHtml(message)}</span>`;
+    const dismiss = () => el.remove();
+    if (action) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'admin-toast-action';
+      btn.textContent = action.label;
+      btn.addEventListener('click', () => {
+        dismiss();
+        action.onClick();
+      });
+      el.appendChild(btn);
+    }
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'admin-toast-close';
+    close.setAttribute('aria-label', 'Fechar aviso');
+    close.textContent = '✕';
+    close.addEventListener('click', dismiss);
+    el.appendChild(close);
+    toastStack.appendChild(el);
+    setTimeout(dismiss, kind === 'error' ? 8000 : 5000);
+  }
+
+  // Promise<boolean>. options: { confirmLabel, danger }
+  function confirmDialog(message, options = {}) {
+    const { confirmLabel = 'Confirmar', danger = true } = options;
+    return new Promise((resolve) => {
+      const returnFocus = document.activeElement;
+      const overlay = document.createElement('div');
+      overlay.className = 'admin-confirm-overlay';
+      overlay.innerHTML = `
+        <div class="admin-confirm" role="alertdialog" aria-modal="true" aria-labelledby="adminConfirmMsg">
+          <p id="adminConfirmMsg">${escapeHtml(message)}</p>
+          <div class="admin-confirm-actions">
+            <button type="button" class="btn btn-ghost" data-answer="no">Cancelar</button>
+            <button type="button" class="btn ${danger ? 'btn-danger' : 'btn-primary'}" data-answer="yes">${escapeHtml(confirmLabel)}</button>
+          </div>
+        </div>`;
+      const finish = (answer) => {
+        document.removeEventListener('keydown', onKey, true);
+        overlay.remove();
+        if (returnFocus && returnFocus.focus) returnFocus.focus();
+        resolve(answer);
+      };
+      const onKey = (e) => {
+        if (e.key === 'Escape') {
+          e.stopPropagation();
+          finish(false);
+        }
+      };
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) finish(false);
+        const btn = e.target.closest('[data-answer]');
+        if (btn) finish(btn.dataset.answer === 'yes');
+      });
+      document.addEventListener('keydown', onKey, true);
+      document.body.appendChild(overlay);
+      overlay.querySelector('[data-answer="no"]').focus();
+    });
+  }
+
   const formatDate = (iso) => {
     if (!iso) return '';
     const [y, m, d] = iso.split('-');
@@ -341,7 +414,7 @@
           CATEGORY_GROUPS = data.categoryGroups;
           renderCategoryGroupOptions();
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
       row.querySelector('.admin-category-remove').addEventListener('click', async () => {
@@ -349,7 +422,7 @@
         const msg = count
           ? `${count} produto${count > 1 ? 's' : ''} ${count > 1 ? 'usam' : 'usa'} a categoria "${c}" — a remoção vai falhar até você mover ou remover ${count > 1 ? 'esses produtos' : 'esse produto'}. Tentar mesmo assim?`
           : `Remover a categoria "${c}"?`;
-        if (!confirm(msg)) return;
+        if (!(await confirmDialog(msg))) return;
         try {
           const data = await api('/api/categories', 'DELETE', { name: c });
           CATEGORIES = data.categories;
@@ -357,7 +430,7 @@
           renderCategorySelect();
           renderPromoTargetOptions();
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
 
@@ -384,7 +457,7 @@
           const data = await api('/api/categories/seo', 'POST', { name: c, seoText, faq: faqPayload });
           CATEGORY_CONTENT = data.categoryContent;
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
 
@@ -404,7 +477,7 @@
       renderCategorySelect();
       renderPromoTargetOptions();
     } catch (err) {
-      alert(err.message);
+      toast(err.message, 'error');
     }
   });
 
@@ -427,7 +500,7 @@
         const msg = count
           ? `${count} produto${count > 1 ? 's' : ''} ${count > 1 ? 'estão' : 'está'} na coleção "${c}" e ${count > 1 ? 'perderão' : 'perderá'} essa marcação. Remover mesmo assim?`
           : `Remover a coleção "${c}"?`;
-        if (!confirm(msg)) return;
+        if (!(await confirmDialog(msg))) return;
         const data = await api('/api/collections', 'DELETE', { name: c });
         COLLECTIONS = data.collections;
         renderCollections();
@@ -450,7 +523,7 @@
       renderCollectionSelect();
       renderPromoTargetOptions();
     } catch (err) {
-      alert(err.message);
+      toast(err.message, 'error');
     }
   });
 
@@ -900,7 +973,7 @@
       `;
       div.querySelector('.admin-product-item-edit').addEventListener('click', () => startEditProduct(p));
       div.querySelector('.admin-product-item-remove').addEventListener('click', async () => {
-        if (!confirm(`Remover "${p.name}" do catálogo?`)) return;
+        if (!(await confirmDialog(`Remover "${p.name}" do catálogo?`))) return;
         try {
           const data = await api('/api/products', 'DELETE', { id: p.id });
           PRODUCTS = data.products;
@@ -911,7 +984,7 @@
           renderFeaturedList();
           renderUpsellList();
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
       productList.appendChild(div);
@@ -962,7 +1035,7 @@
           PRODUCTS = data.products;
           renderFeaturedList();
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
       div.querySelectorAll('.admin-featured-move').forEach((btn) => {
@@ -972,7 +1045,7 @@
             PRODUCTS = data.products;
             renderFeaturedList();
           } catch (err) {
-            alert(err.message);
+            toast(err.message, 'error');
           }
         });
       });
@@ -1021,7 +1094,7 @@
           PRODUCTS = data.products;
           renderUpsellList();
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
       div.querySelectorAll('.admin-featured-move').forEach((btn) => {
@@ -1031,7 +1104,7 @@
             PRODUCTS = data.products;
             renderUpsellList();
           } catch (err) {
-            alert(err.message);
+            toast(err.message, 'error');
           }
         });
       });
@@ -1122,7 +1195,7 @@
       `;
       div.querySelector('.admin-promo-edit').addEventListener('click', () => startEditPromo(promo));
       div.querySelector('.admin-promo-remove').addEventListener('click', async () => {
-        if (!confirm('Remover esta promoção?')) return;
+        if (!(await confirmDialog('Remover esta promoção?'))) return;
         try {
           const data = await api('/api/promotions', 'DELETE', { id: promo.id });
           PROMOTIONS = data.promotions;
@@ -1130,7 +1203,7 @@
           renderPromoList();
           renderProductList();
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
       promoList.appendChild(div);
@@ -1230,7 +1303,7 @@
       li.innerHTML = `<span>${escapeHtml(c.code)} — ${discountText}${validity}${firstPurchaseTag}</span><button type="button" class="admin-coupon-edit" aria-label="Editar">✎</button><button type="button" aria-label="Remover">✕</button>`;
       li.querySelector('.admin-coupon-edit').addEventListener('click', () => startEditCoupon(c));
       li.querySelector('button:not(.admin-coupon-edit)').addEventListener('click', async () => {
-        if (!confirm(`Remover o cupom "${c.code}"?`)) return;
+        if (!(await confirmDialog(`Remover o cupom "${c.code}"?`))) return;
         const data = await api('/api/coupons', 'DELETE', { code: c.code });
         COUPONS = data.coupons;
         if (couponEditCode.value === c.code) endEditCoupon();
@@ -1328,7 +1401,7 @@
       li.innerHTML = `<span>${ufText}${r.label ? ` — ${escapeHtml(r.label)}` : ''} · ${money(r.price)}${freeText}${inactiveText}</span><button type="button" class="admin-coupon-edit" aria-label="Editar">✎</button><button type="button" aria-label="Remover">✕</button>`;
       li.querySelector('.admin-coupon-edit').addEventListener('click', () => startEditShipping(r));
       li.querySelector('button:not(.admin-coupon-edit)').addEventListener('click', async () => {
-        if (!confirm(`Remover a regra de frete "${ufText}"?`)) return;
+        if (!(await confirmDialog(`Remover a regra de frete "${ufText}"?`))) return;
         const data = await api('/api/shipping-rules', 'DELETE', { id: r.id });
         SHIPPING_RULES = data.shippingRules;
         if (Number(shippingEditId.value) === r.id) endEditShipping();
@@ -1496,13 +1569,13 @@
         </div>
       `;
       div.querySelector('.admin-customer-remove').addEventListener('click', async () => {
-        if (!confirm(`Remover o cadastro de "${c.firstName} ${c.lastName}"?`)) return;
+        if (!(await confirmDialog(`Remover o cadastro de "${c.firstName} ${c.lastName}"?`))) return;
         try {
           const data = await api('/api/customers', 'DELETE', { id: c.id });
           CUSTOMERS = data.customers;
           renderCustomerList();
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
       customerList.appendChild(div);
@@ -1513,7 +1586,7 @@
 
   document.getElementById('customerExport').addEventListener('click', () => {
     if (!CUSTOMERS.length) {
-      alert('Não há clientes para exportar.');
+      toast('Não há clientes para exportar.', 'info');
       return;
     }
     const header = ['Nome', 'Sobrenome', 'E-mail', 'Telefone', 'Recebe novidades', 'Cliente desde'];
@@ -1618,7 +1691,7 @@
             await api('/api/admin/stock-notifications/mark-contacted', 'POST', { id: n.id });
             loadStockNotifications();
           } catch (err) {
-            alert(err.message);
+            toast(err.message, 'error');
             btn.disabled = false;
           }
         });
@@ -1631,7 +1704,7 @@
   if (newsletterExportBtn) {
     newsletterExportBtn.addEventListener('click', () => {
       if (!NEWSLETTER_SUBSCRIBERS.length) {
-        alert('Não há contatos para exportar.');
+        toast('Não há contatos para exportar.', 'info');
         return;
       }
       const header = ['Contato', 'Canal', 'Captado em'];
@@ -1719,7 +1792,7 @@
           const data = await api('/api/orders/status', 'POST', { id: o.id, status });
           ORDERS = data.orders;
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
           renderOrderList();
         }
       });
@@ -1773,7 +1846,7 @@
         </div>
       `;
       div.querySelector('button').addEventListener('click', async () => {
-        if (!confirm('Remover essa avaliação?')) return;
+        if (!(await confirmDialog('Remover essa avaliação?'))) return;
         const data = await api('/api/reviews', 'DELETE', { id: r.id });
         REVIEWS = data.reviews;
         renderReviewList();
@@ -1955,7 +2028,7 @@
           STORIES = data.stories;
           renderStoryList();
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
       div.querySelectorAll('.admin-story-move').forEach((btn) => {
@@ -1965,7 +2038,7 @@
             STORIES = data.stories;
             renderStoryList();
           } catch (err) {
-            alert(err.message);
+            toast(err.message, 'error');
           }
         });
       });
@@ -1975,17 +2048,17 @@
           STORIES = data.stories;
           renderStoryList();
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
       div.querySelector('.admin-story-remove').addEventListener('click', async () => {
-        if (!confirm('Remover este story?')) return;
+        if (!(await confirmDialog('Remover este story?'))) return;
         try {
           const data = await api('/api/stories', 'DELETE', { id: s.id });
           STORIES = data.stories;
           renderStoryList();
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
       storyList.appendChild(div);
@@ -2044,7 +2117,7 @@
           ADMIN_USERS = data.adminUsers;
           renderAdminUserList();
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
       adminUserList.appendChild(div);
