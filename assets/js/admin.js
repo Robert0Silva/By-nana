@@ -297,8 +297,24 @@
       return true;
   }
 
+  // ---------- menu recolhível (celular/tablet; no desktop o botão fica escondido via CSS) ----------
+  const adminSidebar = document.querySelector('.admin-sidebar');
+  const adminMenuToggle = document.getElementById('adminMenuToggle');
+  function setAdminMenu(open) {
+    adminSidebar.classList.toggle('is-open', open);
+    adminMenuToggle.setAttribute('aria-expanded', String(open));
+    document.getElementById('adminMenuLabel').textContent = open ? 'Fechar' : 'Menu';
+  }
+  adminMenuToggle.addEventListener('click', () => setAdminMenu(!adminSidebar.classList.contains('is-open')));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && adminSidebar.classList.contains('is-open')) setAdminMenu(false);
+  });
+
   document.querySelectorAll('.admin-tab').forEach((btn) => {
-    btn.addEventListener('click', () => activateAdminPanel(btn.dataset.target));
+    btn.addEventListener('click', () => {
+      setAdminMenu(false);
+      activateAdminPanel(btn.dataset.target);
+    });
   });
 
   document.querySelectorAll('[data-admin-jump]').forEach((button) => {
