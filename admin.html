@@ -243,14 +243,14 @@
     </section>
 
     <section class="admin-panel" id="panel-produtos" hidden>
-      <section class="admin-card admin-card-wide admin-product-editor">
+      <section class="admin-card admin-card-wide admin-product-editor" id="productEditorCard" hidden>
         <div class="admin-product-editor-head">
           <div>
             <span class="admin-eyebrow" id="productFormEyebrow">Novo produto</span>
             <h2 id="productFormTitle">Cadastre o produto completo</h2>
             <p class="admin-card-hint">Informações, foto, grade e estoque são salvos juntos.</p>
           </div>
-          <button type="button" class="btn btn-ghost" id="pCancelEdit" hidden>Fechar edição</button>
+          <button type="button" class="btn btn-ghost" id="pCancelEdit">← Voltar para a lista</button>
         </div>
         <div class="admin-product-progress" aria-live="polite">
           <div><span id="pCompletionLabel">0% preenchido</span><span id="pCompletionHint">Comece pelo nome e pela categoria.</span></div>
@@ -386,7 +386,7 @@
         </form>
       </section>
 
-      <section class="admin-card admin-card-wide">
+      <section class="admin-card admin-card-wide" id="productListCard">
         <div class="admin-list-heading">
           <div><h2>Produtos no catálogo (<span id="productCount">0</span>)</h2><p class="admin-card-hint">Edite informações, grade e estoque no mesmo lugar.</p></div>
           <button type="button" class="btn btn-primary" id="pNewProduct">＋ Novo produto</button>

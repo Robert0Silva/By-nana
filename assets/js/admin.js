@@ -272,9 +272,16 @@
   const pageTitleEl = document.getElementById('adminPageTitle');
   const pageSubtitleEl = document.getElementById('adminPageSubtitle');
 
-  function activateAdminPanel(target) {
+  // async porque sair do editor de produto com alterações não salvas pede confirmação;
+  // showProductList: indo pra "Produtos", fecha o editor e mostra a lista (ex.: busca global).
+  async function activateAdminPanel(target, { showProductList = false } = {}) {
       const btn = document.querySelector(`.admin-tab[data-target="${target}"]`);
-      if (!btn) return;
+      if (!btn) return false;
+      const leavingEditor = !productEditorCard.hidden && (target !== 'produtos' || showProductList);
+      if (leavingEditor) {
+        if (!(await confirmLeaveEditor())) return false;
+        endEditProduct();
+      }
       document.querySelectorAll('.admin-tab').forEach((b) => b.classList.toggle('is-active', b === btn));
       document.querySelectorAll('.admin-panel').forEach((p) => {
         p.hidden = p.id !== `panel-${target}`;
@@ -285,6 +292,7 @@
       if (pageSubtitleEl) pageSubtitleEl.textContent = TAB_SUBTITLES[target] || '';
       if (TAB_LOAD_HANDLERS[target]) TAB_LOAD_HANDLERS[target]();
       window.scrollTo({ top: 0, behavior: 'smooth' });
+      return true;
   }
 
   document.querySelectorAll('.admin-tab').forEach((btn) => {
@@ -292,9 +300,9 @@
   });
 
   document.querySelectorAll('[data-admin-jump]').forEach((button) => {
-    button.addEventListener('click', () => {
-      activateAdminPanel(button.dataset.adminJump);
-      if (button.dataset.newProduct === 'true') endEditProduct(true);
+    button.addEventListener('click', async () => {
+      if (!(await activateAdminPanel(button.dataset.adminJump))) return;
+      if (button.dataset.newProduct === 'true') openNewProduct();
     });
   });
 
@@ -303,10 +311,10 @@
   // ---------- busca global do topo (atalho pra busca de produtos) ----------
   const globalSearchForm = document.getElementById('globalSearchForm');
   if (globalSearchForm) {
-    globalSearchForm.addEventListener('submit', (e) => {
+    globalSearchForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       const term = document.getElementById('globalSearch').value.trim();
-      activateAdminPanel('produtos');
+      if (!(await activateAdminPanel('produtos', { showProductList: true }))) return;
       const target = document.getElementById('productSearch');
       if (target) {
         target.value = term;
@@ -588,6 +596,9 @@
   let imageDataUrl = '';
   let editorVariants = [];
   let galleryImages = [];
+  // fotos escolhidas antes do 1º salvamento de um produto novo (ainda sem id no servidor):
+  // ficam só no navegador e são enviadas logo depois que o produto é criado.
+  let pendingGallery = [];
   const gradePresets = {
     clothing: ['PP', 'P', 'M', 'G', 'GG', 'XGG'],
     shoes_feminino: ['33', '34', '35', '36', '37', '38', '39', '40', '41', '42'],
@@ -620,12 +631,30 @@
   }
 
   function renderGallery() {
-    pGalleryGrid.innerHTML = galleryImages.map((img) => `
+    const isNew = !pEditId.value;
+    const saved = galleryImages.map((img) => `
       <div class="admin-gallery-thumb">
-        <img src="${img.url}" alt="" />
-        <button type="button" class="admin-gallery-remove" data-id="${img.id}" aria-label="Remover foto">✕</button>
+        <img src="${escapeHtml(img.url)}" alt="" />
+        <button type="button" class="admin-gallery-remove" data-id="${escapeHtml(img.id)}" aria-label="Remover foto">✕</button>
       </div>
-    `).join('');
+    `);
+    const pending = isNew
+      ? pendingGallery.map((dataUrl, index) => `
+      <div class="admin-gallery-thumb is-pending">
+        <img src="${dataUrl}" alt="" />
+        <span class="admin-gallery-pending-tag">ao salvar</span>
+        <button type="button" class="admin-gallery-remove-pending" data-index="${index}" aria-label="Remover foto">✕</button>
+      </div>
+    `)
+      : [];
+    pGalleryGrid.innerHTML = [...saved, ...pending].join('');
+    pGalleryGrid.querySelectorAll('.admin-gallery-remove-pending').forEach((button) => {
+      button.addEventListener('click', () => {
+        pendingGallery.splice(Number(button.dataset.index), 1);
+        markEditorDirty();
+        renderGallery();
+      });
+    });
     pGalleryGrid.querySelectorAll('.admin-gallery-remove').forEach((button) => {
       button.addEventListener('click', async () => {
         button.disabled = true;
@@ -639,30 +668,57 @@
         }
       });
     });
-    const full = galleryImages.length >= PRODUCT_GALLERY_MAX_EXTRA;
-    pGalleryInput.disabled = !pEditId.value || full;
-    pGalleryHint.textContent = !pEditId.value
-      ? 'Salve o produto antes de enviar a galeria'
-      : full
-        ? `Limite de ${PRODUCT_GALLERY_MAX_EXTRA} fotos extras atingido`
-        : `${galleryImages.length}/${PRODUCT_GALLERY_MAX_EXTRA} fotos extras`;
+    const count = isNew ? pendingGallery.length : galleryImages.length;
+    const full = count >= PRODUCT_GALLERY_MAX_EXTRA;
+    pGalleryInput.disabled = full;
+    if (full) pGalleryHint.textContent = `Limite de ${PRODUCT_GALLERY_MAX_EXTRA} fotos extras atingido`;
+    else if (isNew) pGalleryHint.textContent = `${count}/${PRODUCT_GALLERY_MAX_EXTRA} — enviadas junto ao salvar o produto`;
+    else pGalleryHint.textContent = `${count}/${PRODUCT_GALLERY_MAX_EXTRA} fotos extras`;
+  }
+
+  const readFileAsDataUrl = (file) => new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.readAsDataURL(file);
+  });
+
+  // envia as fotos pendentes de um produto recém-criado; devolve quantas falharam.
+  async function uploadPendingGallery(productId) {
+    let failed = 0;
+    for (const image of pendingGallery) {
+      try {
+        await api('/api/products/images', 'POST', { productId, image });
+      } catch {
+        failed += 1;
+      }
+    }
+    pendingGallery = [];
+    return failed;
   }
 
   pGalleryInput.addEventListener('change', async () => {
     const files = Array.from(pGalleryInput.files || []);
     pGalleryInput.value = '';
-    if (!files.length || !pEditId.value) return;
+    if (!files.length) return;
     setGalleryMsg('', '');
+    if (!pEditId.value) {
+      for (const file of files) {
+        if (pendingGallery.length >= PRODUCT_GALLERY_MAX_EXTRA) {
+          setGalleryMsg(`Limite de ${PRODUCT_GALLERY_MAX_EXTRA} fotos extras atingido.`, 'error');
+          break;
+        }
+        pendingGallery.push(await readFileAsDataUrl(file));
+      }
+      markEditorDirty();
+      renderGallery();
+      return;
+    }
     for (const file of files) {
       if (galleryImages.length >= PRODUCT_GALLERY_MAX_EXTRA) {
         setGalleryMsg(`Limite de ${PRODUCT_GALLERY_MAX_EXTRA} fotos extras atingido.`, 'error');
         break;
       }
-      const image = await new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.readAsDataURL(file);
-      });
+      const image = await readFileAsDataUrl(file);
       try {
         const data = await api('/api/products/images', 'POST', { productId: pEditId.value, image });
         galleryImages = data.gallery || [];
@@ -813,14 +869,13 @@
     productFormEyebrow.textContent = 'Editando produto';
     productFormTitle.textContent = p.name;
     pSubmit.textContent = 'Salvar produto completo';
-    pCancelEdit.hidden = false;
     setMsg('', '');
     editorVariants = [];
     renderEditorVariants();
     galleryImages = [];
+    pendingGallery = [];
     renderGallery();
-    renderProductList();
-    productForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    showProductEditor(true);
     try {
       const data = await api('/api/products/variants/list', 'POST', { productId: p.id });
       if (pEditId.value !== p.id) return;
@@ -833,7 +888,30 @@
     }
   }
 
-  function endEditProduct(scroll = false) {
+  // ---------- editor em tela própria: a lista aparece primeiro; o editor abre por cima dela ----------
+  const productEditorCard = document.getElementById('productEditorCard');
+  const productListCard = document.getElementById('productListCard');
+  let editorDirty = false;
+
+  function markEditorDirty() {
+    editorDirty = true;
+  }
+
+  function showProductEditor(show) {
+    productEditorCard.hidden = !show;
+    productListCard.hidden = show;
+    editorDirty = false;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (show) document.getElementById('pName').focus({ preventScroll: true });
+  }
+
+  // true = pode sair (editor fechado, sem alterações ou a pessoa confirmou descartar)
+  async function confirmLeaveEditor() {
+    if (productEditorCard.hidden || !editorDirty) return true;
+    return confirmDialog('Existem alterações não salvas neste produto. Sair e descartar?', { confirmLabel: 'Descartar alterações' });
+  }
+
+  function resetProductEditor() {
     pEditId.value = '';
     productForm.reset();
     document.getElementById('pBrand').value = 'By NaNa';
@@ -843,17 +921,37 @@
     productFormEyebrow.textContent = 'Novo produto';
     productFormTitle.textContent = 'Cadastre o produto completo';
     pSubmit.textContent = 'Salvar produto completo';
-    pCancelEdit.hidden = true;
+    setMsg('', '');
     editorVariants = [];
     renderEditorVariants();
     galleryImages = [];
+    pendingGallery = [];
     renderGallery();
-    renderProductList();
-    if (scroll) productForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
-  pCancelEdit.addEventListener('click', () => endEditProduct());
-  pNewProduct.addEventListener('click', () => endEditProduct(true));
+  function openNewProduct() {
+    resetProductEditor();
+    showProductEditor(true);
+  }
+
+  // fecha o editor e volta pra lista (sem perguntar — quem chama já decidiu)
+  function endEditProduct() {
+    resetProductEditor();
+    showProductEditor(false);
+    renderProductList();
+  }
+
+  productForm.addEventListener('input', markEditorDirty);
+  productForm.addEventListener('change', markEditorDirty);
+  [pGenerateGrade, pAddVariant].forEach((btn) => btn.addEventListener('click', markEditorDirty));
+  window.addEventListener('beforeunload', (e) => {
+    if (!productEditorCard.hidden && editorDirty) e.preventDefault();
+  });
+
+  pCancelEdit.addEventListener('click', async () => {
+    if (await confirmLeaveEditor()) endEditProduct();
+  });
+  pNewProduct.addEventListener('click', openNewProduct);
   renderEditorVariants();
   renderGallery();
 
@@ -920,6 +1018,11 @@
         COLLECTIONS = data.collections;
         renderCategories();
         renderCollections();
+        if (pendingGallery.length) {
+          pSubmit.textContent = 'Enviando galeria...';
+          const failed = await uploadPendingGallery(data.product.id);
+          if (failed) toast(`${failed} foto${failed > 1 ? 's' : ''} da galeria não ${failed > 1 ? 'puderam' : 'pôde'} ser enviada${failed > 1 ? 's' : ''} — abra o produto e tente de novo.`, 'error');
+        }
       }
       renderCategorySelect();
       renderCollectionSelect();
@@ -930,8 +1033,9 @@
 
       const wasEditing = editing;
       endEditProduct();
+      renderDashTodo();
       const savedHidden = !payload.active;
-      setMsg(wasEditing ? 'Produto atualizado ✓' : savedHidden ? 'Rascunho salvo — o produto está oculto na loja ✓' : 'Produto publicado no catálogo ✓', 'ok');
+      toast(wasEditing ? `"${payload.name}" atualizado.` : savedHidden ? `Rascunho de "${payload.name}" salvo — oculto na loja.` : `"${payload.name}" publicado no catálogo.`);
     } catch (err) {
       setMsg(err.message, 'error');
     } finally {
@@ -2602,9 +2706,9 @@
         text: `${newOrders.length} pedido${newOrders.length > 1 ? 's' : ''} novo${newOrders.length > 1 ? 's' : ''} para responder`
           + (staleOrders.length ? ` — ${staleOrders.length} há mais de 2h sem retorno` : ''),
         action: 'Ver pedidos',
-        onClick: () => {
+        onClick: async () => {
+          if (!(await activateAdminPanel('pedidos'))) return;
           orderStatusFilter = 'novo';
-          activateAdminPanel('pedidos');
           renderOrderList();
         },
       });
@@ -2613,8 +2717,8 @@
     const visible = PRODUCTS.filter((p) => p.active !== false);
     const emptyProducts = visible.filter((p) => productStockState(p) === 'empty');
     const lowProducts = visible.filter((p) => productStockState(p) === 'low');
-    const jumpToProducts = (status) => () => {
-      activateAdminPanel('produtos');
+    const jumpToProducts = (status) => async () => {
+      if (!(await activateAdminPanel('produtos', { showProductList: true }))) return;
       productStatusFilter.value = status;
       renderProductList();
       productList.scrollIntoView({ behavior: 'smooth', block: 'start' });

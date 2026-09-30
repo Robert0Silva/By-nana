@@ -801,3 +801,12 @@
 .admin-todo-text{flex:1 1 220px;font-size:.86rem;color:var(--ink);}
 .admin-todo-action{padding:7px 14px;font-size:.78rem;}
 .admin-todo-done{margin:0;font-size:.88rem;color:#2f7d4f;font-weight:500;}
+
+/* ---------- galeria pendente (produto novo, enviada ao salvar) ---------- */
+.admin-gallery-thumb.is-pending img{opacity:.75;}
+.admin-gallery-pending-tag{
+  position:absolute;left:6px;bottom:6px;padding:2px 7px;border-radius:999px;
+  background:var(--ink);color:#fff;font-size:.6rem;font-weight:600;text-transform:uppercase;letter-spacing:.03em;
+}
+.admin-gallery-remove-pending{position:absolute;top:4px;right:4px;display:grid;place-items:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:rgba(28,22,18,.72);color:#fff;cursor:pointer;font-size:.7rem;}
+.admin-gallery-remove-pending:hover{background:var(--wine);}
