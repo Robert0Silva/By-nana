@@ -238,6 +238,7 @@
     // precisa esperar dados que a maioria das sessões nem chega a ver.
     pedidos: () => loadOrders(),
     clientes: () => loadCustomers(),
+    carrinhos: () => loadAbandonedCarts(),
     stories: () => loadStories(),
     imagens: () => loadSiteImages(),
     usuarios: () => loadAdminUsers(),
@@ -259,6 +260,7 @@
     stories: 'Carrossel de vídeo no topo do site',
     pedidos: 'Pedidos fechados pelo WhatsApp',
     clientes: 'Cadastros feitos pelos clientes',
+    carrinhos: 'Sacolas com e-mail que não viraram pedido',
     frete: 'Regras de frete por estado',
     avaliacoes: 'Avaliações enviadas por clientes',
     'rel-vendas': 'Receita e pedidos por período',
@@ -1974,6 +1976,80 @@
       URL.revokeObjectURL(url);
     });
   }
+
+  // ---------- carrinhos abandonados ----------
+  let ABANDONED_CARTS = [];
+  let abandonedFilter = 'open';
+  const abandonedList = document.getElementById('abandonedList');
+  const abandonedCount = document.getElementById('abandonedCount');
+  const abandonedStats = document.getElementById('abandonedStats');
+  const abandonedTabs = document.getElementById('abandonedTabs');
+  const ABANDONED_TABS = [
+    { id: 'open', label: 'Sem pedido', match: (c) => !c.convertedAt },
+    { id: 'converted', label: 'Recuperados', match: (c) => !!c.convertedAt },
+    { id: 'all', label: 'Todos', match: () => true },
+  ];
+
+  async function loadAbandonedCarts() {
+    try {
+      const data = await api('/api/admin/abandoned-carts/list', 'POST', {});
+      ABANDONED_CARTS = data.carts || [];
+      renderAbandonedCarts();
+    } catch (err) {
+      abandonedList.innerHTML = `<p class="admin-empty-block">${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  function renderAbandonedCarts() {
+    const open = ABANDONED_CARTS.filter((c) => !c.convertedAt);
+    const converted = ABANDONED_CARTS.length - open.length;
+    const openValue = open.reduce((sum, c) => sum + Number(c.subtotal || 0), 0);
+    const rate = ABANDONED_CARTS.length ? Math.round((converted / ABANDONED_CARTS.length) * 100) : 0;
+    abandonedCount.textContent = open.length;
+    abandonedStats.innerHTML = [
+      ['Sem pedido', open.length],
+      ['Valor parado nas sacolas', money(openValue)],
+      ['Taxa de recuperação', `${rate}%`],
+    ].map(([label, value]) => `<div class="admin-stat-card"><span class="admin-stat-label">${label}</span><span class="admin-stat-value">${value}</span></div>`).join('');
+
+    abandonedTabs.innerHTML = ABANDONED_TABS.map((t) => {
+      const active = t.id === abandonedFilter;
+      return `<button type="button" class="admin-status-tab${active ? ' is-active' : ''}" data-abandoned-tab="${t.id}" aria-pressed="${active}">${t.label} <span>${ABANDONED_CARTS.filter(t.match).length}</span></button>`;
+    }).join('');
+
+    const tab = ABANDONED_TABS.find((t) => t.id === abandonedFilter) || ABANDONED_TABS[0];
+    const list = ABANDONED_CARTS.filter(tab.match);
+    if (!list.length) {
+      abandonedList.innerHTML = '<p class="admin-empty-block">Nenhum carrinho por aqui nos últimos 30 dias.</p>';
+      return;
+    }
+    abandonedList.innerHTML = list.map((c) => {
+      const items = (c.items || []).map((it) => `${escapeHtml(it.qty)}x ${escapeHtml(it.name)}`).join(', ');
+      const when = new Date(c.updatedAt).toLocaleString('pt-BR');
+      let status = '<span class="admin-order-payment-badge pay-pending">Lembrete na fila</span>';
+      if (c.convertedAt) status = '<span class="admin-order-payment-badge pay-paid">Virou pedido</span>';
+      else if (c.remindedAt) status = '<span class="admin-order-payment-badge pay-refunded">Lembrete enviado</span>';
+      const firstName = String(c.customerName || '').trim().split(/\s+/)[0];
+      const subject = encodeURIComponent('Sua sacola na By NaNa');
+      const bodyText = encodeURIComponent(`Olá${firstName ? `, ${firstName}` : ''}! Vi que você separou ${(c.items || []).map((it) => it.name).join(', ')} na By NaNa. Posso te ajudar com tamanho, cor ou entrega?`);
+      return `
+        <div class="admin-customer-item">
+          <div class="admin-customer-info">
+            <span class="admin-customer-name">${escapeHtml(c.customerName || 'Sem nome')} ${status}</span>
+            <span class="admin-customer-meta">${escapeHtml(c.email)} · ${when} · ${money(c.subtotal)}</span>
+            <span class="admin-customer-meta">${items}</span>
+          </div>
+          ${c.convertedAt ? '' : `<a class="btn btn-outline btn-sm" href="mailto:${escapeHtml(c.email)}?subject=${subject}&body=${bodyText}">Escrever e-mail</a>`}
+        </div>`;
+    }).join('');
+  }
+
+  abandonedTabs.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-abandoned-tab]');
+    if (!btn) return;
+    abandonedFilter = btn.dataset.abandonedTab;
+    renderAbandonedCarts();
+  });
 
   // ---------- pedidos (fechados no checkout do site) ----------
   const orderList = document.getElementById('orderList');

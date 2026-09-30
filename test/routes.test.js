@@ -159,7 +159,7 @@ test('CSP não permite scripts ou estilos inline inseguros', async () => {
 });
 
 test('bloqueia acesso anônimo a dados administrativos', async () => {
-  for (const route of ['/api/orders/list', '/api/customers/list', '/api/admin/dashboard', '/api/admin/products/list', '/api/products/visibility']) {
+  for (const route of ['/api/orders/list', '/api/customers/list', '/api/admin/dashboard', '/api/admin/products/list', '/api/products/visibility', '/api/admin/abandoned-carts/list']) {
     const response = await fetch(`${origin}${route}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

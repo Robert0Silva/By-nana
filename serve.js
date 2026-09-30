@@ -1125,6 +1125,24 @@ async function handleApi(req, res, pathname) {
       return sendJSON(res, 201, { ok: true });
     }
 
+    // carrinhos com e-mail informado na sacola que não viraram pedido (e os que viraram, pra
+    // medir recuperação) — últimos 30 dias. O lembrete automático continua em sweepAbandonedCarts.
+    if (pathname === '/api/admin/abandoned-carts/list' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      const { rows } = await pool.query(
+        `SELECT id, contact_email AS "email", customer_name AS "customerName", items, subtotal,
+                reminded_at AS "remindedAt", converted_at AS "convertedAt",
+                updated_at AS "updatedAt", created_at AS "createdAt"
+           FROM abandoned_carts
+          WHERE updated_at >= now() - interval '30 days'
+          ORDER BY updated_at DESC
+          LIMIT 300`
+      );
+      return sendJSON(res, 200, { carts: rows });
+    }
+
     if (pathname === '/api/admin/stock-notifications/list' && req.method === 'POST') {
       const body = await readJSONBody(req);
       const admin = await requireAdmin(body);

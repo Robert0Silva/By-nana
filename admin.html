@@ -80,6 +80,7 @@
         <div class="admin-tab-submenu" id="submenu-vendas">
           <button type="button" class="admin-tab" data-target="pedidos">Pedidos</button>
           <button type="button" class="admin-tab" data-target="clientes">Clientes</button>
+          <button type="button" class="admin-tab" data-target="carrinhos">Carrinhos abandonados</button>
           <button type="button" class="admin-tab" data-target="frete">Frete</button>
           <button type="button" class="admin-tab" data-target="avaliacoes">Avaliações</button>
         </div>
@@ -598,6 +599,16 @@
           <button type="button" id="customerExport" class="btn btn-outline">Exportar CSV</button>
         </div>
         <div class="admin-customer-list" id="customerList"></div>
+      </section>
+    </section>
+
+    <section class="admin-panel" id="panel-carrinhos" hidden>
+      <section class="admin-card admin-card-wide">
+        <h2>Carrinhos abandonados (<span id="abandonedCount">0</span>)</h2>
+        <p class="admin-card-hint">Clientes que informaram o e-mail na sacola e não fecharam o pedido (últimos 30 dias). O site manda um lembrete automático por e-mail depois de 2h sem atividade; aqui você acompanha e pode fazer um contato pessoal.</p>
+        <div class="admin-stat-grid admin-abandoned-stats" id="abandonedStats"></div>
+        <div class="admin-status-tabs" id="abandonedTabs" aria-label="Filtrar carrinhos"></div>
+        <div class="admin-customer-list" id="abandonedList"></div>
       </section>
     </section>
 
