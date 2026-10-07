@@ -982,6 +982,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 }
 .profile-order-status.st-novo{background:#fdf1dc;color:var(--camel);}
 .profile-order-status.st-em_andamento{background:#fdf1dc;color:var(--camel);}
+.profile-order-status.st-enviado{background:#e3eefb;color:#24507f;}
 .profile-order-status.st-concluido{background:#e4f3e9;color:#2f7d4f;}
 .profile-order-status.st-cancelado{background:#f7e3d8;color:var(--wine);}
 .profile-address-item{
@@ -1453,3 +1454,30 @@ body.pdp-buy-bar-open .float-whats{bottom:88px;}
 .bag-confirmation-orders{align-self:center;}
 .bag-drawer.is-confirmed .bag-foot{display:none;}
 .bag-drawer.is-confirmed .bag-empty{display:none;}
+
+/* ---------- foto de produto horizontal (sapato/bolsa) aparece inteira, sem corte ---------- */
+.pdp-gallery-main img.is-landscape,
+.product-media img.is-landscape,
+.pdp-thumb img.is-landscape,
+.bag-item img.is-landscape{object-fit:contain;background:var(--white);}
+
+/* ---------- aviso de cookies (só aparece com GA4/Meta Pixel configurados) ---------- */
+.cookie-banner{
+  position:fixed;left:16px;right:16px;bottom:calc(16px + env(safe-area-inset-bottom, 0px));z-index:200;
+  max-width:560px;margin:0 auto;padding:16px 18px;border-radius:var(--radius-sm);
+  background:var(--white);color:var(--ink);box-shadow:0 12px 40px rgba(30,28,26,.18);
+  display:flex;flex-direction:column;gap:12px;
+}
+.cookie-banner p{margin:0;font-size:.85rem;line-height:1.5;}
+.cookie-banner a{color:var(--gold-text);text-decoration:underline;}
+.cookie-banner-actions{display:flex;gap:10px;justify-content:flex-end;}
+.cookie-btn{
+  min-height:44px;padding:0 18px;border-radius:999px;border:1px solid var(--ink);
+  background:transparent;color:var(--ink);font:inherit;font-size:.8rem;font-weight:600;cursor:pointer;
+}
+.cookie-btn.is-primary{background:var(--ink);color:var(--white);}
+
+/* ---------- celular: campos com 16px (abaixo disso o iPhone dá zoom ao tocar no campo) ---------- */
+@media (max-width:720px){
+  input:not([type=radio]):not([type=checkbox]),select,textarea{font-size:16px;}
+}

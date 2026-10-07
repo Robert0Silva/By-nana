@@ -45,36 +45,81 @@
     state.meta = true;
   }
 
+  // ---------- consentimento (LGPD) ----------
+  // GA4 e Meta Pixel gravam cookies de medição/publicidade: só carregam depois que a
+  // visitante aceita. A escolha fica no navegador; "Recusar" mantém a loja funcionando igual.
+  const CONSENT_KEY = 'bynana_cookie_consent';
+
+  function readConsent() {
+    try { return localStorage.getItem(CONSENT_KEY); } catch { return null; }
+  }
+
+  function saveConsent(value) {
+    try { localStorage.setItem(CONSENT_KEY, value); } catch { /* modo privado: vale só nesta visita */ }
+  }
+
+  function askConsent(onAccept) {
+    const banner = document.createElement('div');
+    banner.className = 'cookie-banner';
+    banner.setAttribute('role', 'region');
+    banner.setAttribute('aria-label', 'Aviso de cookies');
+    banner.innerHTML = `
+      <p>Usamos cookies de medição e anúncios (Google e Meta) para entender as visitas e melhorar a loja. Você escolhe. <a href="/politica-privacidade.html">Saiba mais</a></p>
+      <div class="cookie-banner-actions">
+        <button type="button" class="cookie-btn" data-consent="denied">Recusar</button>
+        <button type="button" class="cookie-btn is-primary" data-consent="granted">Aceitar</button>
+      </div>`;
+    banner.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-consent]');
+      if (!btn) return;
+      saveConsent(btn.dataset.consent);
+      banner.remove();
+      if (btn.dataset.consent === 'granted') onAccept();
+    });
+    document.body.appendChild(banner);
+  }
+
+  async function startTracking(config) {
+    if (config.ga4MeasurementId) await initGA4(config.ga4MeasurementId);
+    if (config.metaPixelId) await initMetaPixel(config.metaPixelId);
+  }
+
   async function init() {
     try {
       const res = await fetch('/api/public-config', { cache: 'no-store' });
       if (!res.ok) return;
       const config = await res.json();
-      if (config.ga4MeasurementId) await initGA4(config.ga4MeasurementId);
-      if (config.metaPixelId) await initMetaPixel(config.metaPixelId);
+      // sem nenhum ID configurado não há cookie de terceiro, então nem pergunta
+      if (!config.ga4MeasurementId && !config.metaPixelId) return;
+      const consent = readConsent();
+      if (consent === 'granted') await startTracking(config);
+      else if (consent !== 'denied') askConsent(() => startTracking(config));
     } catch {
       // sem config alcançável, o site segue funcionando sem tracking — nunca deve travar a loja.
     }
   }
 
-  function toItem(p, variant) {
+  // price = preço efetivo (com promoção) que a cliente está vendo; p.price é o preço cheio.
+  function toItem(p, variant, price) {
     return {
       item_id: p.id,
       item_name: p.name,
       item_variant: variant ? [variant.size, variant.color].filter(Boolean).join(' / ') : undefined,
-      price: Number(p.price || 0),
+      price: Number(price ?? p.price ?? 0),
       quantity: 1,
     };
   }
 
   window.byNanaAnalytics = {
-    trackViewItem(p) {
-      if (state.ga4) gtag('event', 'view_item', { currency: 'BRL', value: Number(p.price || 0), items: [toItem(p)] });
-      if (state.meta) fbq('track', 'ViewContent', { content_ids: [p.id], content_name: p.name, currency: 'BRL', value: Number(p.price || 0) });
+    trackViewItem(p, price) {
+      const value = Number(price ?? p.price ?? 0);
+      if (state.ga4) gtag('event', 'view_item', { currency: 'BRL', value, items: [toItem(p, null, price)] });
+      if (state.meta) fbq('track', 'ViewContent', { content_ids: [p.id], content_name: p.name, currency: 'BRL', value });
     },
-    trackAddToCart(p, variant) {
-      if (state.ga4) gtag('event', 'add_to_cart', { currency: 'BRL', value: Number(p.price || 0), items: [toItem(p, variant)] });
-      if (state.meta) fbq('track', 'AddToCart', { content_ids: [p.id], content_name: p.name, currency: 'BRL', value: Number(p.price || 0) });
+    trackAddToCart(p, variant, price) {
+      const value = Number(price ?? p.price ?? 0);
+      if (state.ga4) gtag('event', 'add_to_cart', { currency: 'BRL', value, items: [toItem(p, variant, price)] });
+      if (state.meta) fbq('track', 'AddToCart', { content_ids: [p.id], content_name: p.name, currency: 'BRL', value });
     },
     trackBeginCheckout(total) {
       if (state.ga4) gtag('event', 'begin_checkout', { currency: 'BRL', value: Number(total || 0) });
@@ -84,6 +129,14 @@
       const gaItems = (items || []).map((it) => ({ item_id: it.id, item_name: it.name, price: Number(it.price || 0), quantity: it.qty || 1 }));
       if (state.ga4) gtag('event', 'purchase', { transaction_id: orderId, currency: 'BRL', value: Number(total || 0), items: gaItems });
       if (state.meta) fbq('track', 'Purchase', { content_ids: (items || []).map((it) => it.id), currency: 'BRL', value: Number(total || 0) });
+    },
+    // Pedido fechado pelo WhatsApp: é um lead qualificado (com valor), não uma compra — o
+    // pagamento ainda vai ser combinado na conversa.
+    trackWhatsappOrder(orderId, total, items) {
+      const value = Number(total || 0);
+      const gaItems = (items || []).map((it) => ({ item_id: it.id, item_name: it.name, price: Number(it.price || 0), quantity: it.qty || 1 }));
+      if (state.ga4) gtag('event', 'generate_lead', { source: 'whatsapp_order', transaction_id: orderId, currency: 'BRL', value, items: gaItems });
+      if (state.meta) fbq('track', 'Lead', { content_name: 'whatsapp_order', content_ids: (items || []).map((it) => it.id), currency: 'BRL', value });
     },
     trackLead(source) {
       if (state.ga4) gtag('event', 'generate_lead', { source });

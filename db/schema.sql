@@ -233,7 +233,7 @@ CREATE TABLE IF NOT EXISTS orders (
   payment_method  TEXT NOT NULL,
   delivery_method TEXT NOT NULL,
   address         JSONB,
-  status          TEXT NOT NULL DEFAULT 'novo' CHECK (status IN ('novo', 'em_andamento', 'concluido', 'cancelado')),
+  status          TEXT NOT NULL DEFAULT 'novo' CHECK (status IN ('novo', 'em_andamento', 'enviado', 'concluido', 'cancelado')),
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
@@ -364,3 +364,10 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
 -- Permite invalidar imediatamente tokens antigos depois de uma troca de senha.
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 0;
+
+-- Status "enviado" (com código de rastreio) entre "em andamento" e "concluído": a cliente é
+-- avisada por e-mail com o rastreio. Recria o CHECK em bancos criados antes desse status.
+ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check;
+ALTER TABLE orders ADD CONSTRAINT orders_status_check
+  CHECK (status IN ('novo', 'em_andamento', 'enviado', 'concluido', 'cancelado'));
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_code TEXT;

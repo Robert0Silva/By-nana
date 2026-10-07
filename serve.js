@@ -8,7 +8,7 @@ const sharp = require('sharp');
 const { Pool, types } = require('pg');
 const { sendEmail } = require('./email');
 const PromoEngine = require('./assets/js/promo.js');
-const { getActiveProvider } = require('./payment-provider');
+const { getActiveProvider, CHECKOUT_EXPIRATION_HOURS } = require('./payment-provider');
 
 // Valor exato de paymentMethod que o front usa pra sinalizar "quero pagar agora, online" (ver
 // index.html/produto.html) — as demais opções (Pix combinado, dinheiro etc.) continuam indo
@@ -35,8 +35,26 @@ pool.on('error', (err) => console.error('[pg pool] erro em client ocioso:', err.
 const root = __dirname;
 const port = Number(process.env.PORT) || 8787;
 const host = process.env.HOST || '0.0.0.0';
-const uploadDir = path.join(root, 'assets/img/processed');
-const videosDir = path.join(root, 'assets/videos');
+// UPLOAD_DIR (opcional): pasta FORA do código, num disco persistente (ex.: Render Disk montado
+// em /var/data). Sem ela, fotos/vídeos enviados pelo painel vão pra dentro do projeto — e no
+// plano free do Render esse disco é apagado a cada deploy/reinício, levando as fotos junto.
+// As URLs públicas continuam as mesmas (assets/img/processed/..., assets/videos/...): o
+// servidor procura primeiro no UPLOAD_DIR e depois nos arquivos do repositório.
+const persistentUploadDir = process.env.UPLOAD_DIR ? path.resolve(process.env.UPLOAD_DIR) : null;
+const PERSISTED_ASSET_PREFIXES = ['assets/img/processed/', 'assets/videos/'];
+
+// Caminho em disco de um asset enviado pelo painel ("assets/img/processed/x.jpg").
+function assetDiskPath(rel) {
+  const clean = String(rel || '').replace(/^\/+/, '');
+  if (persistentUploadDir && PERSISTED_ASSET_PREFIXES.some((prefix) => clean.startsWith(prefix))) {
+    return path.join(persistentUploadDir, clean.slice('assets/'.length));
+  }
+  return path.join(root, clean);
+}
+
+const uploadDir = assetDiskPath('assets/img/processed/');
+const videosDir = assetDiskPath('assets/videos/');
+fs.mkdirSync(uploadDir, { recursive: true });
 fs.mkdirSync(videosDir, { recursive: true });
 const MAX_STORY_VIDEO_BYTES = 25 * 1024 * 1024; // 25MB — mantém a duração dos stories curta (~30s)
 
@@ -260,8 +278,11 @@ function normalizeVariantPayload(input) {
     const sku = String(variant.sku || '').trim() || null;
     const stock = Math.max(0, Number.parseInt(variant.stock, 10) || 0);
     const measurements = String(variant.measurements || '').trim() || null;
+    // estoque que o painel tinha quando o produto foi aberto (ver syncProductVariants)
+    const expected = Number.parseInt(variant.expectedStock, 10);
+    const expectedStock = Number.isFinite(expected) ? expected : null;
     if (!size) throw new Error('Todas as variações precisam de um tamanho');
-    return { id: String(variant.id || '').trim(), size, color, sku, stock, measurements };
+    return { id: String(variant.id || '').trim(), size, color, sku, stock, measurements, expectedStock };
   });
   if (!variants.length) throw new Error('Adicione ao menos um tamanho à grade');
   const combinations = new Set(variants.map((variant) =>
@@ -284,6 +305,12 @@ async function syncProductVariants(client, productId, variants, adminUserId) {
     const variant = variants[position];
     if (variant.id && currentById.has(variant.id)) {
       const previous = currentById.get(variant.id);
+      // O editor manda o estoque absoluto digitado. Se houve venda (ou outro ajuste) desde que
+      // o produto foi aberto, gravar esse número apagaria a baixa e reabriria peças já vendidas.
+      if (variant.expectedStock != null && variant.expectedStock !== previous.stock) {
+        const label = variant.color ? `${variant.size} (${variant.color})` : variant.size;
+        throw new Error(`O estoque do tamanho ${label} mudou para ${previous.stock} enquanto o produto estava aberto (venda ou outro ajuste). Reabra o produto e confira antes de salvar.`);
+      }
       retainedIds.add(variant.id);
       await client.query(
         'UPDATE product_variants SET size=$1, color=$2, sku=$3, stock=$4, position=$5, measurements=$6 WHERE id=$7',
@@ -339,6 +366,27 @@ async function recordInventoryMovement(client, { variantId, type, quantity, stoc
   );
 }
 
+// Devolve ao estoque as peças reservadas por um pedido. Roda dentro da transação de quem chama
+// (cancelamento no admin, webhook de pagamento recusado/estornado, expiração de pendentes) —
+// o pedido já deve estar travado com FOR UPDATE pra não devolver duas vezes.
+async function restockOrderItems(client, orderId, items, { adminUserId = null, note } = {}) {
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item.variantId) continue;
+    const qty = Math.max(0, Math.floor(Number(item.qty) || 0));
+    const updated = await client.query(
+      'UPDATE product_variants SET stock=stock+$1 WHERE id=$2 RETURNING stock',
+      [qty, item.variantId]
+    );
+    if (updated.rowCount) {
+      await recordInventoryMovement(client, {
+        variantId: item.variantId, type: 'cancellation', quantity: qty,
+        stockAfter: updated.rows[0].stock, orderId, adminUserId,
+        note: note || `Cancelamento do pedido ${orderId}`,
+      });
+    }
+  }
+}
+
 async function getInventoryMovements(productId, limit = 40) {
   const { rows } = await pool.query(
     `SELECT m.id, m.variant_id AS "variantId", v.size, v.color, m.movement_type AS "type",
@@ -357,31 +405,76 @@ async function getInventoryMovements(productId, limit = 40) {
 const ORDER_STATUS_LABELS = {
   novo: 'Recebido',
   em_andamento: 'Em andamento',
+  enviado: 'Enviado',
   concluido: 'Concluído',
   cancelado: 'Cancelado',
 };
 
 const money = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
-function buildOrderConfirmationHtml({ id, customerName, items, total, deliveryMethod }) {
-  const rows = items
-    .map((item) => `<li>${escapeHtml(item.qty)}x ${escapeHtml(item.name)}${item.variantLabel ? ` (${escapeHtml(item.variantLabel)})` : ''}</li>`)
+// Mesmo código curto que a cliente vê na sacola e na mensagem do WhatsApp (#AC0A8A7B) — é por
+// ele que a loja casa a conversa com o pedido no painel.
+const orderShortCode = (id) => `#${String(id).replace(/^pedido-/, '').slice(0, 8).toUpperCase()}`;
+
+// Transições de payment_status aceitas vindas do gateway. Pago só vira estornado; estornado é
+// final; recusado ainda pode virar pago (cliente tentou de novo e pagou depois).
+function isAllowedPaymentTransition(from, to) {
+  if (from === to) return true;
+  if (from === 'refunded') return false;
+  if (from === 'paid') return to === 'refunded';
+  if (from === 'failed') return to === 'paid';
+  return true;
+}
+
+function formatOrderAddress(a) {
+  if (!a) return '';
+  return `${a.rua}, ${a.numero}${a.complemento ? ` - ${a.complemento}` : ''} - ${a.bairro}, ${a.cidade}/${a.estado} - CEP ${a.cep}`;
+}
+
+function buildOrderSummaryHtml(order) {
+  const rows = order.items
+    .map((item) => `<li>${escapeHtml(item.qty)}x ${escapeHtml(item.name)}${item.variantLabel ? ` (${escapeHtml(item.variantLabel)})` : ''} — ${item.price == null ? 'sob consulta' : money(item.price)}</li>`)
     .join('');
   return `
-    <p>Olá, ${escapeHtml(customerName)}!</p>
-    <p>Recebemos seu pedido <strong>${escapeHtml(id)}</strong> na By NaNa. Aqui está o resumo:</p>
     <ul>${rows}</ul>
-    <p><strong>Total: ${money(total)}</strong></p>
-    <p>Forma de entrega: ${escapeHtml(deliveryMethod)}</p>
-    <p>Assim que o status do pedido mudar, avisamos por aqui.</p>
+    <p>Subtotal: ${money(order.subtotal)}${order.discount ? `<br>Desconto${order.discountLabel ? ` (${escapeHtml(order.discountLabel)})` : ''}: - ${money(order.discount)}` : ''}${order.deliveryMethod === 'Entrega' ? `<br>Frete: ${order.shipping ? money(order.shipping) : 'grátis'}` : ''}</p>
+    <p><strong>Total: ${money(order.total)}</strong></p>
+    <p>Pagamento: ${escapeHtml(order.paymentMethod)}<br>Entrega: ${escapeHtml(order.deliveryMethod)}${order.address ? `<br>Endereço: ${escapeHtml(formatOrderAddress(order.address))}` : ''}</p>
   `;
 }
 
-function buildOrderStatusHtml({ id, customerName, status }) {
+// "Recebido", não "confirmado": no fluxo manual a loja ainda confirma disponibilidade e
+// pagamento pelo WhatsApp, e no online o pagamento pode nem ter sido feito ainda.
+function buildOrderConfirmationHtml(order) {
+  const nextStep = order.isOnlinePayment
+    ? 'Assim que o pagamento for aprovado, você recebe outro e-mail por aqui.'
+    : 'Agora é só enviar a mensagem que abrimos no WhatsApp para a gente confirmar disponibilidade, pagamento e entrega.';
+  return `
+    <p>Olá, ${escapeHtml(order.customerName)}!</p>
+    <p>Recebemos seu pedido <strong>${escapeHtml(orderShortCode(order.id))}</strong> na By NaNa. Aqui está o resumo:</p>
+    ${buildOrderSummaryHtml(order)}
+    <p>${nextStep}</p>
+  `;
+}
+
+function buildNewOrderNotificationHtml(order) {
+  return `
+    <p><strong>Novo pedido ${escapeHtml(orderShortCode(order.id))}</strong> no site.</p>
+    <p>Cliente: ${escapeHtml(order.customerName)}<br>Telefone: ${escapeHtml(order.customerPhone)}${order.customerEmail ? `<br>E-mail: ${escapeHtml(order.customerEmail)}` : ''}</p>
+    ${buildOrderSummaryHtml(order)}
+    <p>O estoque já foi reservado. Se a cliente não chamar no WhatsApp, vale entrar em contato.</p>
+  `;
+}
+
+function buildOrderStatusHtml({ id, customerName, status, trackingCode }) {
   const label = ORDER_STATUS_LABELS[status] || status;
+  const tracking = status === 'enviado' && trackingCode
+    ? `<p>Código de rastreio: <strong>${escapeHtml(trackingCode)}</strong><br>Acompanhe em <a href="https://rastreamento.correios.com.br/app/index.php">rastreamento.correios.com.br</a> (ou no site da transportadora).</p>`
+    : '';
   return `
     <p>Olá, ${escapeHtml(customerName)}!</p>
-    <p>O status do seu pedido <strong>${escapeHtml(id)}</strong> na By NaNa foi atualizado para: <strong>${escapeHtml(label)}</strong>.</p>
+    <p>O status do seu pedido <strong>${escapeHtml(orderShortCode(id))}</strong> na By NaNa foi atualizado para: <strong>${escapeHtml(label)}</strong>.</p>
+    ${tracking}
   `;
 }
 
@@ -390,6 +483,15 @@ function buildPaymentApprovedHtml({ id, customerName }) {
     <p>Olá, ${escapeHtml(customerName)}!</p>
     <p>Recebemos a confirmação: o pagamento do seu pedido <strong>${escapeHtml(id)}</strong> foi aprovado. ✅</p>
     <p>Já vamos preparar tudo — avisamos por aqui quando o status mudar.</p>
+  `;
+}
+
+function buildPaymentNotCompletedHtml({ id, customerName, reason }) {
+  const whatsapp = (process.env.WHATSAPP_NUMBER || '5531973053380').replace(/\D/g, '');
+  return `
+    <p>Olá, ${escapeHtml(customerName)}!</p>
+    <p>O pagamento do seu pedido <strong>${escapeHtml(orderShortCode(id))}</strong> na By NaNa ${escapeHtml(reason)}, então o pedido foi cancelado e as peças voltaram para a vitrine.</p>
+    <p>Se ainda quiser as peças, é só montar a sacola de novo no site ou falar com a gente no WhatsApp: <a href="https://wa.me/${whatsapp}">wa.me/${whatsapp}</a>.</p>
   `;
 }
 
@@ -476,7 +578,8 @@ const getAdminProducts = () => getProducts({ includeHidden: true });
 // checagem de rota), só a soma de estoque e o resumo de avaliação que o JSON-LD precisa.
 async function getProductMeta(id) {
   const { rows } = await pool.query(
-    `SELECT p.id, p.name, p.price, p.img, p.description AS desc,
+    `SELECT p.id, p.name, p.brand, p.price, p.img, p.description AS desc,
+            c.name AS category, COALESCE(col.name, '') AS collection,
             COALESCE(v.variant_count, 0) > 0 AS "hasVariants",
             COALESCE(v.total_stock, 0) AS "totalStock",
             r.rating, r.review_count AS "reviewCount"
@@ -489,6 +592,8 @@ async function getProductMeta(id) {
          SELECT product_id, ROUND(AVG(rating)::numeric, 1) AS rating, COUNT(*)::int AS review_count
          FROM product_reviews GROUP BY product_id
        ) r ON r.product_id = p.id
+       JOIN categories c ON c.id = p.category_id
+       LEFT JOIN collections col ON col.id = p.collection_id
       WHERE p.id = $1 AND p.active`,
     [id]
   );
@@ -497,7 +602,7 @@ async function getProductMeta(id) {
 
 // schema.org Product/Offer/AggregateRating — permite rich snippet (preço, disponibilidade,
 // estrelas) direto no resultado de busca do Google, sem depender de nenhuma lib externa.
-function buildProductJsonLd(product, { origin, canonical }) {
+function buildProductJsonLd(product, { origin, canonical, price }) {
   const soldOut = product.hasVariants && Number(product.totalStock) <= 0;
   const data = {
     '@context': 'https://schema.org',
@@ -505,7 +610,7 @@ function buildProductJsonLd(product, { origin, canonical }) {
     name: product.name,
     description: (product.desc || '').slice(0, 5000) || undefined,
     image: [`${origin}/${product.img}`],
-    brand: { '@type': 'Brand', name: 'By NaNa' },
+    brand: { '@type': 'Brand', name: product.brand || 'By NaNa' },
   };
   // "Sob consulta" (preço combinado no WhatsApp, sem valor cadastrado) não tem preço real pra
   // declarar — omitir o Offer é mais correto pro Google do que anunciar price:"0.00", que o
@@ -515,7 +620,9 @@ function buildProductJsonLd(product, { origin, canonical }) {
       '@type': 'Offer',
       url: canonical,
       priceCurrency: 'BRL',
-      price: Number(product.price).toFixed(2),
+      // preço efetivo (com promoção vigente), o mesmo que a página mostra — o Google
+      // penaliza/reprova quando o preço do dado estruturado diverge do visível
+      price: Number(price ?? product.price).toFixed(2),
       availability: soldOut ? 'https://schema.org/OutOfStock' : 'https://schema.org/InStock',
     };
   }
@@ -631,6 +738,13 @@ async function getCoupons() {
   return rows;
 }
 
+// Só o cupom de boas-vindas vigente é divulgado na vitrine (faixa do topo); os demais —
+// inativos, agendados, de parceiras — só são revelados quando alguém digita o código certo
+// (POST /api/coupons/validate). Antes /api/data entregava a tabela inteira de cupons.
+function publicCoupons(coupons) {
+  return coupons.filter((c) => c.firstPurchaseOnly && PromoEngine.findCoupon([c], c.code));
+}
+
 async function getShippingRules() {
   const { rows } = await pool.query(`
     SELECT id, uf, label, price, free_above AS "freeAbove", active
@@ -690,7 +804,8 @@ async function getOrders() {
     SELECT id, customer_name AS "customerName", customer_phone AS "customerPhone",
            items, subtotal, discount, shipping, total, coupon_code AS "couponCode",
            payment_method AS "paymentMethod", delivery_method AS "deliveryMethod",
-           address, status, payment_status AS "paymentStatus", created_at AS "createdAt"
+           address, status, payment_status AS "paymentStatus", tracking_code AS "trackingCode",
+           created_at AS "createdAt"
     FROM orders
     ORDER BY created_at DESC
     LIMIT 300
@@ -702,7 +817,7 @@ async function getCustomerOrders(customerId) {
   const { rows } = await pool.query(
     `SELECT id, items, subtotal, discount, shipping, total, coupon_code AS "couponCode",
             payment_method AS "paymentMethod", delivery_method AS "deliveryMethod",
-            status, created_at AS "createdAt"
+            status, tracking_code AS "trackingCode", created_at AS "createdAt"
      FROM orders
      WHERE customer_id = $1
      ORDER BY created_at DESC
@@ -762,17 +877,22 @@ function sendJSON(res, status, obj) {
 function readBody(req, maxBytes) {
   return new Promise((resolve, reject) => {
     let size = 0;
-    const chunks = [];
+    let chunks = [];
     req.on('data', (chunk) => {
+      if (!chunks) return; // já estourou: só drena o resto, sem guardar na memória
       size += chunk.length;
       if (size > maxBytes) {
+        // Descarta em vez de req.destroy(): derrubar o socket impedia o 413 ("Arquivo muito
+        // grande") de chegar ao navegador, que via só um erro de rede genérico.
+        chunks = null;
         reject(new Error('payload too large'));
-        req.destroy();
         return;
       }
       chunks.push(chunk);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('end', () => {
+      if (chunks) resolve(Buffer.concat(chunks));
+    });
     req.on('error', reject);
   });
 }
@@ -819,6 +939,47 @@ function loginRateLimited(req, email) {
 
 function resetLoginAttempts(req, email) {
   loginAttempts.delete(`${clientIp(req)}:${email}`);
+}
+
+// ---------- rate limit das rotas públicas que gravam dados ou disparam e-mail ----------
+// /api/orders reserva estoque na hora e /api/cart-activity agenda e-mail — sem limite, um script
+// zera o estoque da loja com pedidos falsos ou usa o domínio da loja pra mandar spam. Mesmo
+// modelo em memória do login (reinicia com o processo), contado por IP + nome do balde.
+const publicRequestCounters = new Map();
+
+function publicRateLimited(req, bucket, max, windowMs) {
+  const key = `${bucket}:${clientIp(req)}`;
+  const now = Date.now();
+  const entry = publicRequestCounters.get(key);
+  if (!entry || now - entry.firstAt > windowMs) {
+    publicRequestCounters.set(key, { count: 1, firstAt: now });
+    return false;
+  }
+  entry.count += 1;
+  return entry.count > max;
+}
+
+setInterval(() => {
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  for (const [key, entry] of publicRequestCounters) if (entry.firstAt < cutoff) publicRequestCounters.delete(key);
+}, 10 * 60 * 1000).unref();
+
+// Corpo máximo das rotas públicas (pedido, newsletter, cupom...). Uploads do admin continuam
+// usando o limite padrão de readJSONBody, que comporta imagens em base64.
+const PUBLIC_BODY_LIMIT = 100 * 1024;
+
+const ORDER_RATE_LIMIT_MAX = 10;
+const ORDER_RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
+const ORDER_MAX_LINES = 20;
+const ORDER_MAX_QTY_PER_LINE = 10;
+
+// Telefone só com dígitos, DDD + número (10 ou 11 dígitos), sem o 55 do país. É a chave usada
+// pra reconhecer "primeira compra" de visitante — "(31) 99999-0000" e "31999990000" são a mesma
+// pessoa. Retorna null quando não forma um telefone brasileiro válido.
+function normalizePhoneDigits(value) {
+  let digits = String(value || '').replace(/[^0-9]/g, '');
+  if ((digits.length === 12 || digits.length === 13) && digits.startsWith('55')) digits = digits.slice(2);
+  return digits.length === 10 || digits.length === 11 ? digits : null;
 }
 
 // ---------- admin auth (login multiusuário: e-mail+senha, token assinado, papéis) ----------
@@ -1072,7 +1233,10 @@ async function handleApi(req, res, pathname) {
 
     // ------ newsletter (captura de contato fora de uma compra, pra campanha de e-mail/WhatsApp) ------
     if (pathname === '/api/newsletter' && req.method === 'POST') {
-      const body = await readJSONBody(req);
+      if (publicRateLimited(req, 'newsletter', 10, 60 * 60 * 1000)) {
+        return sendJSON(res, 429, { error: 'Muitas tentativas. Aguarde um pouco.' });
+      }
+      const body = await readJSONBody(req, PUBLIC_BODY_LIMIT);
       const contact = String(body.contact || '').trim();
       const channel = body.channel === 'whatsapp' ? 'whatsapp' : body.channel === 'email' ? 'email' : null;
       if (!channel) return sendJSON(res, 400, { error: 'Canal inválido' });
@@ -1102,7 +1266,10 @@ async function handleApi(req, res, pathname) {
 
     // ------ "avise-me quando chegar" (pedido de aviso de reposição por variação esgotada) ------
     if (pathname === '/api/stock-notify' && req.method === 'POST') {
-      const body = await readJSONBody(req);
+      if (publicRateLimited(req, 'stock-notify', 20, 60 * 60 * 1000)) {
+        return sendJSON(res, 429, { error: 'Muitas tentativas. Aguarde um pouco.' });
+      }
+      const body = await readJSONBody(req, PUBLIC_BODY_LIMIT);
       const variantId = String(body.variantId || '').trim();
       const contact = String(body.contact || '').trim();
       const channel = body.channel === 'whatsapp' ? 'whatsapp' : body.channel === 'email' ? 'email' : null;
@@ -1172,7 +1339,10 @@ async function handleApi(req, res, pathname) {
 
     // ------ carrinho abandonado (captura silenciosa pro lembrete por e-mail — ver sweepAbandonedCarts) ------
     if (pathname === '/api/cart-activity' && req.method === 'POST') {
-      const body = await readJSONBody(req);
+      // Cada e-mail novo aqui vira um lembrete enviado pelo domínio da loja: poucos endereços
+      // distintos por IP bastam pra uso real (a sacola reenvia o mesmo e-mail a cada mudança).
+      if (publicRateLimited(req, 'cart-activity', 60, 60 * 60 * 1000)) return sendJSON(res, 429, { error: 'Muitas requisições' });
+      const body = await readJSONBody(req, PUBLIC_BODY_LIMIT);
       const email = String(body.email || '').trim().toLowerCase();
       const items = Array.isArray(body.items) ? body.items.slice(0, 50) : [];
       const subtotal = Number(body.subtotal);
@@ -1188,6 +1358,20 @@ async function handleApi(req, res, pathname) {
         [crypto.randomUUID(), email, name, JSON.stringify(items), subtotal]
       );
       return sendJSON(res, 201, { ok: true });
+    }
+
+    // ------ validação de cupom digitado na sacola ------
+    // A lista de cupons não vai mais inteira pro navegador (ver publicCoupons): o código digitado
+    // é conferido aqui, um por vez e com limite de tentativas, pra não dar pra varrer códigos.
+    if (pathname === '/api/coupons/validate' && req.method === 'POST') {
+      if (publicRateLimited(req, 'coupon-validate', 30, 10 * 60 * 1000)) {
+        return sendJSON(res, 429, { error: 'Muitas tentativas. Aguarde alguns minutos.' });
+      }
+      const body = await readJSONBody(req, PUBLIC_BODY_LIMIT);
+      const code = String(body.code || '').trim().slice(0, 40);
+      const coupon = PromoEngine.findCoupon(await getCoupons(), code);
+      if (!coupon) return sendJSON(res, 404, { error: 'Cupom inválido ou expirado.' });
+      return sendJSON(res, 200, { coupon });
     }
 
     // ------ catalog ------
@@ -1207,7 +1391,7 @@ async function handleApi(req, res, pathname) {
         getBestSellers(),
       ]);
       return sendJSON(res, 200, {
-        products, categories, collections, promotions, coupons, shippingRules, categoryGroups,
+        products, categories, collections, promotions, coupons: publicCoupons(coupons), shippingRules, categoryGroups,
         categoryContent, stories, novidades, upsell, bestSellers,
         whatsappNumber: (process.env.WHATSAPP_NUMBER || '5531973053380').replace(/\D/g, ''),
         onlinePaymentEnabled: !!getActiveProvider(),
@@ -1778,6 +1962,11 @@ async function handleApi(req, res, pathname) {
             await client.query('ROLLBACK');
             return sendJSON(res, 404, { error: 'Variação não encontrada' });
           }
+          const expected = Number.parseInt(body.expectedStock, 10);
+          if (Number.isFinite(expected) && expected !== current.rows[0].stock) {
+            await client.query('ROLLBACK');
+            return sendJSON(res, 409, { error: `O estoque deste tamanho mudou para ${current.rows[0].stock} desde que a lista foi aberta (venda ou outro ajuste). Atualize a página e confira antes de salvar.` });
+          }
           wasOutOfStock = current.rows[0].stock <= 0;
           result = await client.query(
             'UPDATE product_variants SET size=$1, color=$2, sku=$3, stock=$4 WHERE id=$5 RETURNING product_id AS "productId"',
@@ -2188,9 +2377,13 @@ async function handleApi(req, res, pathname) {
 
     // ------ orders (pedidos fechados no checkout do site, antes de abrir o WhatsApp) ------
     if (pathname === '/api/orders' && req.method === 'POST') {
-      const body = await readJSONBody(req);
-      const customerName = (body.customerName || '').trim();
-      const customerPhone = (body.customerPhone || '').trim();
+      if (publicRateLimited(req, 'orders', ORDER_RATE_LIMIT_MAX, ORDER_RATE_LIMIT_WINDOW_MS)) {
+        return sendJSON(res, 429, { error: 'Muitos pedidos em sequência. Aguarde alguns minutos ou fale com a gente no WhatsApp.' });
+      }
+      const body = await readJSONBody(req, PUBLIC_BODY_LIMIT);
+      const customerName = String(body.customerName || '').trim().slice(0, 120);
+      const customerPhone = String(body.customerPhone || '').trim().slice(0, 30);
+      const customerPhoneDigits = normalizePhoneDigits(customerPhone);
       const customerEmailRaw = (body.customerEmail || '').trim();
       const customerEmail = /^\S+@\S+\.\S+$/.test(customerEmailRaw) ? customerEmailRaw : null;
       const paymentMethod = (body.paymentMethod || '').trim();
@@ -2199,11 +2392,19 @@ async function handleApi(req, res, pathname) {
       if (!customerName || !customerPhone || !paymentMethod || !deliveryMethod || !rawItems.length) {
         return sendJSON(res, 400, { error: 'Dados do pedido incompletos' });
       }
+      if (!customerPhoneDigits) {
+        return sendJSON(res, 400, { error: 'Informe um telefone com DDD, ex.: (31) 90000-0000' });
+      }
+      if (rawItems.length > ORDER_MAX_LINES || rawItems.some((item) => Number(item && item.qty) > ORDER_MAX_QTY_PER_LINE)) {
+        return sendJSON(res, 400, { error: `Para pedidos com mais de ${ORDER_MAX_QTY_PER_LINE} unidades da mesma peça, fale com a gente no WhatsApp` });
+      }
       if (!['Entrega', 'Retirada em loja'].includes(deliveryMethod)) {
         return sendJSON(res, 400, { error: 'Forma de entrega inválida' });
       }
       const couponCodeInput = (body.couponCode || '').trim().toUpperCase() || null;
-      const address = body.address && typeof body.address === 'object' ? body.address : null;
+      const address = body.address && typeof body.address === 'object'
+        ? Object.fromEntries(['cep', 'rua', 'numero', 'complemento', 'bairro', 'cidade', 'estado'].map((field) => [field, String(body.address[field] || '').trim().slice(0, 120)]))
+        : null;
       if (deliveryMethod === 'Entrega') {
         const requiredAddressFields = ['cep', 'rua', 'numero', 'bairro', 'cidade', 'estado'];
         const missingAddress = !address || requiredAddressFields.some((field) => !String(address[field] || '').trim());
@@ -2240,7 +2441,11 @@ async function handleApi(req, res, pathname) {
       if (coupon && coupon.firstPurchaseOnly) {
         const priorOrder = customerId
           ? await pool.query("SELECT 1 FROM orders WHERE customer_id = $1 AND status != 'cancelado' LIMIT 1", [customerId])
-          : await pool.query("SELECT 1 FROM orders WHERE customer_phone = $1 AND status != 'cancelado' LIMIT 1", [customerPhone]);
+          : await pool.query(
+            `SELECT 1 FROM orders
+              WHERE right(regexp_replace(customer_phone, '[^0-9]', '', 'g'), 11) = $1 AND status != 'cancelado' LIMIT 1`,
+            [customerPhoneDigits]
+          );
         if (priorOrder.rowCount) coupon = null;
       }
 
@@ -2252,6 +2457,7 @@ async function handleApi(req, res, pathname) {
       let shippingCost;
       let total;
       let isOnlinePayment;
+      let discountInfo;
       try {
         await client.query('BEGIN');
         items = [];
@@ -2262,7 +2468,7 @@ async function handleApi(req, res, pathname) {
             return sendJSON(res, 400, { error: `Escolha um tamanho válido para ${item.name || 'o produto'}` });
           }
           const locked = await client.query(
-            `SELECT v.id, v.stock, v.size, p.id AS "productId", p.name, p.price,
+            `SELECT v.id, v.stock, v.size, v.color, p.id AS "productId", p.name, p.price,
                     c.name AS category, COALESCE(col.name, '') AS collection
                FROM product_variants v
                JOIN products p ON p.id = v.product_id
@@ -2300,14 +2506,16 @@ async function handleApi(req, res, pathname) {
             listPrice: variant.price,
             promoId: best ? best.promo.id : null,
             variantId: variant.id,
-            variantLabel: typeof item.variantLabel === 'string' ? item.variantLabel : null,
+            // rótulo montado do banco (mesmo formato do variantLabel() da vitrine), não o texto
+            // enviado pelo navegador — é ele que a loja lê pra separar a peça
+            variantLabel: [variant.size, variant.color].filter(Boolean).join(' - ') || null,
           });
         }
 
         const itemCount = items.reduce((sum, it) => sum + (it.price != null ? it.qty : 0), 0);
         subtotal = items.reduce((sum, it) => sum + (it.price != null ? it.price * it.qty : 0), 0);
-        const discountInfo = PromoEngine.bestDiscount(subtotal, { coupon, itemCount, payment: paymentMethod });
-        discountAmount = discountInfo ? discountInfo.amount : 0;
+        discountInfo = PromoEngine.bestDiscount(subtotal, { coupon, itemCount, payment: paymentMethod });
+        discountAmount = discountInfo ? Math.round(discountInfo.amount * 100) / 100 : 0;
 
         shippingCost = 0;
         if (deliveryMethod === 'Entrega') {
@@ -2319,7 +2527,7 @@ async function handleApi(req, res, pathname) {
             shippingCost = free ? 0 : Number(rule.price);
           }
         }
-        total = Math.max(0, subtotal - discountAmount) + shippingCost;
+        total = Math.round((Math.max(0, subtotal - discountAmount) + shippingCost) * 100) / 100;
 
         // Sem provedor configurado, ou quando a cliente escolheu uma forma de pagamento manual
         // (Pix combinado, dinheiro etc.), o pedido nasce 'manual' e o pagamento segue combinado
@@ -2334,7 +2542,7 @@ async function handleApi(req, res, pathname) {
         await client.query(
           `INSERT INTO orders (id, customer_id, customer_name, customer_phone, email, items, subtotal, discount, shipping, total, coupon_code, payment_method, delivery_method, address, payment_status)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-          [id, customerId, customerName, customerPhone, customerEmail, JSON.stringify(items), subtotal, discountAmount, shippingCost, total, coupon ? coupon.code : null, paymentMethod, deliveryMethod, address ? JSON.stringify(address) : null, paymentStatus]
+          [id, customerId, customerName, customerPhone, customerEmail, JSON.stringify(items), subtotal, discountAmount, shippingCost, total, discountInfo && discountInfo.type === 'coupon' ? coupon.code : null, paymentMethod, deliveryMethod, address ? JSON.stringify(address) : null, paymentStatus]
         );
         await client.query('COMMIT');
       } catch (err) {
@@ -2344,11 +2552,26 @@ async function handleApi(req, res, pathname) {
         client.release();
       }
 
+      const orderSummary = {
+        id, customerName, customerPhone, customerEmail, items, subtotal, discount: discountAmount,
+        discountLabel: discountInfo ? discountInfo.label : null, shipping: shippingCost, total,
+        paymentMethod, deliveryMethod, address: deliveryMethod === 'Entrega' ? address : null, isOnlinePayment,
+      };
+      // E-mails saem em segundo plano, depois da resposta: a cliente não fica esperando o
+      // provedor de e-mail (e não recarrega a página achando que travou, duplicando o pedido).
+      const notifyEmail = (process.env.STORE_NOTIFY_EMAIL || '').trim();
+      if (notifyEmail) {
+        sendEmail({
+          to: notifyEmail,
+          subject: `Novo pedido ${orderShortCode(id)} — ${customerName} — ${money(total)}`,
+          html: buildNewOrderNotificationHtml(orderSummary),
+        });
+      }
       if (customerEmail) {
-        await sendEmail({
+        sendEmail({
           to: customerEmail,
-          subject: `Pedido ${id} confirmado — By NaNa`,
-          html: buildOrderConfirmationHtml({ id, customerName, items, total, deliveryMethod }),
+          subject: `Recebemos seu pedido ${orderShortCode(id)} — By NaNa`,
+          html: buildOrderConfirmationHtml(orderSummary),
         });
         // pedido concluído com esse e-mail: encerra a linha de carrinho abandonado (se houver)
         // pra não mandar lembrete de uma compra que já aconteceu.
@@ -2378,7 +2601,19 @@ async function handleApi(req, res, pathname) {
         }
       }
 
-      return sendJSON(res, 201, { orderId: id, checkoutUrl });
+      // Totais do servidor: a vitrine monta a mensagem do WhatsApp com eles (e não com o que
+      // calculou no navegador), então a cliente nunca recebe um valor diferente do registrado.
+      return sendJSON(res, 201, {
+        orderId: id,
+        orderCode: orderShortCode(id),
+        checkoutUrl,
+        items: items.map(({ id: productId, name, qty, price, listPrice, variantLabel }) => ({ id: productId, name, qty, price, listPrice, variantLabel })),
+        subtotal,
+        discount: discountAmount,
+        discountLabel: discountInfo ? discountInfo.label : null,
+        shipping: shippingCost,
+        total,
+      });
     }
 
     // ------ webhook do gateway de pagamento (confirma pagamento assíncrono do checkout online) ------
@@ -2409,13 +2644,16 @@ async function handleApi(req, res, pathname) {
         return sendJSON(res, 200, { ok: true });
       }
 
-      const { orderId, status, providerReference } = result;
+      const { orderId, providerReference } = result;
       const client = await pool.connect();
       let order;
+      let status = result.status;
+      let cancelledNow = false;
+      let paidAfterCancel = false;
       try {
         await client.query('BEGIN');
         const { rows } = await client.query(
-          `SELECT payment_status AS "paymentStatus", email, customer_name AS "customerName"
+          `SELECT payment_status AS "paymentStatus", status, items, email, customer_name AS "customerName"
              FROM orders WHERE id = $1 FOR UPDATE`,
           [orderId]
         );
@@ -2424,6 +2662,22 @@ async function handleApi(req, res, pathname) {
           return sendJSON(res, 200, { ok: true });
         }
         order = rows[0];
+        // Notificações podem chegar fora de ordem ou repetidas: um pedido pago só sai de 'paid'
+        // por estorno, e um estornado não volta atrás — senão um aviso atrasado de "aguardando"
+        // ou de uma tentativa recusada faria a loja deixar de enviar um pedido já pago.
+        if (!isAllowedPaymentTransition(order.paymentStatus, status)) status = order.paymentStatus;
+
+        // Pagamento recusado ou estornado: o pedido não vai sair, então as peças voltam pra
+        // vitrine na hora (antes ficavam presas até alguém cancelar manualmente no painel).
+        if ((status === 'failed' || status === 'refunded') && order.status !== 'cancelado') {
+          await restockOrderItems(client, orderId, order.items, {
+            note: `Pagamento ${status === 'failed' ? 'recusado' : 'estornado'} no pedido ${orderId}`,
+          });
+          await client.query("UPDATE orders SET status = 'cancelado' WHERE id = $1", [orderId]);
+          cancelledNow = true;
+        }
+        paidAfterCancel = status === 'paid' && order.paymentStatus !== 'paid' && order.status === 'cancelado';
+
         await client.query(
           `UPDATE orders SET payment_status = $1, payment_reference = COALESCE($2, payment_reference),
                   paid_at = CASE WHEN $1 = 'paid' AND paid_at IS NULL THEN now() ELSE paid_at END
@@ -2438,12 +2692,33 @@ async function handleApi(req, res, pathname) {
         client.release();
       }
 
-      if (status === 'paid' && order.paymentStatus !== 'paid' && order.email) {
-        await sendEmail({
+      if (status === 'paid' && order.paymentStatus !== 'paid' && order.email && !paidAfterCancel) {
+        sendEmail({
           to: order.email,
-          subject: `Pagamento aprovado — pedido ${orderId} — By NaNa`,
+          subject: `Pagamento aprovado — pedido ${orderShortCode(orderId)} — By NaNa`,
           html: buildPaymentApprovedHtml({ id: orderId, customerName: order.customerName }),
         });
+      }
+      if (cancelledNow && status === 'failed' && order.email) {
+        sendEmail({
+          to: order.email,
+          subject: `Pagamento não concluído — pedido ${orderShortCode(orderId)} — By NaNa`,
+          html: buildPaymentNotCompletedHtml({ id: orderId, customerName: order.customerName, reason: 'não foi aprovado' }),
+        });
+      }
+      // Pagamento caiu num pedido que já estava cancelado (expirou ou foi cancelado no painel e
+      // as peças podem ter sido vendidas de novo): a loja precisa decidir entre enviar ou estornar.
+      if (paidAfterCancel) {
+        console.warn(`[webhook ${providerKey}] pagamento aprovado em pedido cancelado: ${orderId}`);
+        const notifyEmail = (process.env.STORE_NOTIFY_EMAIL || '').trim();
+        if (notifyEmail) {
+          sendEmail({
+            to: notifyEmail,
+            subject: `ATENÇÃO: pagamento aprovado em pedido cancelado ${orderShortCode(orderId)}`,
+            html: `<p>O pedido <strong>${escapeHtml(orderShortCode(orderId))}</strong> (${escapeHtml(order.customerName)}) estava cancelado e acabou de ter o pagamento aprovado.</p>
+                   <p>Confira o estoque e decida entre reativar o pedido no painel ou estornar o pagamento no PagBank.</p>`,
+          });
+        }
       }
       return sendJSON(res, 200, { ok: true });
     }
@@ -2460,9 +2735,10 @@ async function handleApi(req, res, pathname) {
       const admin = await requireAdmin(body);
       if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       const status = body.status;
-      if (!['novo', 'em_andamento', 'concluido', 'cancelado'].includes(status)) {
+      if (!['novo', 'em_andamento', 'enviado', 'concluido', 'cancelado'].includes(status)) {
         return sendJSON(res, 400, { error: 'Status inválido' });
       }
+      const trackingCode = String(body.trackingCode || '').trim().slice(0, 60) || null;
       if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
       const client = await pool.connect();
       let order;
@@ -2481,21 +2757,7 @@ async function handleApi(req, res, pathname) {
         statusChanged = order.status !== status;
         const items = Array.isArray(order.items) ? order.items : [];
         if (order.status !== 'cancelado' && status === 'cancelado') {
-          for (const item of items) {
-            if (!item.variantId) continue;
-            const qty = Math.max(0, Math.floor(Number(item.qty) || 0));
-            const updated = await client.query(
-              'UPDATE product_variants SET stock=stock+$1 WHERE id=$2 RETURNING stock',
-              [qty, item.variantId]
-            );
-            if (updated.rowCount) {
-              await recordInventoryMovement(client, {
-                variantId: item.variantId, type: 'cancellation', quantity: qty,
-                stockAfter: updated.rows[0].stock, orderId: body.id, adminUserId: admin.id,
-                note: `Cancelamento do pedido ${body.id}`,
-              });
-            }
-          }
+          await restockOrderItems(client, body.id, items, { adminUserId: admin.id });
         } else if (order.status === 'cancelado' && status !== 'cancelado') {
           for (const item of items) {
             if (!item.variantId) continue;
@@ -2513,7 +2775,10 @@ async function handleApi(req, res, pathname) {
             });
           }
         }
-        await client.query('UPDATE orders SET status = $1 WHERE id = $2', [status, body.id]);
+        await client.query(
+          'UPDATE orders SET status = $1, tracking_code = COALESCE($3, tracking_code) WHERE id = $2',
+          [status, body.id, status === 'enviado' ? trackingCode : null]
+        );
         await client.query('COMMIT');
       } catch (err) {
         await client.query('ROLLBACK');
@@ -2526,7 +2791,7 @@ async function handleApi(req, res, pathname) {
         await sendEmail({
           to: order.email,
           subject: `Pedido ${body.id} atualizado — By NaNa`,
-          html: buildOrderStatusHtml({ id: body.id, customerName: order.customerName, status }),
+          html: buildOrderStatusHtml({ id: body.id, customerName: order.customerName, status, trackingCode }),
         });
       }
       return sendJSON(res, 200, { orders: await getOrders() });
@@ -3008,7 +3273,7 @@ async function handleApi(req, res, pathname) {
       if (rows[0]) {
         for (const rel of [rows[0].video, rows[0].cover]) {
           if (!rel) continue;
-          fs.promises.unlink(path.join(root, rel)).catch(() => {});
+          fs.promises.unlink(assetDiskPath(rel)).catch(() => {});
         }
       }
       return sendJSON(res, 200, { stories: await getStories(false) });
@@ -3074,7 +3339,7 @@ async function handleApi(req, res, pathname) {
       if (!match) return sendJSON(res, 400, { error: 'Imagem inválida' });
       const buffer = Buffer.from(match[1], 'base64');
 
-      const destPath = path.join(root, cfg.path);
+      const destPath = assetDiskPath(cfg.path);
       await processSiteImage(buffer, destPath);
       logActivity(admin, 'site_image.update', 'site_image', body.slot, null);
       return sendJSON(res, 200, { ok: true, slot: body.slot, path: cfg.path });
@@ -3157,7 +3422,12 @@ function serveBadRequest(res) {
 // porque um arquivo sensível (ex.: .env) pode estar dentro do root sem nenhum ".." envolvido.
 const PUBLIC_STATIC_FILES = new Set(['/index.html', '/admin.html', '/produto.html', '/404.html', '/redefinir-senha.html', '/politica-privacidade.html']);
 
+// Recebe o caminho já decodificado: "%2e%2e" e "..%2f" viram ".." só depois do
+// decodeURIComponent, então qualquer segmento "." / ".." (ou barra invertida) é recusado
+// aqui — senão "/assets/../serve.js" passaria no prefixo e o path.join sairia de assets/.
 function isPublicStaticPath(filePath) {
+  if (filePath.includes('\\') || filePath.includes('\0')) return false;
+  if (filePath.split('/').some(segment => segment === '..' || segment === '.')) return false;
   return PUBLIC_STATIC_FILES.has(filePath) || filePath.startsWith('/assets/');
 }
 
@@ -3191,7 +3461,11 @@ function serveStatic(req, res, pathname) {
     serveNotFound(res);
     return;
   }
-  fs.readFile(full, (err, data) => {
+  const persisted = assetDiskPath(filePath);
+  const readAsset = persisted !== full && persisted.startsWith(persistentUploadDir + path.sep)
+    ? (cb) => fs.readFile(persisted, (err, data) => (err ? fs.readFile(full, cb) : cb(null, data)))
+    : (cb) => fs.readFile(full, cb);
+  readAsset((err, data) => {
     if (err) {
       serveNotFound(res);
       return;
@@ -3200,7 +3474,7 @@ function serveStatic(req, res, pathname) {
     if (filePath === '/index.html') {
       // og:image/canonical precisam ser URL absoluta (esquema+host) — link relativo não é
       // resolvido de forma confiável por crawlers de preview (WhatsApp/Facebook/Instagram).
-      const origin = requestOrigin(req);
+      const origin = seoOrigin(req);
       const html = data
         .toString('utf8')
         .replace(/<!--HOME_OG_IMAGE-->/g, escapeHtml(`${origin}/assets/img/processed/site-hero-1.jpg`))
@@ -3216,7 +3490,7 @@ function serveStatic(req, res, pathname) {
       return;
     }
     if (filePath === '/politica-privacidade.html') {
-      const canonical = `${requestOrigin(req)}/politica-privacidade.html`;
+      const canonical = `${seoOrigin(req)}/politica-privacidade.html`;
       const html = data.toString('utf8').replace(/<!--POLICY_CANONICAL-->/g, escapeHtml(canonical));
       sendBody(req, res, 200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' }, html, { compressible: true });
       return;
@@ -3230,6 +3504,15 @@ const robotsTxt = (origin) => `User-agent: *\nDisallow: /admin\nDisallow: /api/\
 // O protocolo de sitemap exige <loc> absoluta (com esquema+host) — sem isso, alguns
 // crawlers rejeitam o arquivo inteiro. Deriva o host do próprio request em vez de fixar um
 // domínio, então funciona igual em localhost e em produção atrás de proxy/CDN.
+// Canonical, og:image, sitemap e robots usam o domínio oficial (SITE_URL) quando configurado —
+// pelo Host da requisição, o mesmo site acessado por www/sem www/onrender.com viraria páginas
+// duplicadas para o Google.
+function seoOrigin(req) {
+  const configured = String(process.env.SITE_URL || '').trim().replace(/\/$/, '');
+  if (/^https?:\/\/[^/]+$/i.test(configured)) return configured;
+  return requestOrigin(req);
+}
+
 function requestOrigin(req) {
   const proto = req.headers['x-forwarded-proto'] || (req.socket.encrypted ? 'https' : 'http');
   return `${proto}://${req.headers.host}`;
@@ -3292,7 +3575,7 @@ function escapeHtml(str) {
 // igual ao resto do site; só o título/meta/OG precisam vir prontos na resposta do servidor,
 // pra link compartilhado no WhatsApp e crawler mostrarem a prévia certa.
 async function serveProductPage(req, res, id) {
-  const product = await getProductMeta(id);
+  const [product, promotions] = await Promise.all([getProductMeta(id), getPromotions()]);
   if (!product) {
     serveNotFound(res);
     return;
@@ -3302,12 +3585,18 @@ async function serveProductPage(req, res, id) {
       serveNotFound(res);
       return;
     }
-    const origin = requestOrigin(req);
+    const origin = seoOrigin(req);
     const title = `${product.name} — By NaNa`;
     const description = (product.desc || `Confira ${product.name} na By NaNa.`).slice(0, 160);
     const canonical = `${origin}/produto/${product.id}`;
-    const jsonLd = buildProductJsonLd(product, { origin, canonical });
+    const best = product.price != null ? PromoEngine.bestPromoForProduct(product, promotions) : null;
+    const jsonLd = buildProductJsonLd(product, { origin, canonical, price: best ? best.price : product.price });
     const html = template
+      // Nome, foto e descrição já vêm no HTML (antes só apareciam depois do JS): o Google e as
+      // prévias de link enxergam o conteúdo, e a cliente não vê uma página em branco no 4G.
+      .replace('<h1 class="pdp-name" id="pdpName"></h1>', `<h1 class="pdp-name" id="pdpName">${escapeHtml(product.name)}</h1>`)
+      .replace('<p class="pdp-desc" id="pdpDesc"></p>', `<p class="pdp-desc" id="pdpDesc">${escapeHtml(product.desc || '')}</p>`)
+      .replace('<img id="pdpMainImg" src="" alt="Imagem do produto" />', `<img id="pdpMainImg" src="/${escapeHtml(product.img)}" alt="${escapeHtml(product.name)}" />`)
       .replace(/<!--PRODUCT_TITLE-->/g, escapeHtml(title))
       .replace(/<!--PRODUCT_DESCRIPTION-->/g, escapeHtml(description))
       .replace(/<!--PRODUCT_OG_IMAGE-->/g, escapeHtml(`${origin}/${product.img}`))
@@ -3367,11 +3656,11 @@ const httpServer = http
     }
     if (pathname === '/robots.txt') {
       res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' });
-      res.end(robotsTxt(requestOrigin(req)));
+      res.end(robotsTxt(seoOrigin(req)));
       return;
     }
     if (pathname === '/sitemap.xml') {
-      buildSitemap(requestOrigin(req))
+      buildSitemap(seoOrigin(req))
         .then((xml) => {
           res.writeHead(200, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'no-cache' });
           res.end(xml);
@@ -3440,3 +3729,58 @@ async function sweepAbandonedCarts() {
 }
 
 setInterval(sweepAbandonedCarts, ABANDONED_CART_SWEEP_INTERVAL_MS);
+
+// ---------- expiração de pedidos com pagamento online que nunca foi concluído ----------
+// O pedido online reserva o estoque ao ser criado; se a cliente abandona a página do PagBank,
+// nenhum webhook chega e a peça ficaria "esgotada" pra sempre. Passado o prazo do link de
+// pagamento (+ 2h de folga pra notificação atrasada), o pedido é cancelado e o estoque volta.
+// Pedidos manuais (WhatsApp) não entram: quem decide cancelá-los é a loja.
+const PENDING_ORDER_GRACE_HOURS = CHECKOUT_EXPIRATION_HOURS + 2;
+
+async function sweepExpiredOnlineOrders() {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id FROM orders
+        WHERE payment_status = 'pending' AND status != 'cancelado'
+          AND created_at < now() - make_interval(hours => $1)
+        ORDER BY created_at ASC LIMIT 50`,
+      [PENDING_ORDER_GRACE_HOURS]
+    );
+    for (const { id } of rows) {
+      const client = await pool.connect();
+      let order = null;
+      try {
+        await client.query('BEGIN');
+        const locked = await client.query(
+          `SELECT items, email, customer_name AS "customerName" FROM orders
+            WHERE id = $1 AND payment_status = 'pending' AND status != 'cancelado' FOR UPDATE`,
+          [id]
+        );
+        if (locked.rowCount) {
+          order = locked.rows[0];
+          await restockOrderItems(client, id, order.items, { note: `Pagamento online não concluído no prazo — pedido ${id}` });
+          await client.query("UPDATE orders SET status = 'cancelado', payment_status = 'failed' WHERE id = $1", [id]);
+        }
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+      if (order && order.email) {
+        sendEmail({
+          to: order.email,
+          subject: `Pagamento não concluído — pedido ${orderShortCode(id)} — By NaNa`,
+          html: buildPaymentNotCompletedHtml({ id, customerName: order.customerName, reason: 'não foi concluído no prazo' }),
+        });
+      }
+    }
+  } catch (err) {
+    console.error('[pedidos pendentes] falha na varredura:', err.message);
+  }
+}
+
+setInterval(sweepExpiredOnlineOrders, ABANDONED_CART_SWEEP_INTERVAL_MS);
+// Também logo após subir: no plano free a instância dorme e o intervalo não roda enquanto isso.
+setTimeout(sweepExpiredOnlineOrders, 30_000).unref();

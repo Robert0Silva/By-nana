@@ -109,6 +109,47 @@
     });
   }
 
+  // Promise<string|null> — null quando cancelado. Mesmo visual do confirmDialog, com um campo.
+  function promptDialog(message, initialValue = '') {
+    return new Promise((resolve) => {
+      const returnFocus = document.activeElement;
+      const overlay = document.createElement('div');
+      overlay.className = 'admin-confirm-overlay';
+      overlay.innerHTML = `
+        <form class="admin-confirm" role="dialog" aria-modal="true" aria-labelledby="adminPromptMsg">
+          <label id="adminPromptMsg" for="adminPromptInput">${escapeHtml(message)}</label>
+          <input type="text" id="adminPromptInput" maxlength="60" autocomplete="off" value="${escapeHtml(initialValue)}" />
+          <div class="admin-confirm-actions">
+            <button type="button" class="btn btn-ghost" data-answer="no">Cancelar</button>
+            <button type="submit" class="btn btn-primary">Confirmar</button>
+          </div>
+        </form>`;
+      const input = overlay.querySelector('input');
+      const finish = (answer) => {
+        document.removeEventListener('keydown', onKey, true);
+        overlay.remove();
+        if (returnFocus && returnFocus.focus) returnFocus.focus();
+        resolve(answer);
+      };
+      const onKey = (e) => {
+        if (e.key === 'Escape') {
+          e.stopPropagation();
+          finish(null);
+        }
+      };
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay || e.target.closest('[data-answer="no"]')) finish(null);
+      });
+      overlay.querySelector('form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        finish(input.value.trim());
+      });
+      document.addEventListener('keydown', onKey, true);
+      document.body.appendChild(overlay);
+      input.focus();
+    });
+  }
+
   const formatDate = (iso) => {
     if (!iso) return '';
     const [y, m, d] = iso.split('-');
@@ -897,7 +938,9 @@
     try {
       const data = await api('/api/products/variants/list', 'POST', { productId: p.id });
       if (pEditId.value !== p.id) return;
-      editorVariants = (data.variants || []).map((variant) => ({ ...variant, stock: Number(variant.stock || 0) }));
+      // loadedStock = estoque no momento em que o produto foi aberto; o servidor recusa o salvar
+      // se ele mudou nesse meio tempo (venda), em vez de sobrescrever a baixa.
+      editorVariants = (data.variants || []).map((variant) => ({ ...variant, stock: Number(variant.stock || 0), loadedStock: Number(variant.stock || 0) }));
       renderEditorVariants();
       galleryImages = data.gallery || [];
       renderGallery();
@@ -994,6 +1037,7 @@
         color: variant.color.trim(),
         sku: variant.sku.trim(),
         stock: Number(variant.stock || 0),
+        expectedStock: variant.id && variant.loadedStock != null ? variant.loadedStock : undefined,
         measurements: (variant.measurements || '').trim(),
       }))
       .filter((variant) => variant.size);
@@ -1153,6 +1197,7 @@
             color: variant.color || '',
             sku: variant.sku || '',
             stock: Math.max(0, Math.floor(Number(input.value) || 0)),
+            expectedStock: Number(variant.stock),
             note: 'Ajuste rápido pela lista de produtos',
           });
         }
@@ -2072,7 +2117,7 @@
   const orderCount = document.getElementById('orderCount');
   const orderSearch = document.getElementById('orderSearch');
 
-  const ORDER_STATUS_LABELS = { novo: 'Novo', em_andamento: 'Em andamento', concluido: 'Concluído', cancelado: 'Cancelado' };
+  const ORDER_STATUS_LABELS = { novo: 'Novo', em_andamento: 'Em andamento', enviado: 'Enviado', concluido: 'Concluído', cancelado: 'Cancelado' };
   // 'manual' (pagamento combinado no WhatsApp) é o caso comum e não precisa de destaque — só os
   // status de um pagamento online (gateway) ganham selo, pra chamar atenção quando precisar agir.
   const PAYMENT_STATUS_LABELS = { pending: 'Pagamento pendente', paid: 'Pago', failed: 'Pagamento falhou', refunded: 'Reembolsado' };
@@ -2093,6 +2138,7 @@
     { id: 'abertos', label: 'Em aberto', match: (o) => o.status === 'novo' || o.status === 'em_andamento' },
     { id: 'novo', label: 'Novos', match: (o) => o.status === 'novo' },
     { id: 'em_andamento', label: 'Em andamento', match: (o) => o.status === 'em_andamento' },
+    { id: 'enviado', label: 'Enviados', match: (o) => o.status === 'enviado' },
     { id: 'concluido', label: 'Concluídos', match: (o) => o.status === 'concluido' },
     { id: 'cancelado', label: 'Cancelados', match: (o) => o.status === 'cancelado' },
     { id: 'todos', label: 'Todos', match: () => true },
@@ -2173,6 +2219,7 @@
           <span class="admin-order-meta">${when}${o.couponCode ? ` · cupom ${escapeHtml(o.couponCode)}` : ''} · ${escapeHtml(o.paymentMethod)} · ${escapeHtml(o.deliveryMethod)}${o.shipping ? ` · frete ${money(o.shipping)}` : ''}</span>
           ${addressText ? `<span class="admin-order-address">📍 ${addressText}</span>` : ''}
           <p class="admin-order-items">${itemsText}</p>
+          ${o.trackingCode ? `<span class="admin-order-meta">📦 Rastreio: ${escapeHtml(o.trackingCode)}</span>` : ''}
           <span class="admin-order-total">${money(o.total)}</span>
         </div>
         <div class="admin-order-actions">
@@ -2203,9 +2250,17 @@
             return;
           }
         }
+        let trackingCode = '';
+        if (status === 'enviado' && o.deliveryMethod === 'Entrega') {
+          trackingCode = await promptDialog(`Código de rastreio do pedido ${orderCode(o.id)} (opcional — vai no e-mail para a cliente):`, o.trackingCode || '');
+          if (trackingCode === null) {
+            select.value = o.status;
+            return;
+          }
+        }
         select.disabled = true;
         try {
-          const data = await api('/api/orders/status', 'POST', { id: o.id, status });
+          const data = await api('/api/orders/status', 'POST', { id: o.id, status, trackingCode });
           ORDERS = data.orders;
           toast(`Pedido ${orderCode(o.id)} agora está "${ORDER_STATUS_LABELS[status]}".`);
         } catch (err) {

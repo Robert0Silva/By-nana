@@ -94,9 +94,37 @@
   // ---------- coupon (applied on top of the bag subtotal) ----------
   const COUPON_KEY = 'bynana_coupon';
   let appliedCouponCode = localStorage.getItem(COUPON_KEY) || '';
+  // Só o cupom de boas-vindas vem em /api/data; os demais são conferidos no servidor quando
+  // a cliente digita o código (POST /api/coupons/validate) e ficam guardados aqui.
+  let VALIDATED_COUPONS = [];
+  // Enquanto o cupom salvo de uma visita anterior não é revalidado, ele não pode ser descartado
+  // por "não estar na lista" — a lista pública não traz mais todos os cupons.
+  let couponRestorePending = !!appliedCouponCode;
 
   function activeCoupon() {
-    return appliedCouponCode ? window.PromoEngine.findCoupon(COUPONS, appliedCouponCode) : null;
+    return appliedCouponCode ? window.PromoEngine.findCoupon([...COUPONS, ...VALIDATED_COUPONS], appliedCouponCode) : null;
+  }
+
+  async function validateCouponCode(code) {
+    const res = await fetch('/api/coupons/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    if (res.status === 404) return null;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.coupon) throw new Error(data.error || 'Não foi possível validar o cupom agora.');
+    VALIDATED_COUPONS = [...VALIDATED_COUPONS.filter((c) => c.code !== data.coupon.code), data.coupon];
+    return data.coupon;
+  }
+
+  async function restoreAppliedCoupon() {
+    if (!couponRestorePending) return;
+    if (!activeCoupon()) {
+      try { await validateCouponCode(appliedCouponCode); } catch { /* sem rede: tenta de novo na próxima visita */ }
+    }
+    couponRestorePending = false;
+    renderCart();
   }
 
   // ---------- carrinho: chave por produto+variação (produto sem variação usa variantId nulo) ----------
@@ -1277,30 +1305,26 @@
     updateBagSteps();
   });
 
-  function buildOrderMessage(keys) {
-    let msg = 'Olá! Vim pelo site da By NaNa e quero fazer um pedido:\n\n';
+  // Monta a mensagem com o pedido como o SERVIDOR registrou (itens, desconto, frete e total
+  // devolvidos por /api/orders) — se o cálculo do navegador divergir (ex.: cupom de 1ª compra
+  // recusado no servidor), a cliente recebe o valor que vale, não o que a sacola mostrava.
+  function buildOrderMessage(keys, order) {
+    let msg = `Olá! Vim pelo site da By NaNa e quero fazer o pedido ${order.orderCode}:\n\n`;
     msg += `Nome: ${bagNameInput.value.trim()}\nTelefone: ${bagPhoneInput.value.trim()}\n\n`;
-    keys.forEach((key) => {
-      const entry = cart[key];
-      if (!entry) return;
-      const p = PRODUCTS.find((x) => x.id === entry.productId);
-      if (!p) return;
-      const variant = entry.variantId ? (p.variants || []).find((v) => v.id === entry.variantId) : null;
-      const { price, promo } = getEffective(p);
-      const priceText = promo ? `${money(price)} (de ${money(p.price)})` : money(price);
-      const variantText = variant ? ` (${variantLabel(variant)})` : '';
-      msg += `• ${entry.qty}x ${p.name}${variantText} — ${priceText}\n`;
+    order.items.forEach((item) => {
+      let priceText = 'sob consulta';
+      if (item.price != null) {
+        priceText = item.listPrice != null && item.price < item.listPrice ? `${money(item.price)} (de ${money(item.listPrice)})` : money(item.price);
+      }
+      msg += `• ${item.qty}x ${item.name}${item.variantLabel ? ` (${item.variantLabel})` : ''} — ${priceText}\n`;
     });
-    const subtotal = cartSubtotal(keys);
-    const discount = cartDiscountInfo(keys);
     const quote = shippingQuote(keys);
-    const total = cartFinalTotal(keys) + quote.cost;
-    msg += `\nSubtotal (itens com preço): ${money(subtotal)}`;
-    if (discount) msg += `\n🏷️ ${discount.label}`;
-    if (quote.applicable) {
-      msg += `\n🚚 Frete${quote.label ? ` (${quote.label})` : ''}: ${quote.free ? 'Grátis' : money(quote.cost)}`;
+    msg += `\nSubtotal (itens com preço): ${money(order.subtotal)}`;
+    if (order.discount > 0) msg += `\n🏷️ ${order.discountLabel || 'Desconto'}: - ${money(order.discount)}`;
+    if (selectedDelivery === 'Entrega') {
+      msg += `\n🚚 Frete${quote.label ? ` (${quote.label})` : ''}: ${order.shipping > 0 ? money(order.shipping) : 'Grátis'}`;
     }
-    msg += `\nTotal: ${money(total)}`;
+    msg += `\nTotal: ${money(order.total)}`;
     msg += `\n\n💳 Pagamento: ${selectedPayment}`;
     msg += `\n🚚 Entrega: ${selectedDelivery}`;
     if (bagIsGift.checked) {
@@ -1356,7 +1380,7 @@
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Não foi possível reservar o estoque');
-    return { orderId: data.orderId, checkoutUrl: data.checkoutUrl || null };
+    return { ...data, checkoutUrl: data.checkoutUrl || null };
   }
 
   // Re-sincroniza só os dados de produto/estoque após uma falha de checkout (ex.: estoque
@@ -1451,17 +1475,20 @@
       const p = entry ? PRODUCTS.find((x) => x.id === entry.productId) : null;
       return p ? { id: p.id, name: p.name, qty: entry.qty, price: getEffective(p).price } : null;
     }).filter(Boolean);
-    persistOrder(ids).then(({ orderId, checkoutUrl }) => {
+    persistOrder(ids).then((order) => {
+      const { orderId, checkoutUrl } = order;
       if (checkoutUrl) {
         // Pagamento online: a confirmação de compra (trackPurchase) só acontece quando a
         // cliente volta aprovada (ver handleCheckoutReturn em init()) — antes disso o pagamento
         // ainda nem foi feito, só a sessão de checkout foi criada no gateway.
-        localStorage.setItem(PENDING_PURCHASE_KEY, JSON.stringify({ orderId, total: checkoutTotal, items: checkoutItems }));
+        localStorage.setItem(PENDING_PURCHASE_KEY, JSON.stringify({ orderId, total: order.total, items: checkoutItems }));
         window.location.href = checkoutUrl;
         return;
       }
-      window.byNanaAnalytics?.trackPurchase(orderId, checkoutTotal, checkoutItems);
-      const orderWhatsLink = waLink(buildOrderMessage(ids));
+      // Pedido pelo WhatsApp ainda não é venda: disponibilidade e pagamento são combinados na
+      // conversa. Registrar "purchase" aqui inflaria receita e conversões no GA4/Meta Ads.
+      window.byNanaAnalytics?.trackWhatsappOrder(orderId, order.total, checkoutItems);
+      const orderWhatsLink = waLink(buildOrderMessage(ids, order));
       // abrir depois de um await pode ser barrado pelo bloqueador de pop-up — a tela de
       // confirmação sempre oferece o link de novo.
       window.open(orderWhatsLink, '_blank', 'noopener');
@@ -1518,12 +1545,18 @@
 
   function showCouponStatus() {
     const coupon = activeCoupon();
-    if (appliedCouponCode && !coupon) {
+    if (appliedCouponCode && !coupon && !couponRestorePending) {
       appliedCouponCode = '';
       localStorage.removeItem(COUPON_KEY);
     }
     if (coupon) {
-      couponStatus.innerHTML = `Cupom <strong>${escapeHtml(coupon.code)}</strong> aplicado ✓ <button type="button" class="coupon-remove">remover</button>`;
+      // Os descontos não se somam (ver PromoEngine.bestDiscount): quando Pix ou quantidade dão
+      // mais, dizer só "aplicado ✓" faz a cliente achar que o cupom não funcionou.
+      const best = cartDiscountInfo(Object.keys(cart));
+      const note = best && best.type !== 'coupon'
+        ? ` — o desconto "${escapeHtml(best.label)}" é maior e já está aplicado (os descontos não se somam)`
+        : ' aplicado ✓';
+      couponStatus.innerHTML = `Cupom <strong>${escapeHtml(coupon.code)}</strong>${note} <button type="button" class="coupon-remove">remover</button>`;
       couponStatus.className = 'bag-coupon-status is-ok';
       couponStatus.hidden = false;
       couponInput.value = coupon.code;
@@ -1532,10 +1565,23 @@
     }
   }
 
-  couponApplyBtn.addEventListener('click', () => {
+  couponApplyBtn.addEventListener('click', async () => {
     const code = couponInput.value.trim();
     if (!code) return;
-    const coupon = window.PromoEngine.findCoupon(COUPONS, code);
+    let coupon = window.PromoEngine.findCoupon([...COUPONS, ...VALIDATED_COUPONS], code);
+    if (!coupon) {
+      couponApplyBtn.disabled = true;
+      try {
+        coupon = await validateCouponCode(code);
+      } catch (err) {
+        couponStatus.textContent = err.message;
+        couponStatus.className = 'bag-coupon-status is-error';
+        couponStatus.hidden = false;
+        return;
+      } finally {
+        couponApplyBtn.disabled = false;
+      }
+    }
     if (!coupon) {
       couponStatus.textContent = 'Cupom inválido ou expirado.';
       couponStatus.className = 'bag-coupon-status is-error';
@@ -1715,7 +1761,7 @@
       else cart[key] = { productId, variantId: null, qty: 1 };
       saveCart();
       announce(`${product.name} adicionada à sacola.`);
-      window.byNanaAnalytics?.trackAddToCart(product, null);
+      window.byNanaAnalytics?.trackAddToCart(product, null, getEffective(product).price);
       return true;
     }
 
@@ -1733,7 +1779,7 @@
     else cart[key] = { productId, variantId: variantId || null, qty: 1 };
     saveCart();
     announce(`${product.name} adicionada à sacola.`);
-    window.byNanaAnalytics?.trackAddToCart(product, variant);
+    window.byNanaAnalytics?.trackAddToCart(product, variant, getEffective(product).price);
     return true;
   }
 
@@ -1895,7 +1941,10 @@
           ${
             s.cover
               ? `<img src="${s.cover}" alt="${escapeHtml(s.title || 'Story')}" />`
-              : `<video src="${s.video}" preload="metadata" muted playsinline></video>`
+              // preload="none": com "metadata", um MP4 sem faststart obriga o navegador a baixar o
+              // arquivo inteiro só pra montar a miniatura (8,8 MB na home, no 4G). O vídeo só
+              // carrega quando a cliente abre o story; até lá a bolha mostra o fundo do anel.
+              : `<video src="${escapeHtml(s.video)}" preload="none" muted playsinline></video>`
           }
         </span>
         ${s.title ? `<span class="story-bubble-label">${escapeHtml(s.title)}</span>` : ''}
@@ -2355,7 +2404,7 @@
 
   // ---------- área da conta: meus pedidos ----------
   const profileOrderList = document.getElementById('profileOrderList');
-  const PROFILE_ORDER_STATUS_LABELS = { novo: 'Novo', em_andamento: 'Em andamento', concluido: 'Concluído', cancelado: 'Cancelado' };
+  const PROFILE_ORDER_STATUS_LABELS = { novo: 'Novo', em_andamento: 'Em andamento', enviado: 'Enviado', concluido: 'Concluído', cancelado: 'Cancelado' };
 
   async function loadProfileOrders() {
     profileOrderList.innerHTML = '<p class="bag-empty">Carregando...</p>';
@@ -2388,6 +2437,7 @@
             <div class="profile-order-header"><span><strong>${orderShortCode(o.id)}</strong> · ${when}</span><span>${money(o.total)}</span></div>
             <p class="profile-order-items">${itemsText}</p>
             <span class="profile-order-meta">${escapeHtml(o.paymentMethod)} · ${escapeHtml(o.deliveryMethod)}${o.couponCode ? ` · cupom ${escapeHtml(o.couponCode)}` : ''}${o.shipping ? ` · frete ${money(o.shipping)}` : ''}</span>
+            ${o.trackingCode ? `<span class="profile-order-meta">📦 Rastreio: ${escapeHtml(o.trackingCode)}</span>` : ''}
             <span class="profile-order-status st-${o.status}">${statusLabel}</span>
           </div>
         `;
@@ -2860,7 +2910,7 @@
       return;
     }
 
-    window.byNanaAnalytics?.trackViewItem(p);
+    window.byNanaAnalytics?.trackViewItem(p, getEffective(p).price);
     trackRecentlyViewed(p.id);
 
     document.getElementById('pdpBreadcrumb').innerHTML =
@@ -3173,6 +3223,7 @@
     renderTopbarMessages();
     renderCart();
     restoreSession();
+    restoreAppliedCoupon();
 
     if (document.body.dataset.page === 'produto') {
       initProductPage();
@@ -3198,6 +3249,15 @@
   }
 
   dataErrorRetry.addEventListener('click', init);
+
+  // Fotos de produto horizontais (sapato fotografado de lado, bolsa) num quadro vertical com
+  // object-fit:cover ficam cortadas — a cliente via só um pedaço do scarpin. Marca essas fotos
+  // pra exibir inteiras (ver .is-landscape no style.css). "load" não borbulha: captura.
+  document.addEventListener('load', (e) => {
+    const img = e.target;
+    if (!img || img.tagName !== 'IMG' || !img.closest('.pdp-gallery-main, .product-media, .pdp-thumb, .bag-item')) return;
+    img.classList.toggle('is-landscape', img.naturalWidth > img.naturalHeight * 1.15);
+  }, true);
 
   // ---------- entrada suave das seções ao rolar a página ----------
   // Classe só é adicionada aqui (nunca no HTML) — sem JS ou sem suporte a IntersectionObserver

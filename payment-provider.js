@@ -23,6 +23,11 @@
 //     rawBody é o corpo bruto já drenado pelo caller — necessário pra provedores que assinam a
 //     notificação com hash sobre o corpo exatamente como chegou, ex. PagBank.)
 
+// Por quanto tempo o link de pagamento online fica válido. Passado esse prazo (+ folga para o
+// webhook atrasado), a varredura sweepExpiredOnlineOrders em serve.js cancela o pedido que segue
+// 'pending' e devolve o estoque — sem isso, quem desiste no meio do pagamento trava a peça.
+const CHECKOUT_EXPIRATION_HOURS = 24;
+
 const PROVIDERS = {
   pagseguro: require('./payment-providers/pagseguro'),
   // stripe: require('./payment-providers/stripe'),
@@ -39,4 +44,4 @@ function getActiveProvider() {
   return provider;
 }
 
-module.exports = { getActiveProvider };
+module.exports = { getActiveProvider, CHECKOUT_EXPIRATION_HOURS };

@@ -851,3 +851,10 @@
   .admin-status-tabs{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;margin-inline:-2px;}
   .admin-status-tab{flex:none;}
 }
+
+/* status "enviado" + campo do diálogo de rastreio */
+.admin-order-status-pill.st-enviado{background:#e3eefb;color:#24507f;}
+.admin-order-item-status.st-enviado{background:#4a7fb5;}
+.admin-order-status-select.st-enviado{border-color:#4a7fb5;}
+.admin-confirm label{display:block;color:var(--ink);font-size:.95rem;margin-bottom:10px;}
+.admin-confirm input[type=text]{width:100%;margin-bottom:20px;}

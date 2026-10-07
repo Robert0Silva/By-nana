@@ -50,3 +50,16 @@ services:
         sync: false
       - key: PAGSEGURO_SANDBOX
         sync: false
+      # E-mail da loja que recebe o aviso de cada pedido novo.
+      - key: STORE_NOTIFY_EMAIL
+        sync: false
+      # Pasta do disco persistente dos uploads do painel (ver disk abaixo). Em plano free (sem
+      # disco), deixe vazio — mas as fotos enviadas pelo painel somem a cada deploy/reinício.
+      - key: UPLOAD_DIR
+        sync: false
+    # Para os uploads do painel sobreviverem a deploys: mudar para um plano pago, descomentar o
+    # disco abaixo e definir UPLOAD_DIR=/var/data/uploads.
+    # disk:
+    #   name: uploads
+    #   mountPath: /var/data
+    #   sizeGB: 1

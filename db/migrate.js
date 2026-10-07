@@ -21,11 +21,18 @@ async function main() {
   await pool.query(schema);
   console.log('Schema ok.');
 
-  const categories = readJSON('categories.json', []);
-  const collections = readJSON('collections.json', []);
-  const products = readJSON('products.json', []);
-  const promotions = readJSON('promotions.json', []);
-  const coupons = readJSON('coupons.json', []);
+  // data/*.json é só o catálogo inicial de uma instalação nova. Este script roda a cada deploy
+  // (startCommand do render.yaml): sem esta checagem, produto/categoria/cupom de exemplo que a
+  // loja apagou pelo painel voltava pro ar sozinho no deploy seguinte.
+  const { rows: [{ count: existingProducts }] } = await pool.query('SELECT COUNT(*)::int AS count FROM products');
+  const seedCatalog = existingProducts === 0;
+  if (!seedCatalog) console.log('Catálogo já existe — dados de exemplo (data/*.json) não são reimportados.');
+
+  const categories = seedCatalog ? readJSON('categories.json', []) : [];
+  const collections = seedCatalog ? readJSON('collections.json', []) : [];
+  const products = seedCatalog ? readJSON('products.json', []) : [];
+  const promotions = seedCatalog ? readJSON('promotions.json', []) : [];
+  const coupons = seedCatalog ? readJSON('coupons.json', []) : [];
 
   for (const name of categories) {
     await pool.query('INSERT INTO categories(name) VALUES ($1) ON CONFLICT (lower(name)) DO NOTHING', [name]);

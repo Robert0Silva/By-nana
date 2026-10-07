@@ -102,6 +102,32 @@ test('não expõe arquivos internos do projeto', async () => {
   }
 });
 
+// fetch() normaliza "%2e%2e" antes de enviar, então o caminho cru vai por http.request —
+// é assim que um atacante (curl --path-as-is) chegaria ao servidor.
+function rawGetStatus(rawPath) {
+  return new Promise((resolve, reject) => {
+    const req = require('node:http').request({ host: '127.0.0.1', port, path: rawPath, method: 'GET' }, (res) => {
+      res.resume();
+      resolve(res.statusCode);
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+test('não permite path traversal codificado dentro de /assets/', async () => {
+  for (const route of [
+    '/assets/..%2fserve.js',
+    '/assets/%2e%2e/serve.js',
+    '/assets/%2E%2E/package.json',
+    '/assets/css/..%2f..%2f.env',
+    '/assets/..%5cserve.js',
+    '/assets/./..%2fdb/schema.sql',
+  ]) {
+    assert.equal(await rawGetStatus(route), 404, route);
+  }
+});
+
 test('health check confirma disponibilidade do servidor e do banco', async () => {
   const response = await fetch(`${origin}/api/health`);
   const data = await response.json();
@@ -513,7 +539,7 @@ test('cupom válido aplica desconto no pedido; código inexistente é ignorado s
     await pool.query('UPDATE product_variants SET stock = $1 WHERE id = $2', [Math.max(originalStock, 5), variantId]);
 
     const placeOrder = async (couponCodeToUse) => {
-      const phone = `31900${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 10)}`;
+      const phone = `31900${Date.now().toString().slice(-5)}${Math.floor(Math.random() * 10)}`; // 11 dígitos, como um celular real
       const response = await fetch(`${origin}/api/orders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -655,6 +681,132 @@ test('cadastro sem CPF e sem data de nascimento é aceito', async () => {
     assert.equal(row.rows[0].birth_date, null);
   } finally {
     await pool.query('DELETE FROM customers WHERE lower(email) = $1', [email]);
+    await pool.end();
+  }
+});
+
+// Cupons de parceiras/agendados/inativos não podem vazar pela vitrine: /api/data só traz o de
+// boas-vindas vigente, e o resto só é revelado digitando o código exato.
+test('cupons privados não aparecem em /api/data, mas validam pelo código', async () => {
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const code = `PRIVADO${Date.now().toString(36).toUpperCase()}`;
+  try {
+    await pool.query(
+      `INSERT INTO coupons (code, discount_type, discount_value, active, first_purchase_only) VALUES ($1, 'percent', 12, true, false)`,
+      [code]
+    );
+    const catalog = await (await fetch(`${origin}/api/data`)).json();
+    assert.ok(!catalog.coupons.some((c) => c.code === code), 'cupom privado não pode vir na vitrine');
+    assert.ok(catalog.coupons.every((c) => c.firstPurchaseOnly && c.active), 'só o cupom de boas-vindas ativo é público');
+
+    const valid = await fetch(`${origin}/api/coupons/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '203.0.113.10' },
+      body: JSON.stringify({ code: code.toLowerCase() }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).coupon.code, code);
+
+    const invalid = await fetch(`${origin}/api/coupons/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '203.0.113.10' },
+      body: JSON.stringify({ code: 'NAO-EXISTE-123' }),
+    });
+    assert.equal(invalid.status, 404);
+  } finally {
+    await pool.query('DELETE FROM coupons WHERE code = $1', [code]);
+    await pool.end();
+  }
+});
+
+// Sem limite, um script reservava todo o estoque com pedidos falsos. O IP vem do
+// X-Forwarded-For (último hop), então um IP de documentação isola este teste dos demais.
+test('/api/orders limita pedidos em sequência do mesmo IP', async () => {
+  const statuses = [];
+  for (let i = 0; i < 11; i += 1) {
+    const response = await fetch(`${origin}/api/orders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '198.51.100.77' },
+      body: JSON.stringify({}),
+    });
+    statuses.push(response.status);
+  }
+  assert.ok(statuses.slice(0, 10).every((status) => status === 400), statuses.join(','));
+  assert.equal(statuses[10], 429);
+});
+
+test('/api/orders recusa telefone inválido, pedido gigante e corpo grande demais', async () => {
+  const post = (body, ip) => fetch(`${origin}/api/orders`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip },
+    body: typeof body === 'string' ? body : JSON.stringify(body),
+  });
+  const base = { customerName: 'Teste', paymentMethod: 'Pix', deliveryMethod: 'Retirada em loja' };
+  const badPhone = await post({ ...base, customerPhone: '123', items: [{ id: 'x', variantId: 'y', qty: 1 }] }, '198.51.100.80');
+  assert.equal(badPhone.status, 400);
+  assert.match((await badPhone.json()).error, /telefone/i);
+
+  const tooMany = await post({ ...base, customerPhone: '31999990000', items: [{ id: 'x', variantId: 'y', qty: 500 }] }, '198.51.100.81');
+  assert.equal(tooMany.status, 400);
+
+  const huge = await post(JSON.stringify({ ...base, customerPhone: '31999990000', padding: 'x'.repeat(200 * 1024) }), '198.51.100.82');
+  assert.equal(huge.status, 413);
+});
+
+// A mensagem do WhatsApp é montada com o que o servidor devolve; o cupom só é gravado no
+// pedido quando foi ele o desconto aplicado (Pix/quantidade não se somam e podem vencer).
+test('pedido devolve totais do servidor e não grava cupom que não foi aplicado', async () => {
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const code = `CUPOM3${Date.now().toString(36).toUpperCase()}`;
+  let orderId;
+  let variantId;
+  let originalStock = null;
+  try {
+    const { rows } = await pool.query(
+      `SELECT v.id AS variant_id, v.stock, v.size, v.color, p.id AS product_id, p.name, p.price
+         FROM product_variants v JOIN products p ON p.id = v.product_id
+        WHERE p.active AND p.price IS NOT NULL ORDER BY p.created_at LIMIT 1`
+    );
+    assert.ok(rows.length, 'precisa de uma variação com preço');
+    const variant = rows[0];
+    variantId = variant.variant_id;
+    originalStock = variant.stock;
+    await pool.query('UPDATE product_variants SET stock = $1 WHERE id = $2', [Math.max(originalStock, 5), variantId]);
+    // 3% de cupom perde para os 5% do Pix
+    await pool.query(`INSERT INTO coupons (code, discount_type, discount_value, active) VALUES ($1, 'percent', 3, true)`, [code]);
+
+    const response = await fetch(`${origin}/api/orders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '198.51.100.90' },
+      body: JSON.stringify({
+        customerName: 'Teste Totais',
+        customerPhone: `31900${Date.now().toString().slice(-6)}`,
+        items: [{ id: variant.product_id, variantId, qty: 1, name: variant.name, variantLabel: 'rótulo forjado' }],
+        paymentMethod: 'Pix',
+        deliveryMethod: 'Retirada em loja',
+        couponCode: code,
+      }),
+    });
+    const data = await response.json();
+    assert.equal(response.status, 201, JSON.stringify(data));
+    orderId = data.orderId;
+    assert.match(data.orderCode, /^#[0-9A-F]{8}$/);
+    const expectedDiscount = Math.round(Number(variant.price) * 0.05 * 100) / 100;
+    assert.ok(Math.abs(data.discount - expectedDiscount) < 0.01, `desconto Pix esperado ${expectedDiscount}, veio ${data.discount}`);
+    assert.ok(Math.abs(data.total - (Number(variant.price) - expectedDiscount)) < 0.01);
+    assert.equal(data.items[0].variantLabel, [variant.size, variant.color].filter(Boolean).join(' - '));
+
+    const row = await pool.query('SELECT coupon_code AS "couponCode" FROM orders WHERE id = $1', [orderId]);
+    assert.equal(row.rows[0].couponCode, null);
+  } finally {
+    if (orderId) {
+      await pool.query('DELETE FROM inventory_movements WHERE order_id = $1', [orderId]);
+      await pool.query('DELETE FROM orders WHERE id = $1', [orderId]);
+    }
+    if (variantId && originalStock !== null) {
+      await pool.query('UPDATE product_variants SET stock = $1 WHERE id = $2', [originalStock, variantId]);
+    }
+    await pool.query('DELETE FROM coupons WHERE code = $1', [code]);
     await pool.end();
   }
 });

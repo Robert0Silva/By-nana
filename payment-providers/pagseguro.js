@@ -50,6 +50,8 @@ function psRequest(method, urlPath, body) {
         });
       }
     );
+    // sem timeout, uma lentidão do PagBank deixaria a cliente esperando a resposta do pedido
+    req.setTimeout(10_000, () => req.destroy(new Error(`PagBank ${method} ${urlPath} -> timeout`)));
     req.on('error', reject);
     if (payload) req.write(payload);
     req.end();
@@ -78,6 +80,9 @@ async function createCheckoutSession({ orderId, total, customerName, customerEma
       },
     ],
     customer_modifiable: true,
+    // Mesmo prazo de CHECKOUT_EXPIRATION_HOURS (payment-provider.js): passado esse tempo o link
+    // deixa de aceitar pagamento e a varredura de pedidos pendentes devolve o estoque.
+    expiration_date: new Date(Date.now() + require('../payment-provider').CHECKOUT_EXPIRATION_HOURS * 60 * 60 * 1000).toISOString(),
     payment_methods: [{ type: 'CREDIT_CARD' }, { type: 'DEBIT_CARD' }, { type: 'PIX' }],
   };
   if (customerName || customerEmail) {
@@ -143,9 +148,10 @@ async function handleWebhook(req, rawBody) {
   const charges = Array.isArray(payload.charges) ? payload.charges : [];
   if (!orderId || !charges.length) return { ignored: true };
 
-  // Cobrança mais recente é a que representa o estado atual do pagamento (ex.: uma tentativa
-  // de cartão recusada seguida de uma nova tentativa aprovada).
-  const charge = charges[charges.length - 1];
+  // Uma cobrança paga vale mais que tentativas recusadas depois dela (ex.: cliente tenta outro
+  // cartão por engano) — sem isso, a última tentativa recusada "despagaria" o pedido. Sem
+  // cobrança paga, a mais recente representa o estado atual.
+  const charge = charges.find((c) => c.status === 'PAID') || charges[charges.length - 1];
   const refundedAmount = Number(charge.amount && charge.amount.summary && charge.amount.summary.refunded) || 0;
   const status = refundedAmount > 0 ? 'refunded' : (STATUS_MAP[charge.status] || 'pending');
   return { orderId, status, providerReference: charge.id || payload.id };
