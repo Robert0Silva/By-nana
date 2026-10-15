@@ -745,9 +745,23 @@ function publicCoupons(coupons) {
   return coupons.filter((c) => c.firstPurchaseOnly && PromoEngine.findCoupon([c], c.code));
 }
 
+// prazo em dias úteis: ambos vazios = sem prazo; só um preenchido vale para os dois.
+function parseShippingDays(body) {
+  const read = (v) => (v === '' || v == null ? null : Number(v));
+  let min = read(body.daysMin);
+  let max = read(body.daysMax);
+  for (const v of [min, max]) {
+    if (v != null && (!Number.isInteger(v) || v < 0 || v > 90)) return { error: 'Informe o prazo em dias úteis (0 a 90)' };
+  }
+  if (min == null) min = max;
+  if (max == null) max = min;
+  if (min != null && max < min) return { error: 'O prazo máximo não pode ser menor que o mínimo' };
+  return { min, max };
+}
+
 async function getShippingRules() {
   const { rows } = await pool.query(`
-    SELECT id, uf, label, price, free_above AS "freeAbove", active
+    SELECT id, uf, label, price, free_above AS "freeAbove", days_min AS "daysMin", days_max AS "daysMax", active
     FROM shipping_rules
     ORDER BY (uf = '*'), uf
   `);
@@ -2327,13 +2341,15 @@ async function handleApi(req, res, pathname) {
         return sendJSON(res, 400, { error: 'Informe um valor válido para frete grátis acima de' });
       }
       const label = (body.label || '').trim();
+      const days = parseShippingDays(body);
+      if (days.error) return sendJSON(res, 400, { error: days.error });
 
       const dup = await pool.query('SELECT 1 FROM shipping_rules WHERE upper(uf) = $1', [uf]);
       if (dup.rowCount) return sendJSON(res, 409, { error: uf === '*' ? 'Já existe uma regra padrão' : `Já existe uma regra para ${uf}` });
 
       await pool.query(
-        'INSERT INTO shipping_rules (uf, label, price, free_above) VALUES ($1,$2,$3,$4)',
-        [uf, label, price, freeAboveRaw]
+        'INSERT INTO shipping_rules (uf, label, price, free_above, days_min, days_max) VALUES ($1,$2,$3,$4,$5,$6)',
+        [uf, label, price, freeAboveRaw, days.min, days.max]
       );
       logActivity(admin, 'shipping_rule.create', 'shipping_rule', uf, null);
       return sendJSON(res, 201, { shippingRules: await getShippingRules() });
@@ -2354,10 +2370,12 @@ async function handleApi(req, res, pathname) {
       }
       const label = (body.label || '').trim();
       const active = body.active !== false;
+      const days = parseShippingDays(body);
+      if (days.error) return sendJSON(res, 400, { error: days.error });
 
       const { rowCount } = await pool.query(
-        'UPDATE shipping_rules SET label=$1, price=$2, free_above=$3, active=$4 WHERE id=$5',
-        [label, price, freeAboveRaw, active, id]
+        'UPDATE shipping_rules SET label=$1, price=$2, free_above=$3, active=$4, days_min=$5, days_max=$6 WHERE id=$7',
+        [label, price, freeAboveRaw, active, days.min, days.max, id]
       );
       if (!rowCount) return sendJSON(res, 404, { error: 'Regra não encontrada' });
       logActivity(admin, 'shipping_rule.update', 'shipping_rule', String(id), null);
@@ -3420,7 +3438,9 @@ function serveBadRequest(res) {
 // dentro de assets/. Tudo mais no repo (serve.js, .env, db/, node_modules/, package.json...)
 // nunca deve ser servido como arquivo estático — allowlist em vez de bloquear só ".."
 // porque um arquivo sensível (ex.: .env) pode estar dentro do root sem nenhum ".." envolvido.
-const PUBLIC_STATIC_FILES = new Set(['/index.html', '/admin.html', '/produto.html', '/404.html', '/redefinir-senha.html', '/politica-privacidade.html']);
+const PUBLIC_STATIC_FILES = new Set(['/index.html', '/admin.html', '/produto.html', '/404.html', '/redefinir-senha.html', '/politica-privacidade.html', '/trocas-e-devolucoes.html', '/ajuda.html']);
+// páginas institucionais estáticas que só precisam do canonical absoluto preenchido
+const POLICY_PAGES = new Set(['/politica-privacidade.html', '/trocas-e-devolucoes.html', '/ajuda.html']);
 
 // Recebe o caminho já decodificado: "%2e%2e" e "..%2f" viram ".." só depois do
 // decodeURIComponent, então qualquer segmento "." / ".." (ou barra invertida) é recusado
@@ -3489,8 +3509,8 @@ function serveStatic(req, res, pathname) {
       sendBody(req, res, 200, { 'Content-Type': types_[ext] || 'application/octet-stream', 'Cache-Control': cacheControlFor(filePath, ext, new URL(req.url, 'http://local').searchParams.has('v')) }, html, { compressible: true });
       return;
     }
-    if (filePath === '/politica-privacidade.html') {
-      const canonical = `${seoOrigin(req)}/politica-privacidade.html`;
+    if (POLICY_PAGES.has(filePath)) {
+      const canonical = `${seoOrigin(req)}${filePath}`;
       const html = data.toString('utf8').replace(/<!--POLICY_CANONICAL-->/g, escapeHtml(canonical));
       sendBody(req, res, 200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' }, html, { compressible: true });
       return;
@@ -3541,6 +3561,8 @@ async function buildSitemap(origin) {
   const urls = [
     { path: '/', lastmod: staticLastmod },
     { path: '/politica-privacidade.html', lastmod: staticLastmod },
+    { path: '/ajuda.html', lastmod: '2026-10-15' },
+    { path: '/trocas-e-devolucoes.html', lastmod: '2026-10-15' },
     ...rows.map((r) => ({ path: `/produto/${r.id}`, lastmod: new Date(r.created_at).toISOString().slice(0, 10) })),
   ];
   const items = urls.map((u) => `  <url><loc>${origin}${u.path}</loc><lastmod>${u.lastmod}</lastmod></url>`).join('\n');

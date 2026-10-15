@@ -883,6 +883,22 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
   font-size:.85rem;text-decoration:underline;padding:0;margin-top:2px;
 }
 .text-fav-btn.is-fav{color:var(--wine);}
+.pdp-ship{border-top:1px solid var(--line);padding:16px 0 4px;margin-top:10px;}
+.pdp-ship label{display:block;font-family:var(--serif);font-weight:600;font-size:.95rem;margin-bottom:8px;}
+.pdp-ship-row{display:flex;gap:8px;}
+.pdp-ship-row input{flex:1;min-width:0;padding:10px 12px;border:1px solid var(--line);border-radius:var(--radius-sm);font:inherit;background:var(--white);}
+.pdp-ship-row .btn{flex:none;}
+.pdp-ship-help{display:inline-block;margin-top:6px;font-size:.78rem;color:var(--ink-soft);}
+.pdp-ship-help + .pdp-ship-help{margin-left:16px;}
+.pdp-ship-result{font-size:.86rem;}
+.pdp-ship-result p{margin:10px 0 0;}
+.pdp-ship-result .is-error{color:var(--wine);}
+.pdp-ship-option{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);}
+.pdp-ship-option:first-child{margin-top:8px;}
+.pdp-ship-option > div{display:flex;flex-direction:column;align-items:flex-end;text-align:right;}
+.pdp-ship-option span{color:var(--ink-soft);font-size:.8rem;}
+.pdp-ship-option .pdp-ship-name{color:inherit;font-size:.86rem;}
+.pdp-ship-note{color:var(--wine)!important;}
 .pdp-accordion{border-top:1px solid var(--line);padding:14px 0;}
 .pdp-accordion[hidden]{display:none;}
 .pdp-accordion summary{cursor:pointer;font-family:var(--serif);font-weight:600;font-size:.95rem;list-style:none;}
@@ -1500,3 +1516,25 @@ body.pdp-buy-bar-open .float-whats{bottom:88px;}
 @media (max-width:720px){
   input:not([type=radio]):not([type=checkbox]),select,textarea{font-size:16px;}
 }
+
+/* ---------- central de ajuda / trocas ---------- */
+.policy-card > p,.policy-card .help-q p,.policy-steps{color:var(--ink-soft);line-height:1.7;}
+.policy-card .brand-mark{text-decoration:none;}
+.policy-highlights{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:0 0 1.6em;}
+.policy-highlights div{border:1px solid var(--line);padding:16px;text-align:center;display:flex;flex-direction:column;gap:4px;}
+.policy-highlights strong{font-family:var(--serif);font-size:1.35rem;color:var(--wine);}
+.policy-highlights span{font-size:.82rem;color:var(--ink-soft);line-height:1.4;}
+.policy-steps{padding-left:1.3em;margin:0 0 1em;}
+.policy-steps li{margin-bottom:.6em;}
+.policy-related{margin-top:2.4em;padding-top:1.4em;border-top:1px solid var(--line);}
+.help-topics{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin:0 0 1.4em;}
+.help-topics a{border:1px solid var(--line);border-radius:999px;padding:7px 14px;font-size:.84rem;text-decoration:none;color:var(--ink)!important;}
+.help-topics a:hover{border-color:var(--wine);color:var(--wine)!important;}
+.policy-card h2[id]{scroll-margin-top:24px;}
+.help-q{border-bottom:1px solid var(--line);}
+.help-q summary{cursor:pointer;list-style:none;padding:14px 28px 14px 0;position:relative;font-weight:500;}
+.help-q summary::-webkit-details-marker{display:none;}
+.help-q summary::after{content:"+";position:absolute;right:4px;top:50%;transform:translateY(-50%);font-size:1.2rem;color:var(--wine);}
+.help-q[open] summary::after{content:"−";}
+.help-q p{margin:0 0 14px;}
+@media (max-width:560px){.policy-highlights{grid-template-columns:1fr;}}

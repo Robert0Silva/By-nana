@@ -371,3 +371,8 @@ ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check;
 ALTER TABLE orders ADD CONSTRAINT orders_status_check
   CHECK (status IN ('novo', 'em_andamento', 'enviado', 'concluido', 'cancelado'));
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_code TEXT;
+
+-- prazo de entrega (dias úteis após a postagem) exibido na calculadora de frete do produto
+-- e na sacola. Ambos opcionais: sem prazo cadastrado, a loja mostra só o valor.
+ALTER TABLE shipping_rules ADD COLUMN IF NOT EXISTS days_min INTEGER;
+ALTER TABLE shipping_rules ADD COLUMN IF NOT EXISTS days_max INTEGER;

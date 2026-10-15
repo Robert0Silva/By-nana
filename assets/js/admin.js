@@ -1684,6 +1684,8 @@
   const shippingLabel = document.getElementById('shippingLabel');
   const shippingPrice = document.getElementById('shippingPrice');
   const shippingFreeAbove = document.getElementById('shippingFreeAbove');
+  const shippingDaysMin = document.getElementById('shippingDaysMin');
+  const shippingDaysMax = document.getElementById('shippingDaysMax');
   const shippingActive = document.getElementById('shippingActive');
   const shippingSubmit = document.getElementById('shippingSubmit');
   const shippingCancelEdit = document.getElementById('shippingCancelEdit');
@@ -1706,9 +1708,10 @@
     SHIPPING_RULES.forEach((r) => {
       const ufText = r.uf === '*' ? 'Padrão (demais estados)' : r.uf;
       const freeText = r.freeAbove != null ? ` · grátis acima de ${money(r.freeAbove)}` : '';
+      const daysText = r.daysMin != null ? ` · ${r.daysMin === r.daysMax ? r.daysMin : `${r.daysMin} a ${r.daysMax}`} dias úteis` : '';
       const inactiveText = r.active ? '' : ' · inativa';
       const li = document.createElement('li');
-      li.innerHTML = `<span>${ufText}${r.label ? ` — ${escapeHtml(r.label)}` : ''} · ${money(r.price)}${freeText}${inactiveText}</span><button type="button" class="admin-coupon-edit" aria-label="Editar">✎</button><button type="button" aria-label="Remover">✕</button>`;
+      li.innerHTML = `<span>${ufText}${r.label ? ` — ${escapeHtml(r.label)}` : ''} · ${money(r.price)}${freeText}${daysText}${inactiveText}</span><button type="button" class="admin-coupon-edit" aria-label="Editar">✎</button><button type="button" aria-label="Remover">✕</button>`;
       li.querySelector('.admin-coupon-edit').addEventListener('click', () => startEditShipping(r));
       li.querySelector('button:not(.admin-coupon-edit)').addEventListener('click', async () => {
         if (!(await confirmDialog(`Remover a regra de frete "${ufText}"?`))) return;
@@ -1728,6 +1731,8 @@
     shippingLabel.value = r.label || '';
     shippingPrice.value = r.price;
     shippingFreeAbove.value = r.freeAbove != null ? r.freeAbove : '';
+    shippingDaysMin.value = r.daysMin != null ? r.daysMin : '';
+    shippingDaysMax.value = r.daysMax != null ? r.daysMax : '';
     shippingActive.checked = r.active;
     shippingFormTitle.textContent = `Editando regra "${r.uf === '*' ? 'Padrão' : r.uf}"`;
     shippingSubmit.textContent = 'Salvar alterações';
@@ -1761,6 +1766,8 @@
             label: shippingLabel.value.trim(),
             price: shippingPrice.value,
             freeAbove: shippingFreeAbove.value,
+            daysMin: shippingDaysMin.value,
+            daysMax: shippingDaysMax.value,
             active: shippingActive.checked,
           }
         : {
@@ -1768,6 +1775,8 @@
             label: shippingLabel.value.trim(),
             price: shippingPrice.value,
             freeAbove: shippingFreeAbove.value,
+            daysMin: shippingDaysMin.value,
+            daysMax: shippingDaysMax.value,
           };
       const data = editing
         ? await api('/api/shipping-rules/update', 'POST', payload)

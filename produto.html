@@ -18,7 +18,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,600;1,500&family=Poppins:wght@300;400;500;600&family=Great+Vibes&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/assets/css/style.css?v=20261007" />
+<link rel="stylesheet" href="/assets/css/style.css?v=20261015" />
 </head>
 <body data-page="produto">
 
@@ -150,6 +150,17 @@
           </div>
           <button class="text-fav-btn" id="pdpFav">♡ Salvar nos favoritos</button>
 
+          <form class="pdp-ship" id="pdpShipForm" hidden>
+            <label for="pdpShipCep">Calcular frete e prazo</label>
+            <div class="pdp-ship-row">
+              <input type="text" id="pdpShipCep" inputmode="numeric" autocomplete="postal-code" maxlength="9" placeholder="00000-000" />
+              <button type="submit" class="btn btn-ghost">Calcular</button>
+            </div>
+            <a class="pdp-ship-help" href="https://buscacepinter.correios.com.br/app/endereco/index.php" target="_blank" rel="noopener">Não sei meu CEP</a>
+            <a class="pdp-ship-help" href="/trocas-e-devolucoes.html">Troca de tamanho em até 7 dias</a>
+            <div class="pdp-ship-result" id="pdpShipResult" aria-live="polite"></div>
+          </form>
+
           <details class="pdp-accordion" id="pdpMeasurementsBlock" hidden>
             <summary>Medidas deste tamanho</summary>
             <p class="pdp-accordion-text" id="pdpMeasurements"></p>
@@ -213,7 +224,7 @@
     <p class="footer-note">By Nana Comércio de Vestuário Ltda · CNPJ 52.505.441/0001-49</p>
     <p class="footer-note">Av. Guanabara, 237 · bynanaloja@gmail.com · Atendimento das 14h às 19h ou com horário agendado</p>
     <p class="footer-note">Envio em até 3 dias úteis por aplicativo ou Correios · Retirada das 14h às 19h</p>
-    <p class="footer-note"><a href="/politica-privacidade.html">Política de Privacidade e Termos de Uso</a></p>
+    <p class="footer-note"><a href="/ajuda.html">Central de Ajuda</a> · <a href="/trocas-e-devolucoes.html">Trocas e Devoluções</a> · <a href="/politica-privacidade.html">Política de Privacidade e Termos de Uso</a></p>
     <a href="/admin" class="footer-admin-link">Área administrativa</a>
   </div>
 </footer>
@@ -537,8 +548,8 @@
   <button class="add-btn" id="pdpBuyBarAdd">Adicionar à sacola</button>
 </div>
 
-<script src="/assets/js/analytics.js?v=20261007"></script>
-<script src="/assets/js/promo.js?v=20261007"></script>
-<script src="/assets/js/main.js?v=20261007"></script>
+<script src="/assets/js/analytics.js?v=20261015"></script>
+<script src="/assets/js/promo.js?v=20261015"></script>
+<script src="/assets/js/main.js?v=20261015"></script>
 </body>
 </html>

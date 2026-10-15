@@ -301,7 +301,22 @@
     if (!rule) return { applicable: false, cost: 0, label: '', free: false };
     const subtotal = cartSubtotal(keys);
     const free = rule.freeAbove != null && subtotal >= Number(rule.freeAbove);
-    return { applicable: true, cost: free ? 0 : Number(rule.price), label: rule.label || '', free };
+    return { applicable: true, cost: free ? 0 : Number(rule.price), label: rule.label || '', free, days: shippingDaysText(rule) };
+  }
+
+  function shippingRuleFor(uf) {
+    const active = SHIPPING_RULES.filter((r) => r.active);
+    const target = (uf || '').trim().toUpperCase();
+    return active.find((r) => r.uf.toUpperCase() === target) || active.find((r) => r.uf === '*') || null;
+  }
+
+  // "3 a 7 dias úteis" / "5 dias úteis"; vazio quando a regra não tem prazo cadastrado.
+  function shippingDaysText(rule) {
+    if (!rule || rule.daysMin == null) return '';
+    const min = Number(rule.daysMin);
+    const max = Number(rule.daysMax ?? min);
+    if (max <= 1 && min === max) return `${max} dia útil`;
+    return min === max ? `${min} dias úteis` : `${min} a ${max} dias úteis`;
   }
 
   // Antes de a cliente escolher UF (ou de escolher "Entrega"), usa o menor valor de freeAbove
@@ -1678,7 +1693,8 @@
     }
     bagShippingRow.hidden = !quote.applicable;
     if (quote.applicable) {
-      bagShippingLabelEl.textContent = quote.label ? `Frete (${quote.label})` : 'Frete';
+      const shipDetail = [quote.label, quote.days].filter(Boolean).join(' · ');
+      bagShippingLabelEl.textContent = shipDetail ? `Frete (${shipDetail})` : 'Frete';
       bagShippingValueEl.textContent = quote.free ? 'Grátis' : money(quote.cost);
     }
     bagTotalEl.textContent = money(final);
@@ -2895,6 +2911,60 @@
     if (productActionsEl) buyBarObserver.observe(productActionsEl);
   }
 
+  // ---------- calculadora de frete na página de produto ----------
+  // Usa a mesma tabela por UF do checkout: o CEP só serve para descobrir a UF (ViaCEP).
+  // Considera só o preço desta peça para o "frete grátis"; a sacola recalcula com o total real.
+  let pdpShipPrice = null;
+  const pdpShipForm = document.getElementById('pdpShipForm');
+  const PDP_CEP_KEY = 'bynana_cep';
+  if (pdpShipForm) {
+    const cepEl = document.getElementById('pdpShipCep');
+    const resultEl = document.getElementById('pdpShipResult');
+    try { cepEl.value = localStorage.getItem(PDP_CEP_KEY) || ''; } catch { /* sem storage */ }
+    cepEl.addEventListener('input', () => {
+      const d = cepEl.value.replace(/\D/g, '').slice(0, 8);
+      cepEl.value = d.length > 5 ? `${d.slice(0, 5)}-${d.slice(5)}` : d;
+    });
+    pdpShipForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const digits = cepEl.value.replace(/\D/g, '');
+      if (digits.length !== 8) {
+        resultEl.innerHTML = '<p class="is-error">Digite os 8 números do CEP.</p>';
+        return;
+      }
+      resultEl.innerHTML = '<p>Calculando...</p>';
+      let place;
+      try {
+        const res = await fetch(`https://viacep.com.br/ws/${digits}/json/`);
+        place = await res.json();
+      } catch {
+        resultEl.innerHTML = '<p class="is-error">Não foi possível consultar o CEP agora. Tente de novo em instantes.</p>';
+        return;
+      }
+      if (!place || place.erro) {
+        resultEl.innerHTML = '<p class="is-error">CEP não encontrado. Confira o número.</p>';
+        return;
+      }
+      try { localStorage.setItem(PDP_CEP_KEY, cepEl.value); } catch { /* sem storage */ }
+      const rule = shippingRuleFor(place.uf);
+      const where = `${escapeHtml(place.localidade)}/${escapeHtml(place.uf)}`;
+      let delivery;
+      if (!rule) {
+        delivery = '<span>Valor combinado no atendimento</span>';
+      } else {
+        const freeAbove = rule.freeAbove != null ? Number(rule.freeAbove) : null;
+        const free = freeAbove != null && pdpShipPrice != null && pdpShipPrice >= freeAbove;
+        const days = shippingDaysText(rule);
+        delivery = `<strong>${free ? 'Grátis' : money(Number(rule.price))}</strong>${days ? `<span>${days} após a postagem</span>` : ''}`;
+        if (!free && freeAbove) delivery += `<span class="pdp-ship-note">Grátis em compras a partir de ${money(freeAbove)}</span>`;
+      }
+      resultEl.innerHTML = `
+        <div class="pdp-ship-option"><span class="pdp-ship-name">Entrega para ${where}</span><div>${delivery}</div></div>
+        <div class="pdp-ship-option"><span class="pdp-ship-name">Retirada na loja</span><div><strong>Grátis</strong></div></div>
+      `;
+    });
+  }
+
   // ---------- página de produto (produto.html) ----------
   // Reaproveita os mesmos helpers da vitrine (getEffective, money, colorDotsHtml,
   // variantLabel, isLowStock, syncAddButton, productCard) — é o mesmo main.js rodando nas duas
@@ -2952,6 +3022,8 @@
     discountBadge.textContent = promo ? `-${promo.percent}%` : '';
     discountBadge.hidden = !promo;
     if (pdpBuyBarPrice) pdpBuyBarPrice.textContent = priceEl.textContent;
+    pdpShipPrice = p.price == null ? null : price;
+    if (pdpShipForm) pdpShipForm.hidden = !SHIPPING_RULES.some((r) => r.active);
     const installmentsEl = document.getElementById('pdpInstallments');
     installmentsEl.textContent = installmentText(price);
     installmentsEl.hidden = p.price == null;
