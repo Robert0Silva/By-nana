@@ -65,6 +65,37 @@ test('serve as páginas públicas e os assets principais', async () => {
   }
 });
 
+test('serve Central de Ajuda e Trocas com canonical próprio', async () => {
+  for (const route of ['/ajuda.html', '/trocas-e-devolucoes.html']) {
+    const response = await fetch(`${origin}${route}`);
+    assert.equal(response.status, 200, route);
+    const html = await response.text();
+    assert.match(html, new RegExp(`<link rel="canonical" href="[^"]+${route}"`), route);
+    assert.doesNotMatch(html, /<!--POLICY_CANONICAL-->/, route);
+  }
+});
+
+test('categoria tem página própria com título e canonical, e categoria inexistente dá 404', async () => {
+  const data = await (await fetch(`${origin}/api/data`)).json();
+  const name = data.categories[0];
+  assert.ok(name, 'precisa de ao menos uma categoria cadastrada');
+  const slug = name.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+  const response = await fetch(`${origin}/categoria/${slug}`);
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /<base href="\/" \/>/);
+  assert.ok(html.includes(`<link rel="canonical" href="`) && html.includes(`/categoria/${slug}"`));
+  assert.ok(html.includes(`<title>${name.replace(/&/g, '&amp;')} — By NaNa</title>`));
+
+  const missing = await fetch(`${origin}/categoria/nao-existe-xyz`);
+  assert.equal(missing.status, 404);
+
+  const sitemap = await (await fetch(`${origin}/sitemap.xml`)).text();
+  assert.match(sitemap, /\/ajuda\.html<\/loc>/);
+  assert.match(sitemap, /\/categoria\/[a-z0-9-]+<\/loc>/);
+});
+
 test('assets versionados usam cache longo e variantes WebP são servidas', async () => {
   const css = await fetch(`${origin}/assets/css/style.css?v=20260825`);
   assert.equal(css.status, 200);

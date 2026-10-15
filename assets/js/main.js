@@ -48,6 +48,14 @@
     return String(str == null ? '' : str).replace(/[&<>"']/g, (c) => ESCAPE_MAP[c]);
   }
 
+  // mesmo slug do serve.js (/categoria/:slug): "Calças & Saias" -> "calcas-saias"
+  function categorySlug(name) {
+    return String(name || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  }
+  const categoryPath = (name) => `/categoria/${categorySlug(name)}`;
+  const CATEGORY_PATH_RE = /^\/categoria\/([^/]+)\/?$/;
+
   function safeStoredJson(key, fallback, isValid) {
     try {
       const raw = localStorage.getItem(key);
@@ -817,11 +825,15 @@
     const fallbackImg = 'assets/img/processed/logo.png';
     CATEGORIES.forEach((cat) => {
       const rep = PRODUCTS.find((p) => p.category === cat);
-      const btn = document.createElement('button');
+      const btn = document.createElement('a');
+      btn.href = categoryPath(cat);
       btn.className = 'cat-card';
       btn.dataset.filter = cat;
       btn.innerHTML = `<img src="${rep ? rep.img : fallbackImg}" ${responsiveImageAttrs(rep ? rep.img : fallbackImg, '(max-width: 520px) 76vw, 25vw')} alt="${escapeHtml(cat)}" loading="lazy" decoding="async" /><span>${escapeHtml(cat)}</span>`;
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', (e) => {
+        // o href existe para o Google e para abrir em nova aba; o clique comum filtra na hora
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+        e.preventDefault();
         setFilter(cat);
         document.getElementById('colecao').scrollIntoView({ behavior: 'smooth' });
       });
@@ -934,8 +946,12 @@
   function syncCatalogUrl() {
     if (!grid) return;
     const params = new URLSearchParams(location.search);
+    const isCategory = currentFilter && currentFilter !== 'Todos' && CATEGORIES.includes(currentFilter);
+    const onCategoryPath = CATEGORY_PATH_RE.test(location.pathname);
+    // categoria tem endereço próprio (/categoria/slug); outros filtros seguem na query string
+    const pathname = isCategory ? categoryPath(currentFilter) : (onCategoryPath ? '/' : location.pathname);
     const values = {
-      categoria: currentFilter && currentFilter !== 'Todos' ? currentFilter : '',
+      categoria: currentFilter && currentFilter !== 'Todos' && !isCategory ? currentFilter : '',
       colecao: currentCollection,
       tamanho: currentSize,
       cor: currentColor,
@@ -946,7 +962,7 @@
     // só mexe nas próprias chaves — outros parâmetros (ex.: retorno do checkout) ficam intactos.
     Object.entries(values).forEach(([key, value]) => (value ? params.set(key, value) : params.delete(key)));
     const query = params.toString();
-    const url = `${location.pathname}${query ? `?${query}` : ''}${location.hash}`;
+    const url = `${pathname}${query ? `?${query}` : ''}${location.hash}`;
     if (url !== `${location.pathname}${location.search}${location.hash}`) history.replaceState(history.state, '', url);
   }
 
@@ -1022,7 +1038,7 @@
         ([groupName, names]) => `
         <div class="mega-menu-col">
           <p class="mega-menu-col-title">${escapeHtml(groupName)}</p>
-          <ul>${names.map((n) => `<li><a href="#colecao" data-cat="${escapeHtml(n)}">${escapeHtml(n)}</a></li>`).join('')}</ul>
+          <ul>${names.map((n) => `<li><a href="${escapeHtml(categoryPath(n))}" data-cat="${escapeHtml(n)}">${escapeHtml(n)}</a></li>`).join('')}</ul>
         </div>`
       )
       .join('');
@@ -1038,7 +1054,7 @@
       setFilter(link.dataset.cat);
       colecao.scrollIntoView({ behavior: 'smooth' });
     } else {
-      location.href = `/?categoria=${encodeURIComponent(link.dataset.cat)}#colecao`;
+      location.href = categoryPath(link.dataset.cat);
     }
   });
 
@@ -3302,7 +3318,9 @@
     } else {
       const params = new URLSearchParams(location.search);
       const initialSearch = params.get('busca') || '';
-      const initialCategory = params.get('categoria') || 'Todos';
+      const pathMatch = location.pathname.match(CATEGORY_PATH_RE);
+      const pathCategory = pathMatch ? CATEGORIES.find((c) => categorySlug(c) === pathMatch[1]) : null;
+      const initialCategory = pathCategory || params.get('categoria') || 'Todos';
       buildFilters();
       buildCatCards();
       buildCollectionFilter();
@@ -3315,6 +3333,8 @@
       renderBestSellers();
       renderRecentlyViewed();
       renderStoriesRail();
+      // /categoria/x abre direto na vitrine: só depois de todas as seções acima estarem montadas
+      if (pathCategory) requestAnimationFrame(() => document.getElementById('colecao')?.scrollIntoView());
     }
 
     initScrollReveal();

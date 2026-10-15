@@ -3494,18 +3494,7 @@ function serveStatic(req, res, pathname) {
     if (filePath === '/index.html') {
       // og:image/canonical precisam ser URL absoluta (esquema+host) — link relativo não é
       // resolvido de forma confiável por crawlers de preview (WhatsApp/Facebook/Instagram).
-      const origin = seoOrigin(req);
-      const html = data
-        .toString('utf8')
-        .replace(/<!--HOME_OG_IMAGE-->/g, escapeHtml(`${origin}/assets/img/processed/site-hero-1.jpg`))
-        .replace(/<!--HOME_CANONICAL-->/g, escapeHtml(`${origin}/`))
-        .replace(/<!--HOME_JSONLD-->/g, JSON.stringify({
-          '@context': 'https://schema.org',
-          '@type': 'Organization',
-          name: 'By NaNa',
-          url: `${origin}/`,
-          logo: `${origin}/assets/img/processed/logo.png`,
-        }).replace(/</g, '\\u003c'));
+      const html = fillHomeTemplate(data.toString('utf8'), seoOrigin(req), `${seoOrigin(req)}/`);
       sendBody(req, res, 200, { 'Content-Type': types_[ext] || 'application/octet-stream', 'Cache-Control': cacheControlFor(filePath, ext, new URL(req.url, 'http://local').searchParams.has('v')) }, html, { compressible: true });
       return;
     }
@@ -3557,12 +3546,19 @@ function configuredPublicOrigin(req) {
 // com só a home.
 async function buildSitemap(origin) {
   const { rows } = await pool.query('SELECT id, created_at FROM products WHERE active ORDER BY created_at DESC');
+  // só categorias com algo à venda: página vazia indexada seria "soft 404" para o Google
+  const { rows: cats } = await pool.query(
+    `SELECT c.name, max(p.created_at) AS lastmod FROM categories c
+       JOIN products p ON p.category_id = c.id AND p.active
+      GROUP BY c.name ORDER BY c.name`
+  );
   const staticLastmod = '2026-08-25';
   const urls = [
     { path: '/', lastmod: staticLastmod },
     { path: '/politica-privacidade.html', lastmod: staticLastmod },
     { path: '/ajuda.html', lastmod: '2026-10-15' },
     { path: '/trocas-e-devolucoes.html', lastmod: '2026-10-15' },
+    ...cats.map((c) => ({ path: `/categoria/${categorySlug(c.name)}`, lastmod: new Date(c.lastmod).toISOString().slice(0, 10) })),
     ...rows.map((r) => ({ path: `/produto/${r.id}`, lastmod: new Date(r.created_at).toISOString().slice(0, 10) })),
   ];
   const items = urls.map((u) => `  <url><loc>${origin}${u.path}</loc><lastmod>${u.lastmod}</lastmod></url>`).join('\n');
@@ -3590,6 +3586,56 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+function fillHomeTemplate(html, origin, canonical) {
+  return html
+    .replace(/<!--HOME_OG_IMAGE-->/g, escapeHtml(`${origin}/assets/img/processed/site-hero-1.jpg`))
+    .replace(/<!--HOME_CANONICAL-->/g, escapeHtml(canonical))
+    .replace(/<!--HOME_JSONLD-->/g, JSON.stringify({
+      '@context': 'https://schema.org',
+      '@type': 'Organization',
+      name: 'By NaNa',
+      url: `${origin}/`,
+      logo: `${origin}/assets/img/processed/logo.png`,
+    }).replace(/</g, '\\u003c'));
+}
+
+// mesmo slug do main.js: "Calças & Saias" -> "calcas-saias"
+function categorySlug(name) {
+  return String(name || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+// /categoria/:slug — a mesma vitrine da home já filtrada (o main.js lê o slug do caminho),
+// mas com título, descrição e canonical próprios para a categoria aparecer no Google.
+async function serveCategoryPage(req, res, slug) {
+  const [categories, content] = await Promise.all([getCategories(), getCategoryContent()]);
+  const name = categories.find((c) => categorySlug(c) === slug);
+  if (!name) {
+    serveNotFound(res);
+    return;
+  }
+  fs.readFile(path.join(root, 'index.html'), 'utf8', (err, template) => {
+    if (err) {
+      serveNotFound(res);
+      return;
+    }
+    const origin = seoOrigin(req);
+    const canonical = `${origin}/categoria/${slug}`;
+    const seoText = (content.find((c) => c.name === name) || {}).seoText || '';
+    const title = `${name} — By NaNa`;
+    const description = (seoText || `${name} na By NaNa: curadoria de moda com atendimento pelo WhatsApp, Pix com desconto e parcelamento sem juros.`).slice(0, 160);
+    const html = fillHomeTemplate(template, origin, canonical)
+      // caminhos relativos (assets/...) do index.html continuam resolvendo a partir da raiz
+      .replace('<head>', '<head>\n<base href="/" />')
+      .replace(/<title>[^<]*<\/title>/, `<title>${escapeHtml(title)}</title>`)
+      .replace(/<meta name="description" content="[^"]*" \/>/, `<meta name="description" content="${escapeHtml(description)}" />`)
+      .replace(/<meta property="og:title" content="[^"]*" \/>/, `<meta property="og:title" content="${escapeHtml(title)}" />`)
+      .replace(/<meta property="og:description" content="[^"]*" \/>/, `<meta property="og:description" content="${escapeHtml(description)}" />`)
+      .replace('<h2>Explore toda a coleção</h2>', `<h2>${escapeHtml(name)}</h2>`);
+    sendBody(req, res, 200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' }, html, { compressible: true });
+  });
 }
 
 // Sem template engine no projeto — monta o <head> por substituição de string simples nos
@@ -3701,6 +3747,18 @@ const httpServer = http
         return;
       }
       serveProductPage(req, res, id);
+      return;
+    }
+    if (pathname.startsWith('/categoria/')) {
+      const slug = decodePath(pathname.slice('/categoria/'.length));
+      if (slug === null) {
+        serveBadRequest(res);
+        return;
+      }
+      serveCategoryPage(req, res, slug.replace(/\/$/, '')).catch((err) => {
+        console.error('[categoria] falha ao montar página:', err.message);
+        if (!res.headersSent) serveNotFound(res);
+      });
       return;
     }
     serveStatic(req, res, pathname);

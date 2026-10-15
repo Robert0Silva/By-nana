@@ -412,6 +412,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 .categorias{padding:var(--section-space) 0 24px;}
 .cat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;}
 .cat-card{
+  display:block;color:inherit;text-decoration:none;
   position:relative;border:none;padding:0;border-radius:var(--radius);overflow:hidden;
   cursor:pointer;aspect-ratio:3/4;background:var(--card);
 }
