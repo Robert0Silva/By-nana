@@ -407,6 +407,14 @@
     pdpRestockSelect.innerHTML = soldOutVariants
       .map((v) => `<option value="${v.id}">${escapeHtml(variantLabel(v))}</option>`)
       .join('');
+    // veio do botão "Avise-me quando chegar" do card: já abre o formulário, rola até ele e foca o contato
+    if (soldOutVariants.length && location.hash === '#avise-me') {
+      pdpRestockForm.hidden = false;
+      requestAnimationFrame(() => {
+        pdpRestockBlock.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        pdpRestockContact.focus({ preventScroll: true });
+      });
+    }
   }
 
   if (pdpRestockToggle) {
@@ -575,10 +583,20 @@
             .join('')}
         </div>`
       : '';
+    // 2ª foto da galeria aparece ao passar o mouse (padrão das grandes marcas: mostra o look de
+    // outro ângulo sem precisar abrir a peça). Só existe se a galeria tiver uma foto diferente da capa.
+    const altImg = (p.images || []).find((url) => url && url !== p.img);
+    if (altImg) div.classList.add('has-alt-img');
+    // esgotado vira captura de contato ("avise-me") em vez de um botão morto; o formulário fica
+    // na página da peça, que abre já com ele aberto (#avise-me).
+    const actionHtml = soldOut
+      ? `<a class="notify-btn" href="/produto/${p.id}#avise-me">Avise-me quando chegar</a>`
+      : `<button class="add-btn" data-id="${p.id}" ${defaultVariant ? `data-variant-id="${defaultVariant.id}"` : ''}>Adicionar à sacola</button>`;
 
     div.innerHTML = `
       <a class="product-media" href="/produto/${p.id}">
         <img src="${escapeHtml(p.img)}" ${responsiveImageAttrs(p.img)} alt="${escapeHtml(p.name)}" loading="lazy" decoding="async" />
+        ${altImg ? `<img class="product-media-alt" src="${escapeHtml(altImg)}" ${responsiveImageAttrs(altImg)} alt="" aria-hidden="true" loading="lazy" decoding="async" />` : ''}
         <div class="product-badges">
           <span class="product-tag">${escapeHtml(p.tag)}</span>
           ${promo ? `<span class="discount-badge">-${promo.percent}%</span>` : ''}
@@ -597,7 +615,7 @@
         ${colorDotsHtml(variants)}
         ${variantHtml}
         <div class="product-actions">
-          <button class="add-btn${soldOut ? ' is-soldout' : ''}" data-id="${p.id}" ${defaultVariant ? `data-variant-id="${defaultVariant.id}"` : ''} ${soldOut ? 'disabled' : ''}>${soldOut ? 'Esgotado' : 'Adicionar à sacola'}</button>
+          ${actionHtml}
           <a class="ask-btn" target="_blank" rel="noopener" href="${waLink(
             `Olá! Tenho interesse na peça "${p.name}" que vi no catálogo By NaNa. Pode me passar mais detalhes?`
           )}" aria-label="Perguntar no WhatsApp">${WA_ICON}</a>
@@ -823,13 +841,42 @@
     if (!catGrid) return;
     catGrid.innerHTML = '';
     const fallbackImg = 'assets/img/processed/logo.png';
+    // capa = peças com foto, as que têm estoque primeiro. Se a foto escolhida não carregar (ex.:
+    // cadastro de teste com arquivo apagado), passa para a próxima peça em vez de mostrar imagem
+    // quebrada; o logo só entra quando nenhuma serve.
+    const coverCandidates = (list) => [
+      ...list.filter((p) => p.img && !isProductSoldOut(p)).map((p) => p.img),
+      ...list.filter((p) => p.img && isProductSoldOut(p)).map((p) => p.img),
+      fallbackImg,
+    ];
+    const coverImgHtml = (candidates, alt) =>
+      `<img src="${candidates[0]}" ${responsiveImageAttrs(candidates[0], '(max-width: 520px) 76vw, 25vw')} alt="${escapeHtml(alt)}" loading="lazy" decoding="async" />`;
+    const attachCoverFallback = (card, candidates) => {
+      const img = card.querySelector('img');
+      let index = 0;
+      img.addEventListener('error', () => {
+        // 1º tenta o .jpg original da mesma peça (pode faltar só a versão .webp); depois a próxima peça
+        if (img.hasAttribute('srcset')) {
+          img.removeAttribute('srcset');
+          img.removeAttribute('sizes');
+          img.src = candidates[index];
+          return;
+        }
+        if (index >= candidates.length - 1) return;
+        index += 1;
+        img.src = candidates[index];
+      });
+    };
+    const usedCovers = new Set();
     CATEGORIES.forEach((cat) => {
-      const rep = PRODUCTS.find((p) => p.category === cat);
+      const candidates = coverCandidates(PRODUCTS.filter((p) => p.category === cat));
+      usedCovers.add(candidates[0]);
       const btn = document.createElement('a');
       btn.href = categoryPath(cat);
       btn.className = 'cat-card';
       btn.dataset.filter = cat;
-      btn.innerHTML = `<img src="${rep ? rep.img : fallbackImg}" ${responsiveImageAttrs(rep ? rep.img : fallbackImg, '(max-width: 520px) 76vw, 25vw')} alt="${escapeHtml(cat)}" loading="lazy" decoding="async" /><span>${escapeHtml(cat)}</span>`;
+      btn.innerHTML = `${coverImgHtml(candidates, cat)}<span>${escapeHtml(cat)}</span>`;
+      attachCoverFallback(btn, candidates);
       btn.addEventListener('click', (e) => {
         // o href existe para o Google e para abrir em nova aba; o clique comum filtra na hora
         if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
@@ -842,7 +889,15 @@
     const allBtn = document.createElement('button');
     allBtn.className = 'cat-card';
     allBtn.dataset.filter = 'Todos';
-    allBtn.innerHTML = `<img src="${PRODUCTS[0] ? PRODUCTS[0].img : fallbackImg}" ${responsiveImageAttrs(PRODUCTS[0] ? PRODUCTS[0].img : fallbackImg, '(max-width: 520px) 76vw, 25vw')} alt="Ver tudo" loading="lazy" decoding="async" /><span>Ver tudo</span>`;
+    // "Ver tudo" evita repetir a foto que já é capa de outra categoria (as repetidas ficam de reserva)
+    const allPool = coverCandidates(PRODUCTS).filter((img) => img !== fallbackImg);
+    const allCandidates = [
+      ...allPool.filter((img) => !usedCovers.has(img)),
+      ...allPool.filter((img) => usedCovers.has(img)),
+      fallbackImg,
+    ];
+    allBtn.innerHTML = `${coverImgHtml(allCandidates, 'Ver tudo')}<span>Ver tudo</span>`;
+    attachCoverFallback(allBtn, allCandidates);
     allBtn.addEventListener('click', () => {
       setFilter('Todos');
       document.getElementById('colecao').scrollIntoView({ behavior: 'smooth' });
@@ -1063,7 +1118,10 @@
   function renderNovidades() {
     if (!novidadesGrid) return;
     novidadesGrid.innerHTML = '';
-    NOVIDADES.forEach((p) => novidadesGrid.appendChild(productCard(p)));
+    // mesma regra da coleção: esgotados no fim, mantendo a ordem da curadoria dentro de cada grupo
+    [...NOVIDADES]
+      .sort((a, b) => Number(isProductSoldOut(a)) - Number(isProductSoldOut(b)))
+      .forEach((p) => novidadesGrid.appendChild(productCard(p)));
   }
 
   // ---------- mais vendidos (prova social — vem de /api/data, sem receita/dado sensível) ----------
@@ -1112,6 +1170,84 @@
       // ex.: buscando a partir da página de produto — volta pra home já filtrando.
       location.href = `/?busca=${encodeURIComponent(term)}#colecao`;
     }
+    hideSearchSuggest();
+  });
+
+  // ---------- busca preditiva: sugestões com foto e preço enquanto digita ----------
+  // Mesmo critério da busca do catálogo (matchesSearch); disponíveis primeiro. Enter ou
+  // "Ver todos" seguem pelo submit normal acima.
+  const SUGGEST_MAX = 5;
+  const searchSuggest = document.createElement('div');
+  searchSuggest.className = 'search-suggest';
+  searchSuggest.id = 'searchSuggest';
+  searchSuggest.hidden = true;
+  headerSearchForm.appendChild(searchSuggest);
+  headerSearchInput.setAttribute('aria-controls', 'searchSuggest');
+  headerSearchInput.setAttribute('aria-expanded', 'false');
+  headerSearchInput.setAttribute('autocomplete', 'off');
+
+  function hideSearchSuggest() {
+    searchSuggest.hidden = true;
+    headerSearchInput.setAttribute('aria-expanded', 'false');
+  }
+
+  function renderSearchSuggest() {
+    const term = headerSearchInput.value.trim().toLowerCase();
+    if (term.length < 2 || !PRODUCTS.length) return hideSearchSuggest();
+    const matches = PRODUCTS.filter((p) => matchesSearch(p, term)).sort(
+      (a, b) => Number(isProductSoldOut(a)) - Number(isProductSoldOut(b))
+    );
+    searchSuggest.innerHTML = matches.length
+      ? `<ul class="search-suggest-list">${matches
+          .slice(0, SUGGEST_MAX)
+          .map((p) => {
+            const { price } = getEffective(p);
+            const priceText = p.price == null ? 'Sob consulta' : money(price);
+            return `<li><a class="search-suggest-item" href="/produto/${p.id}">
+              <img src="${escapeHtml(p.img)}" ${responsiveImageAttrs(p.img, '48px')} alt="" loading="lazy" decoding="async" />
+              <span class="search-suggest-text"><span class="search-suggest-name">${escapeHtml(p.name)}</span>
+              <span class="search-suggest-price">${isProductSoldOut(p) ? 'Esgotado · ' : ''}${priceText}</span></span>
+            </a></li>`;
+          })
+          .join('')}</ul>
+        <button type="submit" class="search-suggest-all">Ver ${matches.length === 1 ? 'o resultado' : `todos os ${matches.length} resultados`}</button>`
+      : `<p class="search-suggest-empty">Nenhuma peça encontrada para "${escapeHtml(headerSearchInput.value.trim())}".</p>`;
+    searchSuggest.hidden = false;
+    headerSearchInput.setAttribute('aria-expanded', 'true');
+  }
+
+  headerSearchInput.addEventListener('input', renderSearchSuggest);
+  // reabre ao voltar para o campo — exceto quando o próprio Esc devolve o foco (aí deve continuar fechada)
+  let suppressSuggestOnFocus = false;
+  headerSearchInput.addEventListener('focus', () => {
+    if (suppressSuggestOnFocus) suppressSuggestOnFocus = false;
+    else renderSearchSuggest();
+  });
+  // setas navegam entre as sugestões; Esc fecha
+  headerSearchForm.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !searchSuggest.hidden) {
+      hideSearchSuggest();
+      if (document.activeElement !== headerSearchInput) {
+        suppressSuggestOnFocus = true;
+        headerSearchInput.focus();
+      }
+      return;
+    }
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    const items = [...searchSuggest.querySelectorAll('.search-suggest-item, .search-suggest-all')];
+    if (searchSuggest.hidden || !items.length) return;
+    e.preventDefault();
+    const index = items.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown') items[Math.min(index + 1, items.length - 1)].focus();
+    else if (index <= 0) headerSearchInput.focus();
+    else items[index - 1].focus();
+  });
+  // clique numa sugestão não tira o foco do campo — senão o focusout abaixo fecharia a lista antes
+  // do clique chegar ao link (Safari não foca links ao clicar)
+  searchSuggest.addEventListener('mousedown', (e) => e.preventDefault());
+  // fecha ao clicar/tabular para fora da busca
+  headerSearchForm.addEventListener('focusout', (e) => {
+    if (!headerSearchForm.contains(e.relatedTarget)) hideSearchSuggest();
   });
 
   const bagCount = document.getElementById('bagCount');
@@ -3368,7 +3504,10 @@
           io.unobserve(entry.target);
         });
       },
-      { threshold: 0.12, rootMargin: '0px 0px -80px 0px' }
+      // threshold 0 (e não uma fração): a grade do catálogo no celular passa de 5000px de altura,
+      // então nunca chegava a 12% visível numa tela de ~660px e ficava invisível para sempre.
+      // O rootMargin já garante que o bloco entrou ~80px na tela antes de aparecer.
+      { threshold: 0, rootMargin: '0px 0px -80px 0px' }
     );
     headings.forEach((el) => {
       el.classList.add('reveal');

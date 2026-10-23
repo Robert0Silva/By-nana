@@ -77,6 +77,7 @@ const SITE_IMAGE_SLOTS = {
   hero_2: { path: 'assets/img/processed/site-hero-2.jpg', label: 'Capa — imagem 2' },
   hero_3: { path: 'assets/img/processed/site-hero-3.jpg', label: 'Capa — imagem 3' },
   sobre: { path: 'assets/img/processed/site-sobre.jpg', label: 'Seção "Sobre a By NaNa"' },
+  sobre_familia: { path: 'assets/img/processed/site-sobre-familia.jpg', label: 'Seção "Sobre" — foto da família' },
 };
 
 async function processSiteImage(buffer, destPath) {
