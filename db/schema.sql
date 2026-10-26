@@ -388,3 +388,7 @@ CREATE INDEX IF NOT EXISTS orders_coupon_code_idx ON orders (coupon_code) WHERE 
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS checkout_url TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS orders_idempotency_key_idx ON orders (idempotency_key) WHERE idempotency_key IS NOT NULL;
+
+-- rótulo do desconto aplicado ("Pix 5%", "Cupom X"), devolvido no reenvio de um pedido pela
+-- chave de idempotência pra mensagem do WhatsApp sair igual à da primeira tentativa.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_label TEXT;

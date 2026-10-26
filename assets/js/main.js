@@ -1508,7 +1508,26 @@
   // Chave de idempotência da tentativa de fechamento: se a resposta do pedido se perder (rede
   // caiu, aba recarregou o fetch), o reenvio do mesmo conteúdo usa a mesma chave e o servidor
   // devolve o pedido já gravado em vez de criar outro. Mudou a sacola ou os dados, chave nova.
-  let pendingOrderAttempt = null;
+  // Fica no sessionStorage pra sobreviver a um recarregamento da aba (a sacola continua no
+  // localStorage, então quem recarrega e envia de novo manda o mesmo conteúdo).
+  const ORDER_ATTEMPT_KEY = 'bynana-order-attempt';
+  function readOrderAttempt() {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(ORDER_ATTEMPT_KEY) || 'null');
+      return saved && typeof saved.key === 'string' && typeof saved.fingerprint === 'string' ? saved : null;
+    } catch {
+      return null;
+    }
+  }
+  function writeOrderAttempt(attempt) {
+    try {
+      if (attempt) sessionStorage.setItem(ORDER_ATTEMPT_KEY, JSON.stringify(attempt));
+      else sessionStorage.removeItem(ORDER_ATTEMPT_KEY);
+    } catch {
+      // sem sessionStorage (aba privada restrita), a chave vale só enquanto a página estiver aberta
+    }
+  }
+  let pendingOrderAttempt = readOrderAttempt();
 
   async function persistOrder(keys) {
     const items = keys.map((key) => {
@@ -1545,9 +1564,19 @@
       address: selectedDelivery === 'Entrega' ? address : null,
       customerToken: localStorage.getItem(CUSTOMER_TOKEN_KEY) || null,
     };
-    const fingerprint = JSON.stringify(payload);
+    // só o hash do conteúdo vai pro sessionStorage, não nome/telefone/endereço em texto
+    let fingerprint = JSON.stringify(payload);
+    let hashed = false;
+    try {
+      const digest = await window.crypto.subtle.digest('SHA-256', new window.TextEncoder().encode(fingerprint));
+      fingerprint = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+      hashed = true;
+    } catch {
+      // sem crypto.subtle (página fora de HTTPS): a chave vale só enquanto a página estiver aberta
+    }
     if (!pendingOrderAttempt || pendingOrderAttempt.fingerprint !== fingerprint) {
       pendingOrderAttempt = { fingerprint, key: window.crypto?.randomUUID ? window.crypto.randomUUID() : null };
+      if (pendingOrderAttempt.key && hashed) writeOrderAttempt(pendingOrderAttempt);
     }
     payload.idempotencyKey = pendingOrderAttempt.key;
     const res = await fetch('/api/orders', {
@@ -1558,7 +1587,10 @@
     const data = await res.json().catch(() => ({}));
     // resposta definitiva (pedido gravado ou recusado com motivo): a próxima tentativa é outra.
     // Erro 5xx não gravou nada no servidor, então o reenvio pode manter a mesma chave.
-    if (res.status < 500) pendingOrderAttempt = null;
+    if (res.status < 500) {
+      pendingOrderAttempt = null;
+      writeOrderAttempt(null);
+    }
     if (!res.ok) throw new Error(data.error || 'Não foi possível reservar o estoque');
     return { ...data, checkoutUrl: data.checkoutUrl || null };
   }

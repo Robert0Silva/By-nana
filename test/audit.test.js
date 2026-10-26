@@ -583,3 +583,150 @@ test('pedido online com pagamento não confirmado não pode ser enviado nem conc
   const manual = await placeOrder([{ id: product.id, variantId: product.variants[0], qty: 1 }]);
   assert.equal((await api('/api/orders/status', { adminToken: owner.token, id: manual.data.orderId, status: 'enviado' })).status, 200);
 });
+
+// ---------- revisão da auditoria: caminhos que estavam sem teste ----------
+
+test('dois envios da mesma chave presos no mesmo estoque: o segundo bate no índice único e recebe o pedido do primeiro', async () => {
+  const product = await createProduct({ stock: 10 });
+  const line = [{ id: product.id, variantId: product.variants[0], qty: 1 }];
+  const key = crypto.randomUUID();
+  const phone = '31966665555';
+
+  // segura a variação: as duas requisições passam pela checagem prévia (nenhum pedido existe
+  // ainda) e ficam esperando a trava — quem chegar em segundo só pode cair no 23505
+  const holder = await pool.connect();
+  let results;
+  try {
+    await holder.query('BEGIN');
+    await holder.query('SELECT 1 FROM product_variants WHERE id = $1 FOR UPDATE', [product.variants[0]]);
+    const pending = [placeOrder(line, { customerPhone: phone, idempotencyKey: key }), placeOrder(line, { customerPhone: phone, idempotencyKey: key })];
+    const deadline = Date.now() + 5000;
+    for (;;) {
+      const { rows } = await pool.query(
+        "SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database()"
+      );
+      if (rows[0].n >= 2) break;
+      assert.ok(Date.now() < deadline, 'as duas requisições deveriam estar esperando a trava');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    await holder.query('COMMIT');
+    results = await Promise.all(pending);
+  } finally {
+    holder.release();
+  }
+  assert.deepEqual(results.map((r) => r.status).sort(), [200, 201]);
+  assert.equal(results[0].data.orderId, results[1].data.orderId);
+  assert.equal(await stockOf(product.variants[0]), 9);
+});
+
+test('reenvio de pedido online devolve o mesmo link de pagamento e o mesmo rótulo de desconto', async () => {
+  const product = await createProduct({ stock: 5, price: 200 });
+  const line = [{ id: product.id, variantId: product.variants[0], qty: 1 }];
+  const key = crypto.randomUUID();
+  const phone = '31944443333';
+  const first = await placeOrder(line, { customerPhone: phone, idempotencyKey: key, paymentMethod: 'Pix' });
+  assert.equal(first.status, 201);
+  assert.ok(first.data.discountLabel, 'pedido no Pix tem rótulo de desconto');
+  // o provedor real não roda nos testes: simula o link gravado depois do COMMIT
+  await pool.query('UPDATE orders SET checkout_url = $1 WHERE id = $2', ['https://example.com/pagar/abc', first.data.orderId]);
+
+  const again = await placeOrder(line, { customerPhone: phone, idempotencyKey: key, paymentMethod: 'Pix' });
+  assert.equal(again.status, 200);
+  assert.equal(again.data.checkoutUrl, 'https://example.com/pagar/abc');
+  assert.equal(again.data.discountLabel, first.data.discountLabel);
+  assert.equal(await stockOf(product.variants[0]), 4);
+});
+
+test('token de redefinição de senha fica só com hash no banco', async () => {
+  const email = `reset-${crypto.randomUUID().slice(0, 8)}@example.com`;
+  created.customersByEmail.push(email);
+  const signup = await api('/api/customers', {
+    firstName: 'Teste', lastName: 'Reset', email, phone: '31922221111', password: 'senhaAntiga123', privacyAccepted: true,
+  });
+  assert.equal(signup.status, 201);
+
+  const forgot = await api('/api/customers/forgot-password', { email });
+  assert.equal(forgot.status, 200);
+  const { rows: [stored] } = await pool.query('SELECT reset_token FROM customers WHERE lower(email) = $1', [email]);
+  assert.match(stored.reset_token, /^[0-9a-f]{64}$/);
+  // quem lê o banco não consegue usar o valor guardado como link
+  const leaked = await api('/api/customers/reset-password', { token: stored.reset_token, newPassword: 'senhaInvasor123' });
+  assert.equal(leaked.status, 400);
+
+  const token = crypto.randomBytes(32).toString('hex');
+  await pool.query('UPDATE customers SET reset_token = $1 WHERE lower(email) = $2',
+    [crypto.createHash('sha256').update(token).digest('hex'), email]);
+  const reset = await api('/api/customers/reset-password', { token, newPassword: 'senhaNova12345' });
+  assert.equal(reset.status, 200);
+  const login = await api('/api/customers/login', { email, password: 'senhaNova12345' });
+  assert.equal(login.status, 200);
+  // link de uso único
+  assert.equal((await api('/api/customers/reset-password', { token, newPassword: 'outraSenha123' })).status, 400);
+});
+
+test('/api/data sai comprimido quando o navegador aceita gzip', async () => {
+  const response = await fetch(`${origin}/api/data`, { headers: { 'Accept-Encoding': 'gzip' } });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-encoding'), 'gzip');
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  const data = await response.json();
+  assert.ok(Array.isArray(data.products));
+});
+
+test('dois owners rebaixando um ao outro ao mesmo tempo não deixam a loja sem owner', async () => {
+  const a = await createAdmin('owner');
+  const b = await createAdmin('owner');
+  // durante o teste, a e b são os únicos owners ativos (os demais voltam no finally)
+  const { rows: others } = await pool.query(
+    "SELECT id FROM admin_users WHERE role = 'owner' AND active AND id <> ALL($1)", [[a.id, b.id]]);
+  const otherIds = others.map((r) => r.id);
+  await pool.query('UPDATE admin_users SET active = false WHERE id = ANY($1)', [otherIds]);
+  try {
+    for (let round = 0; round < 5; round += 1) {
+      await pool.query("UPDATE admin_users SET role = 'owner', active = true WHERE id = ANY($1)", [[a.id, b.id]]);
+      const [r1, r2] = await Promise.all([
+        api('/api/admin/users/update', { adminToken: a.token, id: b.id, role: 'staff', active: true }),
+        api('/api/admin/users/update', { adminToken: b.token, id: a.id, role: 'staff', active: true }),
+      ]);
+      const { rows } = await pool.query("SELECT count(*)::int AS n FROM admin_users WHERE role = 'owner' AND active AND id = ANY($1)", [[a.id, b.id]]);
+      assert.equal(rows[0].n, 1, `rodada ${round}: ${r1.status}/${r2.status}`);
+      assert.deepEqual([r1.status, r2.status].sort(), [200, 409], `rodada ${round}`);
+    }
+  } finally {
+    await pool.query('UPDATE admin_users SET active = true WHERE id = ANY($1)', [otherIds]);
+  }
+});
+
+test('alerta de erro: banco fora do ar gera um e-mail só, mesmo com várias falhas seguidas', async () => {
+  const alertPort = 18792;
+  const output = [];
+  const broken = spawn(process.execPath, ['serve.js'], {
+    cwd: projectRoot,
+    env: {
+      ...process.env, PORT: String(alertPort), HOST: '127.0.0.1',
+      DATABASE_URL: 'postgresql://ninguem:nada@127.0.0.1:1/inexistente',
+      ALERT_EMAIL: 'alerta-teste@example.com', RESEND_API_KEY: '', EMAIL_FROM: '',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  broken.stdout.on('data', (chunk) => output.push(chunk.toString()));
+  broken.stderr.on('data', (chunk) => output.push(chunk.toString()));
+  try {
+    const deadline = Date.now() + 10_000;
+    const statuses = [];
+    while (Date.now() < deadline && statuses.length < 4) {
+      try {
+        statuses.push((await fetch(`http://127.0.0.1:${alertPort}/api/health`)).status);
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
+    assert.deepEqual(statuses, [503, 503, 503, 503]);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const attempts = output.join('').split('\n').filter((l) => l.includes('alerta-teste@example.com'));
+    // sem Resend configurado o envio é só registrado no log (nenhuma mensagem sai de verdade)
+    assert.equal(attempts.length, 1, attempts.join('\n'));
+  } finally {
+    broken.kill();
+  }
+});

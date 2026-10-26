@@ -35,7 +35,7 @@ test.beforeAll(async () => {
     `INSERT INTO products (id, name, category_id, price, img, description) VALUES ($1,$2,$3,150,'assets/img/processed/logo.png','Peça criada pelo teste de compra')`,
     [id, `Vestido Teste ${id.slice(-6)}`, category.id]
   );
-  const stock = { P: 0, M: 2, G: 5 };
+  const stock = { P: 0, M: 5, G: 5 };
   for (const [position, size] of ['P', 'M', 'G'].entries()) {
     await pool.query('INSERT INTO product_variants (id, product_id, size, stock, position) VALUES ($1,$2,$3,$4,$5)', [`${id}-${size}`, id, size, stock[size], position]);
   }
@@ -119,3 +119,53 @@ for (const [label, viewport] of [['desktop', { width: 1280, height: 900 }], ['ce
     await expect(page.locator('#bagItems .bag-empty')).toBeVisible();
   });
 }
+
+test('resposta do pedido perdida e página recarregada: enviar de novo não cria pedido duplicado', async ({ page, context }) => {
+  context.on('page', (popup) => popup.close().catch(() => {}));
+  const stockM = (await pool.query('SELECT stock FROM product_variants WHERE id = $1', [product.variant('M')])).rows[0].stock;
+  test.skip(stockM < 1, 'tamanho M já esgotado por uma execução anterior');
+  const email = `compra-e2e-${crypto.randomUUID().slice(0, 8)}@example.com`;
+
+  async function fillAndSubmit() {
+    await page.locator('#bagName').fill('Cliente Rede Instável');
+    await page.locator('#bagPhone').fill('31977771111');
+    await page.locator('#bagEmail').fill(email);
+    await page.locator('#bagName').focus();
+    await page.locator('label.bag-chip:has(input[name="payment"][value="Pix"])').click();
+    await page.locator('label.bag-chip:has(input[name="delivery"][value="Retirada em loja"])').click();
+    await page.locator('#bagCheckout').click();
+  }
+
+  await page.goto(`${origin}/produto/${product.id}`);
+  await page.locator(`#pdpVariantPicker [data-variant-id="${product.variant('M')}"]`).click();
+  await page.locator('#pdpAdd').click();
+  await expect(page.locator('#bagDrawer')).toHaveClass(/is-open/);
+
+  // o servidor recebe e grava o pedido, mas a resposta nunca chega ao navegador
+  let delivered = false;
+  await page.route('**/api/orders', async (route) => {
+    if (route.request().method() !== 'POST' || delivered) return route.continue();
+    delivered = true;
+    await route.fetch();
+    await route.abort('failed');
+  });
+  await fillAndSubmit();
+  await expect(page.locator('#bagFormError')).toBeVisible();
+  const countOrders = async () => Number((await pool.query('SELECT count(*) FROM orders WHERE email = $1', [email])).rows[0].count);
+  expect(await countOrders()).toBe(1);
+
+  // a cliente recarrega a página e tenta de novo com os mesmos dados
+  await page.unroute('**/api/orders');
+  await page.reload();
+  await page.locator('#bagBtn').click();
+  await expect(page.locator('#bagItems .bag-item')).toHaveCount(1);
+  await fillAndSubmit();
+  await expect(page.locator('#bagConfirmation')).toBeVisible();
+
+  expect(await countOrders()).toBe(1);
+  const { rows: [order] } = await pool.query('SELECT id FROM orders WHERE email = $1', [email]);
+  const shownCode = (await page.locator('#bagConfirmationCode').textContent()).trim();
+  expect(`#${order.id.replace(/^pedido-/, '').slice(0, 8).toUpperCase()}`).toBe(shownCode);
+  const stockAfter = (await pool.query('SELECT stock FROM product_variants WHERE id = $1', [product.variant('M')])).rows[0].stock;
+  expect(stockAfter).toBe(stockM - 1);
+});

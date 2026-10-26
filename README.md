@@ -13,7 +13,7 @@ Loja virtual em Node.js, PostgreSQL e JavaScript sem framework. O servidor entre
 
 - `npm run lint`: análise estática.
 - `npm test`: testes de unidade (descontos, webhook do PagBank) e de integração da API. Os de integração criam e apagam pedidos e mexem em estoque, então só rodam com `DATABASE_URL` apontando para `localhost`/`127.0.0.1` (como no CI); para outro banco descartável é preciso definir `ALLOW_REMOTE_TEST_DB=true` conscientemente. Nunca rode contra o banco da loja.
-- `npm run test:e2e`: testes de interface no Chromium, incluindo uma compra real de ponta a ponta (`test/purchase-flow.spec.js`) conferida no banco de teste.
+- `npm run test:e2e`: testes de interface no Chromium, incluindo uma compra real de ponta a ponta (`test/purchase-flow.spec.js`) e o painel (`test/admin-flow.spec.js`), ambos conferidos no banco de teste.
 - `npm run test:e2e:firefox` / `npm run test:e2e:webkit`: testa um motor específico.
 - `npm run test:e2e:all`: executa a suíte nos três navegadores.
 - `npm run test:ci`: gate completo usado pelo GitHub Actions.

@@ -440,24 +440,24 @@
       <div class="bag-field-group">
         <span class="bag-group-label">Forma de pagamento</span>
         <div class="bag-chip-row" id="paymentRow">
-          <label class="bag-chip"><input type="radio" name="payment" value="Pix" />Pix</label>
-          <label class="bag-chip"><input type="radio" name="payment" value="Cartão de crédito" />Cartão de crédito</label>
-          <label class="bag-chip"><input type="radio" name="payment" value="Cartão de débito" />Cartão de débito</label>
-          <label class="bag-chip payment-online-chip" hidden><input type="radio" name="payment" value="Pagamento online (Pix/cartão)" />Pagar agora (Pix/cartão)</label>
+          <label class="bag-chip"><input type="radio" name="payment" autocomplete="off" value="Pix" />Pix</label>
+          <label class="bag-chip"><input type="radio" name="payment" autocomplete="off" value="Cartão de crédito" />Cartão de crédito</label>
+          <label class="bag-chip"><input type="radio" name="payment" autocomplete="off" value="Cartão de débito" />Cartão de débito</label>
+          <label class="bag-chip payment-online-chip" hidden><input type="radio" name="payment" autocomplete="off" value="Pagamento online (Pix/cartão)" />Pagar agora (Pix/cartão)</label>
         </div>
       </div>
 
       <div class="bag-field-group">
         <span class="bag-group-label">Retirada ou entrega?</span>
         <div class="bag-chip-row" id="deliveryRow">
-          <label class="bag-chip"><input type="radio" name="delivery" value="Retirada em loja" />Retirada em loja</label>
-          <label class="bag-chip"><input type="radio" name="delivery" value="Entrega" />Entrega</label>
+          <label class="bag-chip"><input type="radio" name="delivery" autocomplete="off" value="Retirada em loja" />Retirada em loja</label>
+          <label class="bag-chip"><input type="radio" name="delivery" autocomplete="off" value="Entrega" />Entrega</label>
         </div>
       </div>
 
       <div class="bag-field-group">
         <label class="account-check">
-          <input type="checkbox" id="bagIsGift" />
+          <input type="checkbox" id="bagIsGift" autocomplete="off" />
           É um presente?
         </label>
         <div class="bag-gift-message" id="bagGiftMessageWrap" hidden>
@@ -704,6 +704,6 @@
 
 <script src="assets/js/analytics.js?v=20261015"></script>
 <script src="assets/js/promo.js?v=20261015"></script>
-<script src="assets/js/main.js?v=20261024"></script>
+<script src="assets/js/main.js?v=20261026"></script>
 </body>
 </html>

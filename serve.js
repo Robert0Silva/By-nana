@@ -1033,6 +1033,13 @@ function normalizePhoneDigits(value) {
   return digits.length === 10 || digits.length === 11 ? digits : null;
 }
 
+// O banco guarda só o SHA-256 do token de "esqueci minha senha": quem ler a tabela (backup
+// vazado, acesso indevido ao banco) não consegue usar o link pra trocar a senha da cliente.
+// Tokens gravados antes dessa mudança deixam de valer — expiravam em 1 hora de qualquer jeito.
+function hashResetToken(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
 // Chave gerada pela sacola (crypto.randomUUID) por tentativa de fechamento; formato fora do
 // esperado é tratado como ausente, e o pedido segue sem proteção contra reenvio.
 function parseIdempotencyKey(raw) {
@@ -1058,7 +1065,8 @@ function orderResponseBody({ id, items, subtotal, discount, discountLabel, shipp
 // vale pro mesmo telefone: quem não fez o pedido não consegue ler os itens dele pela chave.
 async function findOrderReplay(idempotencyKey, phoneDigits) {
   const { rows } = await pool.query(
-    `SELECT id, customer_phone AS "customerPhone", items, subtotal, discount, shipping, total, checkout_url AS "checkoutUrl"
+    `SELECT id, customer_phone AS "customerPhone", items, subtotal, discount, discount_label AS "discountLabel",
+            shipping, total, checkout_url AS "checkoutUrl"
        FROM orders WHERE idempotency_key = $1`,
     [idempotencyKey]
   );
@@ -1524,12 +1532,15 @@ async function handleApi(req, res, pathname) {
         getUpsellSuggestions(),
         getBestSellers(),
       ]);
-      return sendJSON(res, 200, {
+      // catálogo inteiro em toda visita: comprimido como os assets (ver sendBody), que é a maior
+      // resposta da loja e a que mais pesa no 4G
+      const payload = JSON.stringify({
         products, categories, collections, promotions, coupons: publicCoupons(coupons), shippingRules, categoryGroups,
         categoryContent, stories, novidades, upsell, bestSellers,
         whatsappNumber: (process.env.WHATSAPP_NUMBER || '5531973053380').replace(/\D/g, ''),
         onlinePaymentEnabled: !!getActiveProvider(),
       });
+      return sendBody(req, res, 200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }, payload, { compressible: true });
     }
 
     // ------ admin auth (login multiusuário, papéis, log de atividade) ------
@@ -1609,14 +1620,28 @@ async function handleApi(req, res, pathname) {
       const name = (body.name || '').trim();
       const role = body.role === 'owner' ? 'owner' : 'staff';
       const active = body.active !== false;
-      // Sem nenhum owner ativo ninguém mais consegue criar/gerenciar usuários pelo painel.
-      const { rowCount } = await pool.query(
-        `UPDATE admin_users SET name = COALESCE(NULLIF($1,''), name), role = $2, active = $3
-          WHERE id = $4
-            AND ($2 = 'owner' AND $3
-                 OR EXISTS (SELECT 1 FROM admin_users o WHERE o.role = 'owner' AND o.active AND o.id <> $4))`,
-        [name, role, active, body.id]
-      );
+      // Sem nenhum owner ativo ninguém mais consegue criar/gerenciar usuários pelo painel. Os
+      // owners ativos ficam travados durante a troca: dois owners rebaixando um ao outro ao
+      // mesmo tempo passam em sequência, e o segundo já vê que sobraria só ele.
+      const client = await pool.connect();
+      let rowCount;
+      try {
+        await client.query('BEGIN');
+        await client.query("SELECT id FROM admin_users WHERE role = 'owner' AND active ORDER BY id FOR UPDATE");
+        ({ rowCount } = await client.query(
+          `UPDATE admin_users SET name = COALESCE(NULLIF($1,''), name), role = $2, active = $3
+            WHERE id = $4
+              AND ($2 = 'owner' AND $3
+                   OR EXISTS (SELECT 1 FROM admin_users o WHERE o.role = 'owner' AND o.active AND o.id <> $4))`,
+          [name, role, active, body.id]
+        ));
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
       if (!rowCount) {
         const exists = await pool.query('SELECT 1 FROM admin_users WHERE id = $1', [body.id]);
         if (!exists.rowCount) return sendJSON(res, 404, { error: 'Usuário não encontrado' });
@@ -2742,9 +2767,9 @@ async function handleApi(req, res, pathname) {
         const paymentStatus = isOnlinePayment ? 'pending' : 'manual';
 
         await client.query(
-          `INSERT INTO orders (id, customer_id, customer_name, customer_phone, email, items, subtotal, discount, shipping, total, coupon_code, payment_method, delivery_method, address, payment_status, idempotency_key)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-          [id, customerId, customerName, customerPhone, customerEmail, JSON.stringify(items), subtotal, discountAmount, shippingCost, total, discountInfo && discountInfo.type === 'coupon' ? coupon.code : null, paymentMethod, deliveryMethod, address ? JSON.stringify(address) : null, paymentStatus, idempotencyKey]
+          `INSERT INTO orders (id, customer_id, customer_name, customer_phone, email, items, subtotal, discount, shipping, total, coupon_code, payment_method, delivery_method, address, payment_status, idempotency_key, discount_label)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+          [id, customerId, customerName, customerPhone, customerEmail, JSON.stringify(items), subtotal, discountAmount, shippingCost, total, discountInfo && discountInfo.type === 'coupon' ? coupon.code : null, paymentMethod, deliveryMethod, address ? JSON.stringify(address) : null, paymentStatus, idempotencyKey, discountInfo ? discountInfo.label : null]
         );
         await client.query('COMMIT');
       } catch (err) {
@@ -3160,7 +3185,7 @@ async function handleApi(req, res, pathname) {
           const token = crypto.randomBytes(32).toString('hex');
           await pool.query(
             `UPDATE customers SET reset_token = $1, reset_token_expires = now() + interval '1 hour' WHERE id = $2`,
-            [token, customer.id]
+            [hashResetToken(token), customer.id]
           );
           const origin = configuredPublicOrigin(req);
           if (origin) {
@@ -3187,7 +3212,7 @@ async function handleApi(req, res, pathname) {
 
       const { rows } = await pool.query(
         `SELECT id FROM customers WHERE reset_token = $1 AND reset_token_expires > now()`,
-        [token]
+        [hashResetToken(token)]
       );
       if (!rows[0]) return sendJSON(res, 400, { error: 'Link inválido ou expirado. Solicite a redefinição novamente.' });
 
@@ -3589,7 +3614,7 @@ function alertServerError(context, err) {
     to,
     subject: `[By NaNa] Erro no servidor (${context})`,
     html: `<p>O site registrou ${count} erro(s) desde o último alerta. O mais recente:</p>
-           <p><strong>${escapeHtml(context)}</strong>: ${escapeHtml((err && err.message) || String(err))}</p>
+           <p><strong>${escapeHtml(context)}</strong>: ${escapeHtml(String((err && err.message) || err).slice(0, 300))}</p>
            <p>${escapeHtml(new Date(now).toISOString())} — detalhes completos no log do Render.</p>`,
   });
 }
