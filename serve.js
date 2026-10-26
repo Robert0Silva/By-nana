@@ -271,6 +271,9 @@ async function createDefaultVariants(client, productId, category) {
   }
 }
 
+// Bem abaixo do teto de INTEGER — acima disso o banco recusava com erro 500 genérico.
+const MAX_VARIANT_STOCK = 100000;
+
 function normalizeVariantPayload(input) {
   if (!Array.isArray(input)) return null;
   const variants = input.map((variant) => {
@@ -278,6 +281,7 @@ function normalizeVariantPayload(input) {
     const color = String(variant.color || '').trim();
     const sku = String(variant.sku || '').trim() || null;
     const stock = Math.max(0, Number.parseInt(variant.stock, 10) || 0);
+    if (stock > MAX_VARIANT_STOCK) throw new Error(`O estoque de cada tamanho vai até ${MAX_VARIANT_STOCK} unidades`);
     const measurements = String(variant.measurements || '').trim() || null;
     // estoque que o painel tinha quando o produto foi aberto (ver syncProductVariants)
     const expected = Number.parseInt(variant.expectedStock, 10);
@@ -296,7 +300,7 @@ function normalizeVariantPayload(input) {
 
 async function syncProductVariants(client, productId, variants, adminUserId) {
   const { rows: current } = await client.query(
-    'SELECT id, stock FROM product_variants WHERE product_id=$1 FOR UPDATE',
+    'SELECT id, stock FROM product_variants WHERE product_id=$1 ORDER BY id COLLATE "C" FOR UPDATE',
     [productId]
   );
   const currentById = new Map(current.map((variant) => [variant.id, variant]));
@@ -367,10 +371,20 @@ async function recordInventoryMovement(client, { variantId, type, quantity, stoc
   );
 }
 
+// Trava as variações sempre na mesma ordem (id em ordem de bytes). Quem trava na ordem dos
+// itens do pedido entra em deadlock com outra transação que tem as mesmas peças em outra ordem
+// — o Postgres aborta uma delas e a cliente recebe erro 500 no checkout.
+async function lockVariantsInOrder(client, variantIds) {
+  const ids = [...new Set(variantIds.filter(Boolean).map(String))];
+  if (!ids.length) return;
+  await client.query('SELECT id FROM product_variants WHERE id = ANY($1) ORDER BY id COLLATE "C" FOR UPDATE', [ids]);
+}
+
 // Devolve ao estoque as peças reservadas por um pedido. Roda dentro da transação de quem chama
 // (cancelamento no admin, webhook de pagamento recusado/estornado, expiração de pendentes) —
 // o pedido já deve estar travado com FOR UPDATE pra não devolver duas vezes.
 async function restockOrderItems(client, orderId, items, { adminUserId = null, note } = {}) {
+  await lockVariantsInOrder(client, (Array.isArray(items) ? items : []).map((item) => item.variantId));
   for (const item of Array.isArray(items) ? items : []) {
     if (!item.variantId) continue;
     const qty = Math.max(0, Math.floor(Number(item.qty) || 0));
@@ -482,7 +496,7 @@ function buildOrderStatusHtml({ id, customerName, status, trackingCode }) {
 function buildPaymentApprovedHtml({ id, customerName }) {
   return `
     <p>Olá, ${escapeHtml(customerName)}!</p>
-    <p>Recebemos a confirmação: o pagamento do seu pedido <strong>${escapeHtml(id)}</strong> foi aprovado. ✅</p>
+    <p>Recebemos a confirmação: o pagamento do seu pedido <strong>${escapeHtml(orderShortCode(id))}</strong> foi aprovado. ✅</p>
     <p>Já vamos preparar tudo — avisamos por aqui quando o status mudar.</p>
   `;
 }
@@ -728,15 +742,37 @@ async function getBestSellers(limit = 8) {
   return rows;
 }
 
-async function getCoupons() {
+// withUsage: só o painel precisa da contagem de usos (subconsulta em orders) — a vitrine e o
+// checkout leem só maxUses e contam na hora com couponUses().
+async function getCoupons({ withUsage = false } = {}) {
   const { rows } = await pool.query(`
     SELECT code, discount_type AS type, discount_value AS value,
            start_date AS "startDate", end_date AS "endDate", active,
-           first_purchase_only AS "firstPurchaseOnly"
+           first_purchase_only AS "firstPurchaseOnly", max_uses AS "maxUses"
+           ${withUsage ? `, (SELECT COUNT(*)::int FROM orders o WHERE o.coupon_code = coupons.code AND o.status != 'cancelado') AS uses` : ''}
     FROM coupons
     ORDER BY created_at DESC
   `);
   return rows;
+}
+
+// Pedidos não cancelados que usaram o cupom — a mesma regra do relatório de uso (getCouponUsage).
+async function couponUses(db, code) {
+  const { rows } = await db.query(
+    "SELECT COUNT(*)::int AS uses FROM orders WHERE coupon_code = $1 AND status != 'cancelado'",
+    [code]
+  );
+  return rows[0].uses;
+}
+
+// vazio = ilimitado; senão inteiro positivo (até 1 milhão, só pra barrar valor absurdo)
+function parseCouponMaxUses(raw) {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return { maxUses: null };
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 1000000) {
+    return { error: 'O limite de usos deve ser um número inteiro maior que zero (ou vazio para ilimitado)' };
+  }
+  return { maxUses: n };
 }
 
 // Só o cupom de boas-vindas vigente é divulgado na vitrine (faixa do topo); os demais —
@@ -997,6 +1033,43 @@ function normalizePhoneDigits(value) {
   return digits.length === 10 || digits.length === 11 ? digits : null;
 }
 
+// Chave gerada pela sacola (crypto.randomUUID) por tentativa de fechamento; formato fora do
+// esperado é tratado como ausente, e o pedido segue sem proteção contra reenvio.
+function parseIdempotencyKey(raw) {
+  return typeof raw === 'string' && /^[A-Za-z0-9-]{16,64}$/.test(raw) ? raw : null;
+}
+
+// O que a sacola recebe ao fechar um pedido — usado na criação e no reenvio da mesma chave.
+function orderResponseBody({ id, items, subtotal, discount, discountLabel, shipping, total, checkoutUrl }) {
+  return {
+    orderId: id,
+    orderCode: orderShortCode(id),
+    checkoutUrl: checkoutUrl || undefined,
+    items: items.map(({ id: productId, name, qty, price, listPrice, variantLabel }) => ({ id: productId, name, qty, price, listPrice, variantLabel })),
+    subtotal,
+    discount,
+    discountLabel: discountLabel || null,
+    shipping,
+    total,
+  };
+}
+
+// Reenvio da mesma chave devolve o pedido já gravado (sem reservar estoque de novo). A chave só
+// vale pro mesmo telefone: quem não fez o pedido não consegue ler os itens dele pela chave.
+async function findOrderReplay(idempotencyKey, phoneDigits) {
+  const { rows } = await pool.query(
+    `SELECT id, customer_phone AS "customerPhone", items, subtotal, discount, shipping, total, checkout_url AS "checkoutUrl"
+       FROM orders WHERE idempotency_key = $1`,
+    [idempotencyKey]
+  );
+  if (!rows.length) return null;
+  const order = rows[0];
+  if (normalizePhoneDigits(order.customerPhone) !== phoneDigits) {
+    return { status: 409, body: { error: 'Não foi possível fechar o pedido. Recarregue a página e tente de novo.' } };
+  }
+  return { status: 200, body: orderResponseBody(order) };
+}
+
 // ---------- admin auth (login multiusuário: e-mail+senha, token assinado, papéis) ----------
 function signAdminSessionToken(adminUser) {
   const payload = { id: adminUser.id, role: adminUser.role, scope: 'admin', v: adminUser.sessionVersion || 0, exp: Date.now() + ADMIN_SESSION_MAX_AGE_MS };
@@ -1212,6 +1285,18 @@ function verifySessionToken(token) {
   return payload;
 }
 
+// Preço vazio = "sob consulta". Fora isso precisa ser um valor de verdade: antes "-50" era
+// gravado como preço negativo e "abc" virava "sob consulta" sem aviso.
+const MAX_PRICE = 99999999.99; // teto de NUMERIC(10, 2)
+function parseProductPrice(raw) {
+  if (raw === null || raw === undefined || raw === '') return { price: null };
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0 || n > MAX_PRICE) {
+    return { error: 'Informe um preço maior que zero (ou deixe em branco para "sob consulta")' };
+  }
+  return { price: Math.round(n * 100) / 100 };
+}
+
 function validateDiscount(body) {
   const type = body.type === 'fixed' ? 'fixed' : 'percent';
   const value = Number(body.value);
@@ -1231,6 +1316,7 @@ async function handleApi(req, res, pathname) {
         return sendJSON(res, 200, { status: 'ok' });
       } catch (err) {
         console.error('[health] banco indisponível:', err.message);
+        alertServerError('health: banco indisponível', err);
         return sendJSON(res, 503, { status: 'unavailable' });
       }
     }
@@ -1359,12 +1445,42 @@ async function handleApi(req, res, pathname) {
       if (publicRateLimited(req, 'cart-activity', 60, 60 * 60 * 1000)) return sendJSON(res, 429, { error: 'Muitas requisições' });
       const body = await readJSONBody(req, PUBLIC_BODY_LIMIT);
       const email = String(body.email || '').trim().toLowerCase();
-      const items = Array.isArray(body.items) ? body.items.slice(0, 50) : [];
-      const subtotal = Number(body.subtotal);
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !items.length || !Number.isFinite(subtotal)) {
+      // Nome e preço das peças vêm do catálogo, nunca do navegador: o lembrete sai pelo domínio
+      // da loja, e com texto livre qualquer pessoa mandava "sua conta foi bloqueada, acesse..."
+      // em nome da By NaNa para qualquer e-mail.
+      const requested = Array.isArray(body.items) ? body.items.slice(0, 50) : [];
+      const productIds = [...new Set(requested.map((it) => String((it && it.id) || '')).filter(Boolean))];
+      const [{ rows: catalog }, promotions] = productIds.length
+        ? await Promise.all([
+          pool.query(
+            `SELECT p.id, p.name, p.price, c.name AS category, COALESCE(col.name, '') AS collection
+               FROM products p JOIN categories c ON c.id = p.category_id
+               LEFT JOIN collections col ON col.id = p.collection_id
+              WHERE p.id = ANY($1) AND p.active`,
+            [productIds]
+          ),
+          getPromotions(),
+        ])
+        : [{ rows: [] }, []];
+      const catalogById = new Map(catalog.map((p) => [p.id, p]));
+      let subtotal = 0;
+      const items = requested.flatMap((it) => {
+        const product = catalogById.get(String((it && it.id) || ''));
+        if (!product) return [];
+        const qty = Math.min(ORDER_MAX_QTY_PER_LINE, Math.max(1, Math.floor(Number(it.qty) || 1)));
+        if (product.price != null) {
+          const best = PromoEngine.bestPromoForProduct(product, promotions);
+          subtotal += (best ? best.price : product.price) * qty;
+        }
+        return [{ id: product.id, qty, name: product.name }];
+      });
+      subtotal = Math.round(subtotal * 100) / 100;
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !items.length) {
         return sendJSON(res, 400, { error: 'Dados inválidos' });
       }
-      const name = String(body.name || '').trim().slice(0, 120) || null;
+      // Só o primeiro nome entra no "Oi, Fulana!" do e-mail — uma frase inteira ali seria o
+      // mesmo canal de texto livre que os itens tinham.
+      const name = (String(body.name || '').trim().split(/\s+/)[0] || '').replace(/[^\p{L}'-]/gu, '').slice(0, 40) || null;
       await pool.query(
         `INSERT INTO abandoned_carts (id, contact_email, customer_name, items, subtotal)
          VALUES ($1,$2,$3,$4,$5)
@@ -1386,6 +1502,9 @@ async function handleApi(req, res, pathname) {
       const code = String(body.code || '').trim().slice(0, 40);
       const coupon = PromoEngine.findCoupon(await getCoupons(), code);
       if (!coupon) return sendJSON(res, 404, { error: 'Cupom inválido ou expirado.' });
+      if (coupon.maxUses != null && await couponUses(pool, coupon.code) >= coupon.maxUses) {
+        return sendJSON(res, 404, { error: 'Esse cupom atingiu o limite de usos.' });
+      }
       return sendJSON(res, 200, { coupon });
     }
 
@@ -1490,10 +1609,19 @@ async function handleApi(req, res, pathname) {
       const name = (body.name || '').trim();
       const role = body.role === 'owner' ? 'owner' : 'staff';
       const active = body.active !== false;
-      await pool.query(
-        "UPDATE admin_users SET name = COALESCE(NULLIF($1,''), name), role = $2, active = $3 WHERE id = $4",
+      // Sem nenhum owner ativo ninguém mais consegue criar/gerenciar usuários pelo painel.
+      const { rowCount } = await pool.query(
+        `UPDATE admin_users SET name = COALESCE(NULLIF($1,''), name), role = $2, active = $3
+          WHERE id = $4
+            AND ($2 = 'owner' AND $3
+                 OR EXISTS (SELECT 1 FROM admin_users o WHERE o.role = 'owner' AND o.active AND o.id <> $4))`,
         [name, role, active, body.id]
       );
+      if (!rowCount) {
+        const exists = await pool.query('SELECT 1 FROM admin_users WHERE id = $1', [body.id]);
+        if (!exists.rowCount) return sendJSON(res, 404, { error: 'Usuário não encontrado' });
+        return sendJSON(res, 409, { error: 'A loja precisa de ao menos um owner ativo. Promova outra pessoa a owner antes.' });
+      }
       logActivity(admin, 'admin_user.update', 'admin_user', body.id, { role, active });
       return sendJSON(res, 200, { adminUsers: await getAdminUsers() });
     }
@@ -1630,29 +1758,27 @@ async function handleApi(req, res, pathname) {
       const buffer = decodeImageDataUrl(body.image);
       if (!buffer) return sendJSON(res, 400, { error: 'Imagem inválida' });
 
-      const slug = slugify(name);
-      const fileName = `${slug}-${Date.now().toString(36)}.jpg`;
-      const outPath = path.join(uploadDir, fileName);
-      await processProductImage(buffer, outPath);
-
-      const composition = (body.composition || '').trim() || null;
-      let price = null;
-      if (body.price !== null && body.price !== undefined && body.price !== '') {
-        const n = Number(body.price);
-        if (!Number.isNaN(n)) price = n;
-      }
-
-      const collection = (body.collection || '').trim();
-      const brand = (body.brand || 'By NaNa').trim();
-      const tag = (body.tag || '').trim() || 'Novidade';
-      const img = `assets/img/processed/${fileName}`;
-      const id = `${slug}-${Date.now().toString(36)}`;
+      // preço e grade validados antes de gravar a foto, pra uma recusa não deixar arquivo órfão
+      const { price, error: priceError } = parseProductPrice(body.price);
+      if (priceError) return sendJSON(res, 400, { error: priceError });
       let variants;
       try {
         variants = normalizeVariantPayload(body.variants);
       } catch (err) {
         return sendJSON(res, 400, { error: err.message });
       }
+
+      const slug = slugify(name);
+      const fileName = `${slug}-${Date.now().toString(36)}.jpg`;
+      const outPath = path.join(uploadDir, fileName);
+      await processProductImage(buffer, outPath);
+
+      const composition = (body.composition || '').trim() || null;
+      const collection = (body.collection || '').trim();
+      const brand = (body.brand || 'By NaNa').trim();
+      const tag = (body.tag || '').trim() || 'Novidade';
+      const img = `assets/img/processed/${fileName}`;
+      const id = `${slug}-${Date.now().toString(36)}`;
 
       const client = await pool.connect();
       try {
@@ -1696,11 +1822,8 @@ async function handleApi(req, res, pathname) {
         return sendJSON(res, 400, { error: 'Nome, categoria e descrição são obrigatórios' });
       }
 
-      let price = null;
-      if (body.price !== null && body.price !== undefined && body.price !== '') {
-        const n = Number(body.price);
-        if (!Number.isNaN(n)) price = n;
-      }
+      const { price, error: priceError } = parseProductPrice(body.price);
+      if (priceError) return sendJSON(res, 400, { error: priceError });
       const collection = (body.collection || '').trim();
       const brand = (body.brand || 'By NaNa').trim();
       const tag = (body.tag || '').trim() || 'Novidade';
@@ -1916,6 +2039,7 @@ async function handleApi(req, res, pathname) {
       const stockNum = Number(body.stock);
       const stock = Number.isFinite(stockNum) ? Math.max(0, Math.floor(stockNum)) : 0;
       if (!size) return sendJSON(res, 400, { error: 'O tamanho é obrigatório' });
+      if (stock > MAX_VARIANT_STOCK) return sendJSON(res, 400, { error: `O estoque de cada tamanho vai até ${MAX_VARIANT_STOCK} unidades` });
 
       const { rows: maxRows } = await pool.query(
         'SELECT COALESCE(MAX(position), -1) AS max FROM product_variants WHERE product_id = $1',
@@ -1943,6 +2067,7 @@ async function handleApi(req, res, pathname) {
         }
       } catch (err) {
         if (err.code === '23505') return sendJSON(res, 409, { error: 'Já existe uma variação com esse tamanho/cor ou SKU' });
+        if (err.code === '23503') return sendJSON(res, 404, { error: 'Produto não encontrado' });
         throw err;
       }
       logActivity(admin, 'variant.create', 'product_variant', id, { productId, size, color });
@@ -1965,6 +2090,7 @@ async function handleApi(req, res, pathname) {
       const stockNum = Number(body.stock);
       const stock = Number.isFinite(stockNum) ? Math.max(0, Math.floor(stockNum)) : 0;
       if (!size) return sendJSON(res, 400, { error: 'O tamanho é obrigatório' });
+      if (stock > MAX_VARIANT_STOCK) return sendJSON(res, 400, { error: `O estoque de cada tamanho vai até ${MAX_VARIANT_STOCK} unidades` });
 
       try {
         const client = await pool.connect();
@@ -2059,7 +2185,16 @@ async function handleApi(req, res, pathname) {
       if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
 
-      const { rowCount } = await pool.query('DELETE FROM products WHERE id = $1', [body.id]);
+      let rowCount;
+      try {
+        ({ rowCount } = await pool.query('DELETE FROM products WHERE id = $1', [body.id]));
+      } catch (err) {
+        // inventory_movements protege (ON DELETE RESTRICT) o histórico de estoque de peças já vendidas
+        if (err.code === '23503') {
+          return sendJSON(res, 409, { error: 'Esse produto já tem vendas ou movimentações de estoque registradas. Oculte-o da loja em vez de excluir.' });
+        }
+        throw err;
+      }
       if (!rowCount) return sendJSON(res, 404, { error: 'Produto não encontrado' });
       logActivity(admin, 'product.delete', 'product', body.id, null);
       return sendJSON(res, 200, { products: await getAdminProducts() });
@@ -2279,16 +2414,18 @@ async function handleApi(req, res, pathname) {
       if (discount.error) return sendJSON(res, 400, { error: discount.error });
       const endDate = (body.endDate || '').trim() || null;
       const firstPurchaseOnly = !!body.firstPurchaseOnly;
+      const limit = parseCouponMaxUses(body.maxUses);
+      if (limit.error) return sendJSON(res, 400, { error: limit.error });
 
       const dup = await pool.query('SELECT 1 FROM coupons WHERE code = $1', [code]);
       if (dup.rowCount) return sendJSON(res, 409, { error: 'Já existe um cupom com esse código' });
 
       await pool.query(
-        'INSERT INTO coupons (code, discount_type, discount_value, end_date, first_purchase_only) VALUES ($1,$2,$3,$4,$5)',
-        [code, discount.type, discount.value, endDate, firstPurchaseOnly]
+        'INSERT INTO coupons (code, discount_type, discount_value, end_date, first_purchase_only, max_uses) VALUES ($1,$2,$3,$4,$5,$6)',
+        [code, discount.type, discount.value, endDate, firstPurchaseOnly, limit.maxUses]
       );
       logActivity(admin, 'coupon.create', 'coupon', code, null);
-      return sendJSON(res, 201, { coupons: await getCoupons() });
+      return sendJSON(res, 201, { coupons: await getCoupons({ withUsage: true }) });
     }
 
     if (pathname === '/api/coupons/update' && req.method === 'POST') {
@@ -2304,14 +2441,16 @@ async function handleApi(req, res, pathname) {
       if (discount.error) return sendJSON(res, 400, { error: discount.error });
       const endDate = (body.endDate || '').trim() || null;
       const firstPurchaseOnly = !!body.firstPurchaseOnly;
+      const limit = parseCouponMaxUses(body.maxUses);
+      if (limit.error) return sendJSON(res, 400, { error: limit.error });
 
       const { rowCount } = await pool.query(
-        'UPDATE coupons SET discount_type=$1, discount_value=$2, end_date=$3, first_purchase_only=$4 WHERE code=$5',
-        [discount.type, discount.value, endDate, firstPurchaseOnly, code]
+        'UPDATE coupons SET discount_type=$1, discount_value=$2, end_date=$3, first_purchase_only=$4, max_uses=$5 WHERE code=$6',
+        [discount.type, discount.value, endDate, firstPurchaseOnly, limit.maxUses, code]
       );
       if (!rowCount) return sendJSON(res, 404, { error: 'Cupom não encontrado' });
       logActivity(admin, 'coupon.update', 'coupon', code, null);
-      return sendJSON(res, 200, { coupons: await getCoupons() });
+      return sendJSON(res, 200, { coupons: await getCoupons({ withUsage: true }) });
     }
 
     if (pathname === '/api/coupons' && req.method === 'DELETE') {
@@ -2322,7 +2461,15 @@ async function handleApi(req, res, pathname) {
       if (!code) return sendJSON(res, 400, { error: 'code é obrigatório' });
       await pool.query('DELETE FROM coupons WHERE code = $1', [code]);
       logActivity(admin, 'coupon.delete', 'coupon', code, null);
-      return sendJSON(res, 200, { coupons: await getCoupons() });
+      return sendJSON(res, 200, { coupons: await getCoupons({ withUsage: true }) });
+    }
+
+    // /api/data só divulga o cupom de boas-vindas (publicCoupons); o painel lista todos por aqui.
+    if (pathname === '/api/admin/coupons/list' && req.method === 'POST') {
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      return sendJSON(res, 200, { coupons: await getCoupons({ withUsage: true }) });
     }
 
     // ------ shipping rules (frete por UF, usado no checkout do site) ------
@@ -2414,7 +2561,34 @@ async function handleApi(req, res, pathname) {
       if (!customerPhoneDigits) {
         return sendJSON(res, 400, { error: 'Informe um telefone com DDD, ex.: (31) 90000-0000' });
       }
+      const idempotencyKey = parseIdempotencyKey(body.idempotencyKey);
+      if (idempotencyKey) {
+        const replay = await findOrderReplay(idempotencyKey, customerPhoneDigits);
+        if (replay) return sendJSON(res, replay.status, replay.body);
+      }
       if (rawItems.length > ORDER_MAX_LINES || rawItems.some((item) => Number(item && item.qty) > ORDER_MAX_QTY_PER_LINE)) {
+        return sendJSON(res, 400, { error: `Para pedidos com mais de ${ORDER_MAX_QTY_PER_LINE} unidades da mesma peça, fale com a gente no WhatsApp` });
+      }
+      // A mesma variação em mais de uma linha vira uma linha só — senão 3 linhas de 10 unidades
+      // passavam pelo limite por peça e reservavam 30.
+      const orderLines = [];
+      const orderLineByVariant = new Map();
+      for (const item of rawItems) {
+        const qty = Math.max(0, Math.floor(Number(item && item.qty) || 0));
+        if (!item || !item.variantId || !qty) {
+          return sendJSON(res, 400, { error: `Escolha um tamanho válido para ${(item && item.name) || 'o produto'}` });
+        }
+        const variantId = String(item.variantId);
+        const existing = orderLineByVariant.get(variantId);
+        if (existing) {
+          existing.qty += qty;
+        } else {
+          const line = { id: item.id, variantId, qty };
+          orderLineByVariant.set(variantId, line);
+          orderLines.push(line);
+        }
+      }
+      if (orderLines.some((line) => line.qty > ORDER_MAX_QTY_PER_LINE)) {
         return sendJSON(res, 400, { error: `Para pedidos com mais de ${ORDER_MAX_QTY_PER_LINE} unidades da mesma peça, fale com a gente no WhatsApp` });
       }
       if (!['Entrega', 'Retirada em loja'].includes(deliveryMethod)) {
@@ -2480,26 +2654,27 @@ async function handleApi(req, res, pathname) {
       try {
         await client.query('BEGIN');
         items = [];
-        for (const item of rawItems) {
-          const qty = Math.max(0, Math.floor(Number(item.qty) || 0));
-          if (!item.variantId || !qty) {
-            await client.query('ROLLBACK');
-            return sendJSON(res, 400, { error: `Escolha um tamanho válido para ${item.name || 'o produto'}` });
-          }
-          const locked = await client.query(
-            `SELECT v.id, v.stock, v.size, v.color, p.id AS "productId", p.name, p.price,
-                    c.name AS category, COALESCE(col.name, '') AS collection
-               FROM product_variants v
-               JOIN products p ON p.id = v.product_id
-               JOIN categories c ON c.id = p.category_id
-               LEFT JOIN collections col ON col.id = p.collection_id
-              WHERE v.id = $1 AND p.active FOR UPDATE OF v`,
-            [item.variantId]
-          );
-          const variant = locked.rows[0];
+        // Todas as variações do pedido travadas de uma vez e em ordem fixa (ver lockVariantsInOrder).
+        const { rows: lockedRows } = await client.query(
+          `SELECT v.id, v.stock, v.size, v.color, p.id AS "productId", p.name, p.price,
+                  c.name AS category, COALESCE(col.name, '') AS collection
+             FROM product_variants v
+             JOIN products p ON p.id = v.product_id
+             JOIN categories c ON c.id = p.category_id
+             LEFT JOIN collections col ON col.id = p.collection_id
+            WHERE v.id = ANY($1) AND p.active
+            ORDER BY v.id COLLATE "C"
+            FOR UPDATE OF v`,
+          [orderLines.map((line) => line.variantId)]
+        );
+        const lockedById = new Map(lockedRows.map((row) => [row.id, row]));
+        for (const item of orderLines) {
+          const { qty } = item;
+          const variant = lockedById.get(item.variantId);
           if (!variant || variant.productId !== item.id) {
             await client.query('ROLLBACK');
-            return sendJSON(res, 400, { error: `${item.name || 'Esse produto'} não está mais disponível nesse tamanho — atualize a sacola` });
+            const original = rawItems.find((raw) => String(raw.variantId) === item.variantId);
+            return sendJSON(res, 400, { error: `${(original && original.name) || 'Esse produto'} não está mais disponível nesse tamanho — atualize a sacola` });
           }
           if (variant.stock < qty) {
             await client.query('ROLLBACK');
@@ -2531,6 +2706,14 @@ async function handleApi(req, res, pathname) {
           });
         }
 
+        // Limite de usos: a linha do cupom fica travada até o COMMIT, então dois pedidos
+        // simultâneos com o último uso disponível são contados um depois do outro. Esgotado, o
+        // cupom só é descartado (como o de 1ª compra acima) e o total do servidor já sai sem ele.
+        if (coupon && coupon.maxUses != null) {
+          await client.query('SELECT 1 FROM coupons WHERE code = $1 FOR UPDATE', [coupon.code]);
+          if (await couponUses(client, coupon.code) >= coupon.maxUses) coupon = null;
+        }
+
         const itemCount = items.reduce((sum, it) => sum + (it.price != null ? it.qty : 0), 0);
         subtotal = items.reduce((sum, it) => sum + (it.price != null ? it.price * it.qty : 0), 0);
         discountInfo = PromoEngine.bestDiscount(subtotal, { coupon, itemCount, payment: paymentMethod });
@@ -2559,13 +2742,19 @@ async function handleApi(req, res, pathname) {
         const paymentStatus = isOnlinePayment ? 'pending' : 'manual';
 
         await client.query(
-          `INSERT INTO orders (id, customer_id, customer_name, customer_phone, email, items, subtotal, discount, shipping, total, coupon_code, payment_method, delivery_method, address, payment_status)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-          [id, customerId, customerName, customerPhone, customerEmail, JSON.stringify(items), subtotal, discountAmount, shippingCost, total, discountInfo && discountInfo.type === 'coupon' ? coupon.code : null, paymentMethod, deliveryMethod, address ? JSON.stringify(address) : null, paymentStatus]
+          `INSERT INTO orders (id, customer_id, customer_name, customer_phone, email, items, subtotal, discount, shipping, total, coupon_code, payment_method, delivery_method, address, payment_status, idempotency_key)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+          [id, customerId, customerName, customerPhone, customerEmail, JSON.stringify(items), subtotal, discountAmount, shippingCost, total, discountInfo && discountInfo.type === 'coupon' ? coupon.code : null, paymentMethod, deliveryMethod, address ? JSON.stringify(address) : null, paymentStatus, idempotencyKey]
         );
         await client.query('COMMIT');
       } catch (err) {
         await client.query('ROLLBACK');
+        // Dois envios da mesma chave ao mesmo tempo: o segundo bate no índice único, desfaz a
+        // própria reserva de estoque e devolve o pedido que o primeiro gravou.
+        if (err && err.code === '23505' && err.constraint === 'orders_idempotency_key_idx') {
+          const replay = await findOrderReplay(idempotencyKey, customerPhoneDigits);
+          if (replay) return sendJSON(res, replay.status, replay.body);
+        }
         throw err;
       } finally {
         client.release();
@@ -2608,9 +2797,10 @@ async function handleApi(req, res, pathname) {
         try {
           const session = await getActiveProvider().createCheckoutSession({ orderId: id, total, customerName, customerEmail, items });
           checkoutUrl = session.checkoutUrl;
-          if (session.providerReference) {
-            await pool.query('UPDATE orders SET payment_reference = $1 WHERE id = $2', [session.providerReference, id]);
-          }
+          await pool.query(
+            'UPDATE orders SET payment_reference = COALESCE($1, payment_reference), checkout_url = $2 WHERE id = $3',
+            [session.providerReference || null, checkoutUrl || null, id]
+          );
         } catch (err) {
           console.error(`[${(process.env.PAYMENT_PROVIDER || '').trim()}] falha ao criar checkout, caindo para o fluxo manual:`, err.message);
           // O pedido nasceu 'pending' (ver isOnlinePayment acima) esperando essa preferência dar
@@ -2622,17 +2812,10 @@ async function handleApi(req, res, pathname) {
 
       // Totais do servidor: a vitrine monta a mensagem do WhatsApp com eles (e não com o que
       // calculou no navegador), então a cliente nunca recebe um valor diferente do registrado.
-      return sendJSON(res, 201, {
-        orderId: id,
-        orderCode: orderShortCode(id),
-        checkoutUrl,
-        items: items.map(({ id: productId, name, qty, price, listPrice, variantLabel }) => ({ id: productId, name, qty, price, listPrice, variantLabel })),
-        subtotal,
-        discount: discountAmount,
-        discountLabel: discountInfo ? discountInfo.label : null,
-        shipping: shippingCost,
-        total,
-      });
+      return sendJSON(res, 201, orderResponseBody({
+        id, items, subtotal, discount: discountAmount, discountLabel: discountInfo ? discountInfo.label : null,
+        shipping: shippingCost, total, checkoutUrl,
+      }));
     }
 
     // ------ webhook do gateway de pagamento (confirma pagamento assíncrono do checkout online) ------
@@ -2765,7 +2948,7 @@ async function handleApi(req, res, pathname) {
       try {
         await client.query('BEGIN');
         const orderResult = await client.query(
-          'SELECT status, items, email, customer_name AS "customerName" FROM orders WHERE id=$1 FOR UPDATE',
+          'SELECT status, items, email, customer_name AS "customerName", payment_status AS "paymentStatus" FROM orders WHERE id=$1 FOR UPDATE',
           [body.id]
         );
         if (!orderResult.rowCount) {
@@ -2773,11 +2956,18 @@ async function handleApi(req, res, pathname) {
           return sendJSON(res, 404, { error: 'Pedido não encontrado' });
         }
         order = orderResult.rows[0];
+        // Pedido de pagamento online só sai da loja depois que o gateway confirmou: 'manual'
+        // (combinado no WhatsApp) e 'paid' liberam; pendente, recusado ou estornado não.
+        if (['enviado', 'concluido'].includes(status) && !['manual', 'paid'].includes(order.paymentStatus)) {
+          await client.query('ROLLBACK');
+          return sendJSON(res, 409, { error: 'O pagamento online desse pedido ainda não foi confirmado. Ele só pode ser enviado ou concluído depois de pago.' });
+        }
         statusChanged = order.status !== status;
         const items = Array.isArray(order.items) ? order.items : [];
         if (order.status !== 'cancelado' && status === 'cancelado') {
           await restockOrderItems(client, body.id, items, { adminUserId: admin.id });
         } else if (order.status === 'cancelado' && status !== 'cancelado') {
+          await lockVariantsInOrder(client, items.map((item) => item.variantId));
           for (const item of items) {
             if (!item.variantId) continue;
             const qty = Math.max(0, Math.floor(Number(item.qty) || 0));
@@ -2809,7 +2999,7 @@ async function handleApi(req, res, pathname) {
       if (statusChanged && order.email) {
         await sendEmail({
           to: order.email,
-          subject: `Pedido ${body.id} atualizado — By NaNa`,
+          subject: `Pedido ${orderShortCode(body.id)} atualizado — By NaNa`,
           html: buildOrderStatusHtml({ id: body.id, customerName: order.customerName, status, trackingCode }),
         });
       }
@@ -2857,11 +3047,17 @@ async function handleApi(req, res, pathname) {
       if (dup.rowCount) return sendJSON(res, 409, { error: 'Já existe uma conta com esse e-mail ou CPF' });
 
       const id = crypto.randomUUID();
-      await pool.query(
-        `INSERT INTO customers (id, first_name, last_name, email, phone, birth_date, cpf, gender, password_hash, marketing_opt_in)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-        [id, firstName, lastName, email, phone, birthDate, cpf, gender, hashPassword(password), marketingOptIn]
-      );
+      try {
+        await pool.query(
+          `INSERT INTO customers (id, first_name, last_name, email, phone, birth_date, cpf, gender, password_hash, marketing_opt_in)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          [id, firstName, lastName, email, phone, birthDate, cpf, gender, hashPassword(password), marketingOptIn]
+        );
+      } catch (err) {
+        // duplo clique em "Criar conta": a 2ª requisição passa pela checagem acima antes da 1ª gravar
+        if (err.code === '23505') return sendJSON(res, 409, { error: 'Já existe uma conta com esse e-mail ou CPF' });
+        throw err;
+      }
 
       const customer = { id, firstName, lastName, email, phone, marketingOptIn };
       return sendJSON(res, 201, { customer, token: signSessionToken(id) });
@@ -3367,9 +3563,35 @@ async function handleApi(req, res, pathname) {
     return sendJSON(res, 404, { error: 'Rota não encontrada' });
   } catch (err) {
     console.error(err);
-    const msg = err && err.message === 'payload too large' ? 'Arquivo muito grande' : 'Erro no servidor';
-    return sendJSON(res, err && err.message === 'payload too large' ? 413 : 500, { error: msg });
+    const tooLarge = err && err.message === 'payload too large';
+    if (!tooLarge) alertServerError(`${req.method} ${pathname}`, err);
+    return sendJSON(res, tooLarge ? 413 : 500, { error: tooLarge ? 'Arquivo muito grande' : 'Erro no servidor' });
   }
+}
+
+// Alerta de erro por e-mail: sem isso um erro 500 (banco fora, bug num checkout) só aparecia no
+// log do Render, que ninguém olha. No máximo um e-mail a cada 30 min — os erros nesse intervalo
+// são só contados e entram no próximo alerta, pra uma queda do banco não virar centenas de e-mails.
+// Vai pra ALERT_EMAIL, ou pro e-mail da loja quando ele não estiver definido.
+const ERROR_ALERT_INTERVAL_MS = 30 * 60 * 1000;
+let lastErrorAlertAt = 0;
+let errorsSinceLastAlert = 0;
+function alertServerError(context, err) {
+  const to = (process.env.ALERT_EMAIL || process.env.STORE_NOTIFY_EMAIL || '').trim();
+  if (!to) return;
+  errorsSinceLastAlert += 1;
+  const now = Date.now();
+  if (now - lastErrorAlertAt < ERROR_ALERT_INTERVAL_MS) return;
+  const count = errorsSinceLastAlert;
+  lastErrorAlertAt = now;
+  errorsSinceLastAlert = 0;
+  sendEmail({
+    to,
+    subject: `[By NaNa] Erro no servidor (${context})`,
+    html: `<p>O site registrou ${count} erro(s) desde o último alerta. O mais recente:</p>
+           <p><strong>${escapeHtml(context)}</strong>: ${escapeHtml((err && err.message) || String(err))}</p>
+           <p>${escapeHtml(new Date(now).toISOString())} — detalhes completos no log do Render.</p>`,
+  });
 }
 
 // Comprime a resposta com gzip quando o cliente aceita — sem isso, main.js (127KB) e
@@ -3713,6 +3935,7 @@ function applySecurityHeaders(res) {
 // desde a v15), tirando o site do ar para todo mundo por causa de uma única requisição.
 process.on('unhandledRejection', (err) => {
   console.error('[unhandledRejection]', err);
+  alertServerError('unhandledRejection', err);
 });
 
 const httpServer = http

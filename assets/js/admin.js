@@ -210,6 +210,12 @@
     COLLECTIONS = data.collections || [];
     PROMOTIONS = data.promotions || [];
     COUPONS = data.coupons || [];
+    try {
+      // /api/data só traz o cupom de boas-vindas; o painel precisa de todos (e da contagem de usos).
+      COUPONS = (await api('/api/admin/coupons/list', 'POST', {})).coupons || COUPONS;
+    } catch (err) {
+      toast(`Não foi possível carregar os cupons: ${err.message}`, 'error');
+    }
     SHIPPING_RULES = data.shippingRules || [];
     renderCategories();
     renderCollections();
@@ -1587,6 +1593,7 @@
   const couponValue = document.getElementById('couponValue');
   const couponEnd = document.getElementById('couponEnd');
   const couponFirstPurchaseOnly = document.getElementById('couponFirstPurchaseOnly');
+  const couponMaxUses = document.getElementById('couponMaxUses');
   const couponSubmit = document.getElementById('couponSubmit');
   const couponCancelEdit = document.getElementById('couponCancelEdit');
   const couponFormTitle = document.getElementById('couponFormTitle');
@@ -1609,8 +1616,11 @@
       const discountText = c.type === 'percent' ? `${c.value}% OFF` : `${money(c.value)} OFF`;
       const validity = c.endDate ? ` · válido até ${formatDate(c.endDate)}` : '';
       const firstPurchaseTag = c.firstPurchaseOnly ? ' · só 1ª compra' : '';
+      let usageTag = '';
+      if (c.maxUses != null) usageTag = ` · ${Number(c.uses) || 0}/${c.maxUses} usos${Number(c.uses) >= c.maxUses ? ' (esgotado)' : ''}`;
+      else if (c.uses) usageTag = ` · ${Number(c.uses)} uso(s)`;
       const li = document.createElement('li');
-      li.innerHTML = `<span>${escapeHtml(c.code)} — ${discountText}${validity}${firstPurchaseTag}</span><button type="button" class="admin-coupon-edit" aria-label="Editar">✎</button><button type="button" aria-label="Remover">✕</button>`;
+      li.innerHTML = `<span>${escapeHtml(c.code)} — ${discountText}${validity}${firstPurchaseTag}${usageTag}</span><button type="button" class="admin-coupon-edit" aria-label="Editar">✎</button><button type="button" aria-label="Remover">✕</button>`;
       li.querySelector('.admin-coupon-edit').addEventListener('click', () => startEditCoupon(c));
       li.querySelector('button:not(.admin-coupon-edit)').addEventListener('click', async () => {
         if (!(await confirmDialog(`Remover o cupom "${c.code}"?`))) return;
@@ -1631,6 +1641,7 @@
     couponValue.value = c.value;
     couponEnd.value = c.endDate || '';
     couponFirstPurchaseOnly.checked = !!c.firstPurchaseOnly;
+    couponMaxUses.value = c.maxUses != null ? c.maxUses : '';
     couponFormTitle.textContent = `Editando cupom "${c.code}"`;
     couponSubmit.textContent = 'Salvar alterações';
     couponCancelEdit.hidden = false;
@@ -1662,6 +1673,7 @@
         value: couponValue.value,
         endDate: couponEnd.value,
         firstPurchaseOnly: couponFirstPurchaseOnly.checked,
+        maxUses: couponMaxUses.value,
       };
       const data = editing
         ? await api('/api/coupons/update', 'POST', payload)

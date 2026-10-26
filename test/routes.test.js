@@ -4,7 +4,7 @@ const { spawn } = require('node:child_process');
 const path = require('node:path');
 const test = require('node:test');
 const { Pool } = require('pg');
-require('dotenv').config({ quiet: true });
+require('./require-local-db');
 
 // Mesmo esquema de hash usado em serve.js (scryptSync + salt, formato "salt:hash") — os testes
 // abaixo inserem usuários direto no banco pra não depender de credenciais reais de produção.

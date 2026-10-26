@@ -53,6 +53,9 @@ services:
       # E-mail da loja que recebe o aviso de cada pedido novo.
       - key: STORE_NOTIFY_EMAIL
         sync: false
+      # E-mail dos alertas de erro do servidor (vazio = usa o STORE_NOTIFY_EMAIL).
+      - key: ALERT_EMAIL
+        sync: false
       # Pasta do disco persistente dos uploads do painel (ver disk abaixo). Em plano free (sem
       # disco), deixe vazio — mas as fotos enviadas pelo painel somem a cada deploy/reinício.
       - key: UPLOAD_DIR

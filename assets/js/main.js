@@ -1505,6 +1505,11 @@
     return msg;
   }
 
+  // Chave de idempotência da tentativa de fechamento: se a resposta do pedido se perder (rede
+  // caiu, aba recarregou o fetch), o reenvio do mesmo conteúdo usa a mesma chave e o servidor
+  // devolve o pedido já gravado em vez de criar outro. Mudou a sacola ou os dados, chave nova.
+  let pendingOrderAttempt = null;
+
   async function persistOrder(keys) {
     const items = keys.map((key) => {
       const entry = cart[key];
@@ -1540,12 +1545,20 @@
       address: selectedDelivery === 'Entrega' ? address : null,
       customerToken: localStorage.getItem(CUSTOMER_TOKEN_KEY) || null,
     };
+    const fingerprint = JSON.stringify(payload);
+    if (!pendingOrderAttempt || pendingOrderAttempt.fingerprint !== fingerprint) {
+      pendingOrderAttempt = { fingerprint, key: window.crypto?.randomUUID ? window.crypto.randomUUID() : null };
+    }
+    payload.idempotencyKey = pendingOrderAttempt.key;
     const res = await fetch('/api/orders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
     const data = await res.json().catch(() => ({}));
+    // resposta definitiva (pedido gravado ou recusado com motivo): a próxima tentativa é outra.
+    // Erro 5xx não gravou nada no servidor, então o reenvio pode manter a mesma chave.
+    if (res.status < 500) pendingOrderAttempt = null;
     if (!res.ok) throw new Error(data.error || 'Não foi possível reservar o estoque');
     return { ...data, checkoutUrl: data.checkoutUrl || null };
   }
@@ -2266,13 +2279,14 @@
       .map((key) => {
         const entry = cart[key];
         const p = PRODUCTS.find((x) => x.id === entry.productId);
-        return p ? { qty: entry.qty, name: p.name } : null;
+        // o servidor resolve nome e preço pelo id (ver /api/cart-activity)
+        return p ? { id: p.id, qty: entry.qty } : null;
       })
       .filter(Boolean);
     fetch('/api/cart-activity', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, name: bagNameInput.value.trim(), items, subtotal: cartSubtotal(keys) }),
+      body: JSON.stringify({ email, name: bagNameInput.value.trim(), items }),
     }).catch(() => {});
   });
 
@@ -3145,7 +3159,7 @@
     pdpMainImg.alt = p.name;
     thumbs.innerHTML = images
       .map(
-        (url, i) => `<button type="button" class="pdp-thumb${i === 0 ? ' is-active' : ''}" data-src="${url}"><img src="${url}" alt="" /></button>`
+        (url, i) => `<button type="button" class="pdp-thumb${i === 0 ? ' is-active' : ''}" data-src="${url}" aria-label="Ver foto ${i + 1}"><img src="${url}" alt="" /></button>`
       )
       .join('');
     thumbs.hidden = images.length <= 1;

@@ -20,8 +20,8 @@
     <span class="brand-mark admin-login-mark">By NaNa</span>
     <h1>Painel Admin</h1>
     <p>Entre com seu e-mail e senha para gerenciar o catálogo, pedidos e clientes.</p>
-    <input type="email" id="loginEmail" placeholder="E-mail" autocomplete="username" required />
-    <input type="password" id="loginPassword" placeholder="Senha" autocomplete="current-password" required />
+    <input type="email" id="loginEmail" aria-label="E-mail" placeholder="E-mail" autocomplete="username" required />
+    <input type="password" id="loginPassword" aria-label="Senha" placeholder="Senha" autocomplete="current-password" required />
     <button type="submit" class="btn btn-primary btn-block">Entrar</button>
     <a href="/" class="btn btn-ghost btn-block">Sair</a>
     <p class="admin-error" id="loginError" hidden>E-mail ou senha inválidos.</p>
@@ -130,7 +130,7 @@
       </div>
       <form class="admin-topbar-search" id="globalSearchForm" role="search">
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-        <input type="search" id="globalSearch" placeholder="Buscar produto, pedido, cliente..." />
+        <input type="search" id="globalSearch" aria-label="Buscar no painel" placeholder="Buscar produto, pedido, cliente..." />
       </form>
       <div class="admin-header-actions">
         <div class="admin-notif-wrap">
@@ -229,7 +229,7 @@
         <h2>Categorias</h2>
         <p class="admin-card-hint">Usadas nos filtros, nos cards de "Categorias" da home e no mega-menu do topo. O campo "Grupo" define em qual coluna do mega-menu a categoria aparece — deixe em branco para ela cair numa coluna genérica "Categorias".</p>
         <form id="categoryForm" class="admin-inline-form">
-          <input type="text" id="categoryName" placeholder="Nova categoria (ex: Acessórios)" required />
+          <input type="text" id="categoryName" aria-label="Nome da nova categoria" placeholder="Nova categoria (ex: Acessórios)" required />
           <button type="submit" class="btn btn-primary">Adicionar</button>
         </form>
         <div class="admin-category-list" id="categoryList"></div>
@@ -242,7 +242,7 @@
         <h2>Coleções</h2>
         <p class="admin-card-hint">Opcional: agrupe peças de uma mesma coleção/temporada.</p>
         <form id="collectionForm" class="admin-inline-form">
-          <input type="text" id="collectionName" placeholder="Nova coleção (ex: Verão 2026)" required />
+          <input type="text" id="collectionName" aria-label="Nome da nova coleção" placeholder="Nova coleção (ex: Verão 2026)" required />
           <button type="submit" class="btn btn-primary">Adicionar</button>
         </form>
         <ul class="admin-tag-list" id="collectionList"></ul>
@@ -399,7 +399,7 @@
           <button type="button" class="btn btn-primary" id="pNewProduct">＋ Novo produto</button>
         </div>
         <div class="admin-catalog-toolbar">
-          <input type="search" id="productSearch" class="admin-search" placeholder="Buscar por nome, categoria ou coleção..." />
+          <input type="search" id="productSearch" aria-label="Buscar produtos" class="admin-search" placeholder="Buscar por nome, categoria ou coleção..." />
           <select id="productCategoryFilter" class="admin-select" aria-label="Filtrar produtos por categoria"><option value="">Todas as categorias</option></select>
           <select id="productStatusFilter" class="admin-select" aria-label="Filtrar produtos por situação">
             <option value="">Todas as situações</option>
@@ -423,7 +423,7 @@
       <section class="admin-card admin-card-wide">
         <h2>Novidades da home</h2>
         <p class="admin-card-hint">Escolha quais peças aparecem na seção "Novidades" da página inicial e em que ordem. Sem nenhuma peça destacada aqui, a seção mostra automaticamente as últimas cadastradas.</p>
-        <input type="search" id="featuredSearch" class="admin-search" placeholder="Buscar produto para destacar..." />
+        <input type="search" id="featuredSearch" aria-label="Buscar produto para Novidades" class="admin-search" placeholder="Buscar produto para destacar..." />
         <div class="admin-featured-list" id="featuredList"></div>
       </section>
     </section>
@@ -432,7 +432,7 @@
       <section class="admin-card admin-card-wide">
         <h2>Leve também (sacola)</h2>
         <p class="admin-card-hint">Escolha quais peças aparecem como sugestão de "leve também" dentro da sacola, e em que ordem — pense em acessórios ou itens de menor valor, não necessariamente relacionados ao que a cliente já colocou no carrinho. Sem nenhuma peça marcada aqui, a sacola mostra automaticamente as de menor preço em estoque.</p>
-        <input type="search" id="upsellSearch" class="admin-search" placeholder="Buscar produto para marcar..." />
+        <input type="search" id="upsellSearch" aria-label="Buscar produto para Leve também" class="admin-search" placeholder="Buscar produto para marcar..." />
         <div class="admin-featured-list" id="upsellList"></div>
       </section>
     </section>
@@ -524,6 +524,12 @@
               <input type="date" id="couponEnd" />
             </label>
           </div>
+          <div class="admin-form-row">
+            <label>
+              Limite de usos (opcional)
+              <input type="number" id="couponMaxUses" min="1" step="1" placeholder="Vazio = ilimitado" />
+            </label>
+          </div>
           <label class="account-check">
             <input type="checkbox" id="couponFirstPurchaseOnly" />
             Válido só na 1ª compra (bloqueado pra quem já tem pedido)
@@ -601,7 +607,7 @@
         <h2>Pedidos (<span id="orderCount">0</span>)</h2>
         <p class="admin-card-hint">Pedidos fechados pelo cliente na sacola do site, registrados no instante em que ele abre o WhatsApp para confirmar. Atualize o status conforme for atendendo.</p>
         <div class="admin-status-tabs" id="orderStatusTabs" aria-label="Filtrar pedidos por status"></div>
-        <input type="search" id="orderSearch" class="admin-search" placeholder="Buscar por nº do pedido, nome, telefone ou peça..." />
+        <input type="search" id="orderSearch" aria-label="Buscar pedidos" class="admin-search" placeholder="Buscar por nº do pedido, nome, telefone ou peça..." />
         <div class="admin-order-list" id="orderList"></div>
       </section>
     </section>
@@ -611,7 +617,7 @@
         <h2>Clientes (<span id="customerCount">0</span>)</h2>
         <p class="admin-card-hint">Cadastros feitos pelos próprios clientes no site — use como base para ações de CRM (aniversário, novidades, campanhas). O CPF é exibido parcialmente por privacidade.</p>
         <div class="admin-toolbar-row">
-          <input type="search" id="customerSearch" class="admin-search" placeholder="Buscar por nome ou e-mail..." />
+          <input type="search" id="customerSearch" aria-label="Buscar clientes" class="admin-search" placeholder="Buscar por nome ou e-mail..." />
           <button type="button" id="customerExport" class="btn btn-outline">Exportar CSV</button>
         </div>
         <div class="admin-customer-list" id="customerList"></div>
@@ -651,7 +657,7 @@
       <section class="admin-card admin-card-wide">
         <h2>Avaliações (<span id="reviewCount">0</span>)</h2>
         <p class="admin-card-hint">Avaliações ficam visíveis no site assim que enviadas por clientes que compraram o produto. Remova aqui as que forem inadequadas.</p>
-        <input type="search" id="reviewSearch" class="admin-search" placeholder="Buscar por produto ou cliente..." />
+        <input type="search" id="reviewSearch" aria-label="Buscar avaliações" class="admin-search" placeholder="Buscar por produto ou cliente..." />
         <div class="admin-order-list" id="reviewList"></div>
       </section>
     </section>
@@ -826,6 +832,6 @@
 </div>
 
 <script src="assets/js/promo.js?v=20261015"></script>
-<script src="assets/js/admin.js?v=20261015"></script>
+<script src="assets/js/admin.js?v=20261024"></script>
 </body>
 </html>

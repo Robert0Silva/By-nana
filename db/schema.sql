@@ -376,3 +376,15 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_code TEXT;
 -- e na sacola. Ambos opcionais: sem prazo cadastrado, a loja mostra só o valor.
 ALTER TABLE shipping_rules ADD COLUMN IF NOT EXISTS days_min INTEGER;
 ALTER TABLE shipping_rules ADD COLUMN IF NOT EXISTS days_max INTEGER;
+
+-- limite opcional de usos do cupom (nulo = ilimitado). Conta pedidos não cancelados que
+-- usaram o cupom; checado com a linha do cupom travada no fechamento do pedido.
+ALTER TABLE coupons ADD COLUMN IF NOT EXISTS max_uses INTEGER CHECK (max_uses IS NULL OR max_uses > 0);
+CREATE INDEX IF NOT EXISTS orders_coupon_code_idx ON orders (coupon_code) WHERE coupon_code IS NOT NULL;
+
+-- chave de idempotência gerada pela sacola a cada tentativa de fechamento: um reenvio (queda de
+-- rede, duplo toque) devolve o mesmo pedido em vez de criar outro e reservar o estoque de novo.
+-- checkout_url guarda o link do gateway pra o reenvio de um pedido online levar ao mesmo pagamento.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS checkout_url TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS orders_idempotency_key_idx ON orders (idempotency_key) WHERE idempotency_key IS NOT NULL;
