@@ -1902,6 +1902,19 @@
     });
     bagTotalLabelEl.textContent = hasConsultItem ? 'Total (itens com preço)' : 'Total';
     bagConsultNoteEl.hidden = !hasConsultItem;
+    // Peça sob consulta não tem valor para cobrar online (o servidor também recusa): a opção
+    // "Pagar agora" fica indisponível até a sacola ter só peças com preço.
+    document.querySelectorAll('input[name="payment"]').forEach((input) => {
+      if (input.value !== ONLINE_PAYMENT_VALUE) return;
+      input.disabled = hasConsultItem;
+      const chip = input.closest('.bag-chip');
+      if (chip) chip.title = hasConsultItem ? 'Indisponível com peça de preço sob consulta' : '';
+      if (hasConsultItem && input.checked) {
+        input.checked = false;
+        selectedPayment = '';
+        updateChipStyles('payment');
+      }
+    });
     bagSecurityBadgeEl.textContent = selectedPayment === ONLINE_PAYMENT_VALUE
       ? '🔒 Pagamento processado com segurança pelo PagBank'
       : '💬 Você confirma tudo com a gente no WhatsApp antes de pagar';

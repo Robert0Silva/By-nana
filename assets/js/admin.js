@@ -110,7 +110,7 @@
   }
 
   // Promise<string|null> — null quando cancelado. Mesmo visual do confirmDialog, com um campo.
-  function promptDialog(message, initialValue = '') {
+  function promptDialog(message, initialValue = '', { maxLength = 60 } = {}) {
     return new Promise((resolve) => {
       const returnFocus = document.activeElement;
       const overlay = document.createElement('div');
@@ -118,7 +118,7 @@
       overlay.innerHTML = `
         <form class="admin-confirm" role="dialog" aria-modal="true" aria-labelledby="adminPromptMsg">
           <label id="adminPromptMsg" for="adminPromptInput">${escapeHtml(message)}</label>
-          <input type="text" id="adminPromptInput" maxlength="60" autocomplete="off" value="${escapeHtml(initialValue)}" />
+          <input type="text" id="adminPromptInput" maxlength="${maxLength}" autocomplete="off" value="${escapeHtml(initialValue)}" />
           <div class="admin-confirm-actions">
             <button type="button" class="btn btn-ghost" data-answer="no">Cancelar</button>
             <button type="submit" class="btn btn-primary">Confirmar</button>
@@ -2138,10 +2138,42 @@
   const orderCount = document.getElementById('orderCount');
   const orderSearch = document.getElementById('orderSearch');
 
+  const openFinancePanels = new Set();
   const ORDER_STATUS_LABELS = { novo: 'Novo', em_andamento: 'Em andamento', enviado: 'Enviado', concluido: 'Concluído', cancelado: 'Cancelado' };
+  // Mesma regra do servidor (ORDER_STATUS_TRANSITIONS em serve.js): só oferece os próximos
+  // status possíveis, para a equipe não esbarrar num erro ao escolher.
+  const ORDER_STATUS_TRANSITIONS = {
+    novo: ['em_andamento', 'enviado', 'concluido', 'cancelado'],
+    em_andamento: ['novo', 'enviado', 'concluido', 'cancelado'],
+    enviado: ['em_andamento', 'concluido', 'cancelado'],
+    concluido: ['enviado'],
+    cancelado: ['novo', 'em_andamento'],
+  };
   // 'manual' (pagamento combinado no WhatsApp) é o caso comum e não precisa de destaque — só os
   // status de um pagamento online (gateway) ganham selo, pra chamar atenção quando precisar agir.
-  const PAYMENT_STATUS_LABELS = { pending: 'Pagamento pendente', paid: 'Pago', failed: 'Pagamento falhou', refunded: 'Reembolsado' };
+  const PAYMENT_STATUS_LABELS = {
+    pending: 'Pagamento pendente', paid: 'Pago', failed: 'Pagamento falhou', refunded: 'Estornado',
+    refund_pending: 'Estorno pendente', partially_refunded: 'Estorno parcial', refund_failed: 'Estorno com falha',
+  };
+  const PAYMENT_ATTENTION_LABELS = {
+    paid_after_cancel: 'Pago após cancelamento — decidir',
+    check_failing: 'Consulta ao PagBank falhando',
+    refund_uncertain: 'Estorno sem confirmação',
+    amount_mismatch: 'Valor pago menor que o total — conferir',
+  };
+  const ORDER_EVENT_LABELS = {
+    checkout_created: 'Link de pagamento criado', checkout_failed: 'Falha ao criar link (pedido foi para o WhatsApp)',
+    checkout_expired_notice: 'PagBank avisou: link de pagamento vencido',
+    payment_approved: 'Pagamento aprovado', payment_amount_mismatch: 'Valor pago diferente do total do pedido', payment_declined: 'Tentativa de pagamento recusada',
+    payment_after_cancel: 'Pagamento aprovado em pedido cancelado', payment_expired: 'Pagamento não concluído no prazo (pedido cancelado)',
+    payment_checked: 'Pagamento consultado no PagBank', payment_check_failed: 'Falha ao consultar o PagBank',
+    refund_requested: 'Estorno solicitado', refund_response: 'Resposta do PagBank ao estorno', refund_retry: 'Nova tentativa de estorno', refund_superseded: 'Tentativa sem resposta encerrada (PagBank sem estorno)',
+    refund_confirmed: 'Estorno confirmado', partial_refund_confirmed: 'Estorno parcial confirmado', refund_failed: 'Estorno com falha',
+    refund_after_shipment: 'Estorno de pedido já enviado (sem reposição de estoque)', order_cancelled: 'Pedido cancelado',
+    order_cancelled_by_refund: 'Pedido cancelado pelo estorno (peças devolvidas ao estoque)',
+    order_status_changed: 'Status alterado', admin_decision: 'Decisão da equipe', reactivation_denied: 'Reativação negada (sem estoque)',
+  };
+  const EVENT_SOURCE_LABELS = { webhook: 'PagBank (notificação)', sweep: 'verificação automática', admin: 'painel', checkout: 'checkout' };
 
   async function loadOrders() {
     try {
@@ -2158,6 +2190,7 @@
   const ORDER_STATUS_TABS = [
     { id: 'abertos', label: 'Em aberto', match: (o) => o.status === 'novo' || o.status === 'em_andamento' },
     { id: 'novo', label: 'Novos', match: (o) => o.status === 'novo' },
+    { id: 'parados', label: 'Segurando estoque', match: (o) => isHoldingStock(o) },
     { id: 'em_andamento', label: 'Em andamento', match: (o) => o.status === 'em_andamento' },
     { id: 'enviado', label: 'Enviados', match: (o) => o.status === 'enviado' },
     { id: 'concluido', label: 'Concluídos', match: (o) => o.status === 'concluido' },
@@ -2188,6 +2221,12 @@
   // pedido "novo" há mais de 2h sem virar em_andamento provavelmente não recebeu retorno
   // no WhatsApp ainda — sinalizado pra não passar batido numa loja de poucas vendas/dia.
   const isStaleOrder = (o) => o.status === 'novo' && Date.now() - new Date(o.createdAt).getTime() > 2 * 60 * 60 * 1000;
+  // Pedido combinado no WhatsApp não vence sozinho (só o online tem prazo no PagBank): parado
+  // como "novo" por dias, ele segura a peça no estoque sem venda. Sinaliza para a equipe
+  // cancelar (devolvendo as peças) ou dar andamento.
+  const HELD_STOCK_DAYS = 3;
+  const orderAgeDays = (o) => Math.floor((Date.now() - new Date(o.createdAt).getTime()) / (24 * 60 * 60 * 1000));
+  const isHoldingStock = (o) => o.status === 'novo' && (!o.paymentStatus || o.paymentStatus === 'manual') && orderAgeDays(o) >= HELD_STOCK_DAYS;
 
   // telefone digitado pela cliente no checkout ("(31) 99999-0000") → número internacional p/ wa.me
   function whatsappLinkFor(o) {
@@ -2236,7 +2275,7 @@
       div.className = 'admin-order-item';
       div.innerHTML = `
         <div class="admin-order-info">
-          <span class="admin-order-name"><span class="admin-order-code">${orderCode(o.id)}</span>${escapeHtml(o.customerName)} · ${escapeHtml(o.customerPhone)}${isStale ? ' <span class="admin-order-stale-badge" title="Sem retorno há mais de 2h">⏰ Aguardando retorno</span>' : ''}${o.paymentStatus && o.paymentStatus !== 'manual' ? ` <span class="admin-order-payment-badge pay-${o.paymentStatus}">${escapeHtml(PAYMENT_STATUS_LABELS[o.paymentStatus] || o.paymentStatus)}</span>` : ''}</span>
+          <span class="admin-order-name"><span class="admin-order-code">${orderCode(o.id)}</span>${escapeHtml(o.customerName)} · ${escapeHtml(o.customerPhone)}${isHoldingStock(o) ? ` <span class="admin-order-stale-badge" title="Pedido combinado no WhatsApp parado: as peças continuam reservadas até alguém cancelar ou dar andamento">🔒 Segurando estoque há ${orderAgeDays(o)} dias</span>` : (isStale ? ' <span class="admin-order-stale-badge" title="Sem retorno há mais de 2h">⏰ Aguardando retorno</span>' : '')}${o.paymentStatus && o.paymentStatus !== 'manual' ? ` <span class="admin-order-payment-badge pay-${o.paymentStatus}">${escapeHtml(PAYMENT_STATUS_LABELS[o.paymentStatus] || o.paymentStatus)}</span>` : ''}${o.paymentAttention ? ` <span class="admin-order-stale-badge" title="Precisa de ação da equipe">⚠ ${escapeHtml(PAYMENT_ATTENTION_LABELS[o.paymentAttention] || o.paymentAttention)}</span>` : ''}</span>
           <span class="admin-order-meta">${when}${o.couponCode ? ` · cupom ${escapeHtml(o.couponCode)}` : ''} · ${escapeHtml(o.paymentMethod)} · ${escapeHtml(o.deliveryMethod)}${o.shipping ? ` · frete ${money(o.shipping)}` : ''}</span>
           ${addressText ? `<span class="admin-order-address">📍 ${addressText}</span>` : ''}
           <p class="admin-order-items">${itemsText}</p>
@@ -2245,18 +2284,39 @@
         </div>
         <div class="admin-order-actions">
           <select class="admin-order-status-select st-${o.status}" aria-label="Status do pedido ${orderCode(o.id)}">
-            ${Object.entries(ORDER_STATUS_LABELS).map(([value, label]) => `<option value="${value}" ${value === o.status ? 'selected' : ''}>${label}</option>`).join('')}
+            ${Object.entries(ORDER_STATUS_LABELS).filter(([value]) => value === o.status || (ORDER_STATUS_TRANSITIONS[o.status] || []).includes(value)).map(([value, label]) => `<option value="${value}" ${value === o.status ? 'selected' : ''}>${label}</option>`).join('')}
           </select>
           ${waHref ? `<a class="btn btn-ghost admin-order-whats" href="${escapeHtml(waHref)}" target="_blank" rel="noopener">Chamar no WhatsApp</a>` : ''}
+          ${o.paymentStatus && o.paymentStatus !== 'manual' ? '<button type="button" class="btn btn-ghost admin-order-finance-toggle" aria-expanded="false">Financeiro</button>' : ''}
         </div>
+        <div class="admin-order-finance" hidden></div>
       `;
+      const financeToggle = div.querySelector('.admin-order-finance-toggle');
+      if (financeToggle) {
+        const panel = div.querySelector('.admin-order-finance');
+        const setOpen = (open) => {
+          panel.hidden = !open;
+          financeToggle.setAttribute('aria-expanded', String(open));
+          if (open) {
+            openFinancePanels.add(o.id);
+            loadOrderFinance(o, panel);
+          } else {
+            openFinancePanels.delete(o.id);
+          }
+        };
+        // a lista é redesenhada a cada atualização (e depois de cada ação): o painel aberto continua aberto
+        if (openFinancePanels.has(o.id)) setOpen(true);
+        financeToggle.addEventListener('click', () => setOpen(panel.hidden));
+      }
       const select = div.querySelector('.admin-order-status-select');
       select.addEventListener('change', async () => {
         const status = select.value;
         // cancelar devolve o estoque e reativar um cancelado baixa de novo (e os dois avisam a
         // cliente por e-mail) — um clique errado no select não pode passar direto.
         let question = '';
-        if (status === 'cancelado') {
+        if (status === 'cancelado' && ['paid', 'partially_refunded'].includes(o.paymentStatus)) {
+          question = `O pedido ${orderCode(o.id)} já foi pago online. Cancelar vai solicitar ao PagBank o estorno de ${money((o.paidAmount != null ? o.paidAmount : o.total) - (o.refundedAmount || 0))} e devolver as peças ao estoque. Continuar?`;
+        } else if (status === 'cancelado') {
           question = `Cancelar o pedido ${orderCode(o.id)} de ${o.customerName}? As peças voltam para o estoque e a cliente é avisada por e-mail, se tiver informado um.`;
         } else if (o.status === 'cancelado') {
           question = `Reativar o pedido ${orderCode(o.id)}? As peças serão baixadas do estoque novamente.`;
@@ -2283,7 +2343,7 @@
         try {
           const data = await api('/api/orders/status', 'POST', { id: o.id, status, trackingCode });
           ORDERS = data.orders;
-          toast(`Pedido ${orderCode(o.id)} agora está "${ORDER_STATUS_LABELS[status]}".`);
+          toast(data.message ? `Pedido ${orderCode(o.id)}: ${data.message}` : `Pedido ${orderCode(o.id)} agora está "${ORDER_STATUS_LABELS[status]}".`);
         } catch (err) {
           toast(err.message, 'error');
         }
@@ -2295,6 +2355,91 @@
   }
 
   orderSearch.addEventListener('input', renderOrderList);
+
+  // ---------- financeiro do pedido (pagamento online, estornos e histórico) ----------
+  // Os botões só aparecem quando a ação faz sentido, mas quem decide é o servidor: toda ação é
+  // validada de novo no backend (permissão, estado do pagamento e estoque).
+  const formatDateTime = (iso) => (iso ? new Date(iso).toLocaleString('pt-BR') : '—');
+
+  async function loadOrderFinance(o, panel) {
+    panel.innerHTML = '<p class="admin-order-meta">Carregando financeiro…</p>';
+    try {
+      const data = await api('/api/orders/payment/detail', 'POST', { id: o.id });
+      renderOrderFinance(o, panel, data.finance);
+    } catch (err) {
+      panel.innerHTML = `<p class="admin-order-meta">${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  function renderOrderFinance(o, panel, f) {
+    const st = f.paymentStatus;
+    const actions = [];
+    if (st !== 'manual') actions.push('<button type="button" class="btn btn-ghost" data-fin="refresh">Atualizar pagamento</button>');
+    if (f.attention === 'paid_after_cancel' && f.status === 'cancelado' && st === 'paid') {
+      actions.push('<button type="button" class="btn btn-primary" data-fin="reactivate">Reativar pedido (valida estoque)</button>');
+      actions.push('<button type="button" class="btn btn-ghost" data-fin="refund">Solicitar estorno</button>');
+    } else if (f.status === 'cancelado' && ['paid', 'partially_refunded'].includes(st)) {
+      actions.push('<button type="button" class="btn btn-ghost" data-fin="refund">Solicitar estorno</button>');
+    }
+    if (st === 'refund_failed') actions.push('<button type="button" class="btn btn-primary" data-fin="retry-refund">Tentar estorno novamente</button>');
+
+    const events = (f.events || []).map((ev) => {
+      const change = [];
+      if (ev.fromStatus !== ev.toStatus) change.push(`pedido ${escapeHtml(ORDER_STATUS_LABELS[ev.fromStatus] || ev.fromStatus || '—')} → ${escapeHtml(ORDER_STATUS_LABELS[ev.toStatus] || ev.toStatus || '—')}`);
+      if (ev.fromPayment !== ev.toPayment) change.push(`pagamento ${escapeHtml(PAYMENT_STATUS_LABELS[ev.fromPayment] || ev.fromPayment || '—')} → ${escapeHtml(PAYMENT_STATUS_LABELS[ev.toPayment] || ev.toPayment || '—')}`);
+      const meta = ev.metadata || {};
+      const detail = meta.error ? ` · ${escapeHtml(meta.error)}` : (meta.amount ? ` · ${money(meta.amount)}` : '');
+      return `<li><strong>${escapeHtml(ORDER_EVENT_LABELS[ev.type] || ev.type)}</strong>${detail}
+        <span class="admin-order-meta">${formatDateTime(ev.createdAt)} · ${escapeHtml(EVENT_SOURCE_LABELS[ev.source] || ev.source)}${ev.adminName ? ` · ${escapeHtml(ev.adminName)}` : ''}${change.length ? ` · ${change.join(' · ')}` : ''}${ev.reason ? ` · "${escapeHtml(ev.reason)}"` : ''}</span></li>`;
+    }).join('');
+
+    panel.innerHTML = `
+      ${f.attention ? `<p class="admin-order-finance-alert">⚠ ${escapeHtml(PAYMENT_ATTENTION_LABELS[f.attention] || f.attention)}${f.attention === 'paid_after_cancel' ? ' — o pedido NÃO foi reativado automaticamente. Reative (se houver estoque) ou solicite o estorno.' : ''}${f.attention === 'refund_uncertain' ? ' — não informe à cliente que o dinheiro foi devolvido até a confirmação.' : ''}</p>` : ''}
+      <dl class="admin-order-finance-grid">
+        <div><dt>Situação do pagamento</dt><dd>${escapeHtml(PAYMENT_STATUS_LABELS[st] || st)}</dd></div>
+        <div><dt>Valor pago</dt><dd>${f.paidAmount != null ? money(f.paidAmount) : '—'}</dd></div>
+        <div><dt>Valor estornado</dt><dd>${money(f.refundedAmount || 0)}</dd></div>
+        <div><dt>Ainda não estornado</dt><dd>${money(f.notRefundedAmount || 0)}</dd></div>
+        <div><dt>Cobrança PagBank</dt><dd>${f.chargeId ? escapeHtml(f.chargeId) : '—'}</dd></div>
+        <div><dt>Última consulta</dt><dd>${formatDateTime(f.checkedAt)}${f.checkFailures ? ` (${f.checkFailures} sem sucesso)` : ''}</dd></div>
+      </dl>
+      ${actions.length ? `<div class="admin-order-finance-actions">${actions.join('')}</div>` : ''}
+      <h4 class="admin-order-finance-title">Histórico financeiro</h4>
+      ${events ? `<ul class="admin-order-finance-events">${events}</ul>` : '<p class="admin-order-meta">Nenhum evento registrado ainda.</p>'}
+    `;
+
+    panel.querySelectorAll('[data-fin]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const action = btn.dataset.fin;
+        let reason = '';
+        if (action === 'refund' || action === 'reactivate') {
+          const question = action === 'refund'
+            ? `Justificativa do estorno de ${money(f.notRefundedAmount)} do pedido ${orderCode(o.id)}:`
+            : `Justificativa para reativar o pedido ${orderCode(o.id)} (as peças serão baixadas do estoque):`;
+          reason = await promptDialog(question, '', { maxLength: 300 });
+          if (reason === null) return;
+          if (reason.length < 3) {
+            toast('Informe a justificativa.', 'error');
+            return;
+          }
+        } else if (action === 'retry-refund') {
+          const ok = await confirmDialog(`Tentar de novo o estorno do pedido ${orderCode(o.id)}? Se a tentativa anterior ficou sem resposta, o PagBank é consultado antes e o estorno não é repetido.`, { confirmLabel: 'Tentar novamente' });
+          if (!ok) return;
+        }
+        panel.querySelectorAll('[data-fin]').forEach((b) => { b.disabled = true; });
+        try {
+          const data = await api(`/api/orders/payment/${action}`, 'POST', { id: o.id, reason });
+          ORDERS = data.orders || ORDERS;
+          toast(data.message || 'Feito.');
+          renderOrderList();
+          renderDashTodo();
+        } catch (err) {
+          toast(err.message, 'error');
+          loadOrderFinance(o, panel);
+        }
+      });
+    });
+  }
 
   // ---------- avaliações (moderação: só remoção, publicação é automática) ----------
   let REVIEWS = [];

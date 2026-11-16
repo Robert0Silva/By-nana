@@ -71,7 +71,12 @@ test('webhook PagBank: só aceita assinatura correta e interpreta pago, recusado
       return pagseguro.handleWebhook({ headers: signature === undefined ? { 'x-authenticity-token': sign(raw.toString()) } : { 'x-authenticity-token': signature } }, raw);
     };
     const paid = { reference_id: 'pedido-1', charges: [{ id: 'CHAR_1', status: 'PAID', amount: { summary: { refunded: 0 } } }] };
-    assert.deepEqual(await call(paid), { orderId: 'pedido-1', status: 'paid', providerReference: 'CHAR_1' });
+    // Fase 1: o contrato do webhook passou a devolver também a cobrança e os valores (necessários
+    // para estorno e histórico). Os três campos originais continuam verificados com o mesmo valor.
+    assert.deepEqual(await call(paid), {
+      orderId: 'pedido-1', status: 'paid', providerReference: 'CHAR_1',
+      providerOrderId: null, chargeId: 'CHAR_1', chargeStatus: 'PAID', paidAmount: 0, refundedAmount: 0,
+    });
     assert.equal(await call(paid, 'ab'.repeat(32)), null, 'assinatura errada');
     assert.equal(await call(paid, ''), null, 'sem assinatura');
 

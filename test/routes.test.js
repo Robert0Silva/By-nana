@@ -578,7 +578,7 @@ test('cupom válido aplica desconto no pedido; código inexistente é ignorado s
           customerName: 'Teste Cupom',
           customerPhone: phone,
           items: [{ id: variant.product_id, variantId, qty: 1, name: variant.name }],
-          paymentMethod: 'Dinheiro', // evita o desconto automático de Pix, que mascararia o do cupom
+          paymentMethod: 'Cartão de crédito', // evita o desconto automático de Pix, que mascararia o do cupom
           deliveryMethod: 'Retirada em loja',
           couponCode: couponCodeToUse,
         }),

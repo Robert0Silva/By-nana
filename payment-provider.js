@@ -17,11 +17,24 @@
 // Contrato esperado de cada provedor:
 //   createCheckoutSession({ orderId, total, customerName, customerEmail, items })
 //     -> Promise<{ checkoutUrl: string, providerReference: string }>
-//   handleWebhook(req, rawBody) -> Promise<{ orderId, status: 'paid'|'pending'|'failed'|'refunded', providerReference } | { ignored: true } | null>
+//   handleWebhook(req, rawBody) -> Promise<{ orderId, status, providerReference, providerOrderId,
+//       chargeId, chargeStatus, paidAmount, refundedAmount } | { orderId, kind: 'checkout',
+//       checkoutStatus } | { ignored: true } | null>
+//     status: 'paid'|'pending'|'failed'|'refunded'|'partially_refunded'. 'failed' = a tentativa
+//     não foi aprovada (cartão recusado) — não cancela o pedido; a cliente pode tentar de novo.
 //     (null = assinatura inválida; o caller responde 401. { ignored: true } = notificação que não
 //     é sobre um pagamento, ou sem dado suficiente; o caller só responde 200 e não faz nada.
 //     rawBody é o corpo bruto já drenado pelo caller — necessário pra provedores que assinam a
 //     notificação com hash sobre o corpo exatamente como chegou, ex. PagBank.)
+//   getPaymentStatus({ checkoutId, providerOrderId, chargeId })
+//     -> Promise<{ conclusive, status: ...|'expired', providerOrderId, chargeId, chargeStatus,
+//        paidAmount, refundedAmount, checkoutStatus }>
+//     Consulta a situação real no gateway. Erro de comunicação = exceção; conclusive=false =
+//     nada pode ser decidido (o pedido não é cancelado).
+//   refund({ chargeId, amount, idempotencyKey, expectedRefundedTotal })
+//     -> Promise<{ confirmed, chargeStatus, paidAmount, refundedAmount }>
+//     Exceção com transient=true = resultado desconhecido (timeout/rede): nunca é estorno
+//     confirmado; a nova tentativa reaproveita a mesma idempotencyKey depois de consultar.
 
 // Por quanto tempo o link de pagamento online fica válido. Passado esse prazo (+ folga para o
 // webhook atrasado), a varredura sweepExpiredOnlineOrders em serve.js cancela o pedido que segue

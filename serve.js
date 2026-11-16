@@ -431,14 +431,604 @@ const money = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency',
 // ele que a loja casa a conversa com o pedido no painel.
 const orderShortCode = (id) => `#${String(id).replace(/^pedido-/, '').slice(0, 8).toUpperCase()}`;
 
-// Transições de payment_status aceitas vindas do gateway. Pago só vira estornado; estornado é
-// final; recusado ainda pode virar pago (cliente tentou de novo e pagou depois).
-function isAllowedPaymentTransition(from, to) {
-  if (from === to) return true;
-  if (from === 'refunded') return false;
-  if (from === 'paid') return to === 'refunded';
-  if (from === 'failed') return to === 'paid';
-  return true;
+// ---------- financeiro do pedido (Fase 1: PagBank, estornos e histórico) ----------
+// Regras (RELATORIO_IMPLEMENTACAO_ECOMMERCE.md, Fase 1, DC-4 e DC-5):
+//  - Só o gateway (webhook assinado ou consulta feita pelo servidor) muda a situação financeira;
+//    o navegador nunca confirma pagamento e a equipe não tem como "marcar como pago/estornado".
+//  - Tentativa recusada não cancela o pedido; o cancelamento por falta de pagamento só acontece
+//    com o checkout comprovadamente vencido no PagBank.
+//  - Estorno: 'refund_pending' até o PagBank confirmar; falha ou resultado desconhecido vira
+//    'refund_failed' com nova tentativa segura (mesma chave de idempotência quando o resultado
+//    anterior é desconhecido, e só depois de consultar o PagBank).
+//  - Estoque: reservado enquanto o pedido não está cancelado. Toda mudança acontece com o pedido
+//    travado (FOR UPDATE), então nunca há baixa ou reposição em dobro.
+const PAYMENT_STATUSES_WITH_MONEY = ['paid', 'partially_refunded'];
+const PAYMENT_STATUSES_IN_REFUND = ['refund_pending', 'refund_failed'];
+const PAYMENT_CHECK_ALERT_AFTER = 3;   // falhas seguidas de consulta até alertar a equipe
+const PAYMENT_CHECK_MAX_FAILURES = 12; // depois disso a varredura para de tentar (fica o alerta)
+const toCents = (v) => Math.round(Number(v || 0) * 100);
+const fromCents = (c) => Math.round(c) / 100;
+
+class OrderActionError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function withTransaction(fn) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// Grava um fato no histórico do pedido. Sempre chamado com o client da transação que fez a
+// mudança. Com dedupeKey, o mesmo fato (webhook repetido/concorrente) só é registrado uma vez.
+async function addOrderEvent(client, ev) {
+  const result = await client.query(
+    `INSERT INTO order_events (order_id, event_type, from_status, to_status, from_payment_status, to_payment_status,
+                               source, admin_user_id, admin_name, reason, metadata, dedupe_key)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+     ON CONFLICT (order_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
+    [
+      ev.orderId, ev.type, ev.fromStatus || null, ev.toStatus || null, ev.fromPayment || null, ev.toPayment || null,
+      ev.source, ev.admin ? ev.admin.id : null, ev.admin ? ev.admin.name : null, ev.reason || null,
+      ev.metadata ? JSON.stringify(ev.metadata) : null, ev.dedupeKey || null,
+    ]
+  );
+  return result.rowCount > 0;
+}
+
+const ORDER_FINANCE_COLUMNS = `id, status, items, total, email, customer_name AS "customerName",
+  payment_status AS "paymentStatus", paid_amount AS "paidAmount", refunded_amount AS "refundedAmount",
+  payment_reference AS "checkoutId", payment_order_id AS "providerOrderId", payment_charge_id AS "chargeId",
+  payment_attention AS "attention", payment_check_failures AS "checkFailures", created_at AS "createdAt"`;
+
+async function lockOrderForFinance(client, orderId) {
+  const { rows } = await client.query(`SELECT ${ORDER_FINANCE_COLUMNS} FROM orders WHERE id = $1 FOR UPDATE`, [orderId]);
+  return rows[0] || null;
+}
+
+// Baixa de novo o estoque de um pedido cancelado que volta a valer (reativação). Tudo ou nada:
+// se faltar uma peça, quem chama faz ROLLBACK e nenhuma variação fica alterada.
+async function reserveStockForReactivation(client, orderId, items, adminUserId) {
+  await lockVariantsInOrder(client, items.map((item) => item.variantId));
+  for (const item of items) {
+    if (!item.variantId) continue;
+    const qty = Math.max(0, Math.floor(Number(item.qty) || 0));
+    const locked = await client.query('SELECT stock FROM product_variants WHERE id=$1 FOR UPDATE', [item.variantId]);
+    if (!locked.rowCount || locked.rows[0].stock < qty) return { ok: false, itemName: item.name };
+    const stockAfter = locked.rows[0].stock - qty;
+    await client.query('UPDATE product_variants SET stock=$1 WHERE id=$2', [stockAfter, item.variantId]);
+    await recordInventoryMovement(client, {
+      variantId: item.variantId, type: 'sale', quantity: -qty, stockAfter,
+      orderId, adminUserId, note: `Reativação do pedido ${orderId}`,
+    });
+  }
+  return { ok: true };
+}
+
+// Aplica ao pedido (já travado) a situação financeira informada pelo gateway — webhook ou
+// consulta. Idempotente: o mesmo fato aplicado duas vezes não muda nada nem duplica histórico.
+// Fatos antigos (fora de ordem) nunca fazem a situação andar para trás.
+async function applyGatewaySnapshot(client, order, snap, { source, admin = null }) {
+  const effects = {};
+  const events = [];
+  let payment = order.paymentStatus;
+  let status = order.status;
+  let attention = order.attention;
+  let paidAmount = order.paidAmount;
+  let refundedAmount = Number(order.refundedAmount) || 0;
+  let chargeId = order.chargeId;
+  let markPaidAt = false;
+  // cada evento registra o estado no momento em que aconteceu (encadeado com o anterior)
+  let prev = { status: order.status, payment: order.paymentStatus };
+  const push = (ev) => {
+    events.push({ ...ev, fromStatus: prev.status, toStatus: status, fromPayment: prev.payment, toPayment: payment });
+    prev = { status, payment };
+  };
+  const captured = ['paid', 'refunded', 'partially_refunded'].includes(snap.status);
+  if (snap.chargeId && (captured || !chargeId)) chargeId = snap.chargeId;
+  const factKey = (type) => `${type}:${snap.chargeId || ''}:${snap.chargeStatus || ''}:${toCents(snap.refundedAmount)}`;
+  const meta = {
+    chargeId: snap.chargeId || null, chargeStatus: snap.chargeStatus || null,
+    providerOrderId: snap.providerOrderId || null,
+    paidAmount: snap.paidAmount || 0, refundedAmount: snap.refundedAmount || 0,
+  };
+
+  if (snap.status === 'paid') {
+    if (['pending', 'failed', 'manual'].includes(payment)) {
+      payment = 'paid';
+      paidAmount = snap.paidAmount || Number(order.total);
+      markPaidAt = true;
+      push({ type: 'payment_approved', dedupeKey: factKey('payment_approved') });
+      // Valor capturado menor que o total do pedido: registra o pagamento (é dinheiro real),
+      // mas pede conferência da equipe antes de a peça sair.
+      if (snap.paidAmount && toCents(snap.paidAmount) < toCents(order.total)) {
+        attention = 'amount_mismatch';
+        effects.alert = `O PagBank confirmou ${money(snap.paidAmount)} no pedido ${orderShortCode(order.id)}, mas o total é ${money(order.total)}. Confira antes de enviar.`;
+        push({ type: 'payment_amount_mismatch', dedupeKey: factKey('payment_amount_mismatch'), metadata: { orderTotal: Number(order.total) } });
+      }
+      if (status === 'cancelado') {
+        // DC-4: nunca reativa sozinho — a peça pode já ter sido vendida de novo.
+        attention = 'paid_after_cancel';
+        effects.paidAfterCancel = true;
+        push({ type: 'payment_after_cancel', dedupeKey: factKey('payment_after_cancel') });
+      } else {
+        effects.approvedNow = true;
+      }
+    }
+  } else if (snap.status === 'failed') {
+    if (payment === 'pending') {
+      // B-01: só registra a tentativa; o pedido e a reserva continuam valendo.
+      push({ type: 'payment_declined', dedupeKey: factKey('payment_declined') });
+    }
+  } else if (snap.status === 'refunded' || snap.status === 'partially_refunded') {
+    const newRefunded = Number(snap.refundedAmount) || 0;
+    const refundStateApplies = payment !== 'manual' && toCents(newRefunded) > 0
+      && (toCents(newRefunded) > toCents(refundedAmount) || (snap.status === 'refunded' && payment !== 'refunded'));
+    if (refundStateApplies) {
+      if (paidAmount == null) {
+        paidAmount = snap.paidAmount || Number(order.total);
+        markPaidAt = true;
+      }
+      refundedAmount = Math.max(refundedAmount, newRefunded);
+      const full = snap.status === 'refunded' || toCents(refundedAmount) >= toCents(paidAmount);
+      // confirma as tentativas de estorno cujo valor esperado já foi atingido
+      const confirmed = await client.query(
+        `UPDATE payment_refunds SET status = 'confirmed', updated_at = now(), last_error = NULL
+          WHERE order_id = $1 AND status IN ('requested', 'unknown') AND expected_refunded_total <= $2
+          RETURNING id`,
+        [order.id, refundedAmount]
+      );
+      const { rows: [open] } = await client.query(
+        "SELECT count(*)::int AS n FROM payment_refunds WHERE order_id = $1 AND status IN ('requested', 'unknown')",
+        [order.id]
+      );
+      if (full) payment = 'refunded';
+      else payment = open.n ? payment : 'partially_refunded';
+      if (full && ['paid_after_cancel', 'refund_uncertain'].includes(attention)) attention = null;
+      if (!open.n && attention === 'refund_uncertain') attention = null;
+      push({
+        type: full ? 'refund_confirmed' : 'partial_refund_confirmed',
+        dedupeKey: factKey('refund_confirmed'),
+        metadata: { confirmedAttempts: confirmed.rows.map((r) => r.id) },
+      });
+      effects.refundConfirmed = { amount: refundedAmount, full };
+
+      // B-02: estorno integral antes do envio cancela e devolve as peças. Depois do envio é só
+      // financeiro — a peça não voltou (devolução física é a Fase 3).
+      if (full && (status === 'novo' || status === 'em_andamento')) {
+        await restockOrderItems(client, order.id, order.items, { note: `Estorno integral antes do envio — pedido ${order.id}` });
+        status = 'cancelado';
+        effects.cancelledNow = true;
+        push({ type: 'order_cancelled_by_refund' });
+      } else if (full && (status === 'enviado' || status === 'concluido')) {
+        push({ type: 'refund_after_shipment', metadata: { note: 'Sem reposição automática de estoque: a peça já tinha saído da loja' } });
+      }
+    }
+  }
+
+  const changed = payment !== order.paymentStatus || status !== order.status || attention !== order.attention
+    || chargeId !== order.chargeId || toCents(refundedAmount) !== toCents(order.refundedAmount)
+    || (snap.providerOrderId && snap.providerOrderId !== order.providerOrderId);
+  if (changed) {
+    await client.query(
+      `UPDATE orders SET payment_status = $2, status = $3, payment_attention = $4, payment_charge_id = $5,
+              payment_order_id = COALESCE($6, payment_order_id), paid_amount = $7, refunded_amount = $8,
+              paid_at = CASE WHEN $9 AND paid_at IS NULL THEN now() ELSE paid_at END
+        WHERE id = $1`,
+      [order.id, payment, status, attention, chargeId, snap.providerOrderId || null, paidAmount, refundedAmount, markPaidAt]
+    );
+  }
+  for (const ev of events) {
+    await addOrderEvent(client, {
+      orderId: order.id, source, admin, ...ev, metadata: { ...meta, ...(ev.metadata || {}) },
+    });
+  }
+  Object.assign(order, { paymentStatus: payment, status, attention, chargeId, paidAmount, refundedAmount });
+  return effects;
+}
+
+// E-mails que dependem do que mudou — sempre depois do COMMIT e só com fato confirmado.
+function sendPaymentEffectEmails(order, effects) {
+  if (effects.approvedNow && order.email) {
+    sendEmail({
+      to: order.email,
+      subject: `Pagamento aprovado — pedido ${orderShortCode(order.id)} — By NaNa`,
+      html: buildPaymentApprovedHtml({ id: order.id, customerName: order.customerName }),
+    });
+  }
+  if (effects.refundConfirmed && order.email) {
+    sendEmail({
+      to: order.email,
+      subject: `Estorno confirmado — pedido ${orderShortCode(order.id)} — By NaNa`,
+      html: buildRefundConfirmedHtml({ id: order.id, customerName: order.customerName, amount: effects.refundConfirmed.amount }),
+    });
+  }
+  if (effects.expiredNow && order.email) {
+    sendEmail({
+      to: order.email,
+      subject: `Pagamento não concluído — pedido ${orderShortCode(order.id)} — By NaNa`,
+      html: buildPaymentNotCompletedHtml({ id: order.id, customerName: order.customerName, reason: 'não foi concluído no prazo' }),
+    });
+  }
+  const notifyEmail = (process.env.STORE_NOTIFY_EMAIL || '').trim();
+  if (effects.paidAfterCancel) {
+    console.warn(`[pagamentos] pagamento aprovado em pedido cancelado: ${order.id}`);
+    if (notifyEmail) {
+      sendEmail({
+        to: notifyEmail,
+        subject: `ATENÇÃO: pagamento aprovado em pedido cancelado ${orderShortCode(order.id)}`,
+        html: `<p>O pedido <strong>${escapeHtml(orderShortCode(order.id))}</strong> (${escapeHtml(order.customerName)}) estava cancelado e acabou de ter o pagamento aprovado.</p>
+               <p>No painel, abra o financeiro do pedido e escolha entre reativar (se houver estoque) ou solicitar o estorno.</p>`,
+      });
+    }
+  }
+  if (effects.alert && notifyEmail) {
+    sendEmail({
+      to: notifyEmail,
+      subject: `ATENÇÃO: pagamento do pedido ${orderShortCode(order.id)} precisa de conferência`,
+      html: `<p>${escapeHtml(effects.alert)}</p><p>Confira o financeiro do pedido no painel.</p>`,
+    });
+  }
+}
+
+// Consulta o gateway e aplica o resultado (botão "Atualizar pagamento" e varredura).
+// Falha de comunicação ou resposta inconclusiva NUNCA cancela o pedido.
+async function refreshOrderPayment(orderId, { source, admin = null, allowExpire = true } = {}) {
+  const provider = getActiveProvider();
+  if (!provider || typeof provider.getPaymentStatus !== 'function') {
+    throw new OrderActionError(409, 'Pagamento online desligado: não há gateway para consultar');
+  }
+  const { rows: [ref] } = await pool.query(
+    `SELECT payment_status AS "paymentStatus", payment_reference AS "checkoutId", payment_order_id AS "providerOrderId",
+            payment_charge_id AS "chargeId" FROM orders WHERE id = $1`,
+    [orderId]
+  );
+  if (!ref) throw new OrderActionError(404, 'Pedido não encontrado');
+  if (ref.paymentStatus === 'manual') throw new OrderActionError(409, 'Pedido com pagamento combinado no WhatsApp: não há pagamento online para consultar');
+  if (!ref.checkoutId && !ref.providerOrderId && !ref.chargeId) {
+    throw new OrderActionError(409, 'Pedido sem referência do PagBank para consultar');
+  }
+
+  let snap;
+  try {
+    snap = await provider.getPaymentStatus({ checkoutId: ref.checkoutId, providerOrderId: ref.providerOrderId, chargeId: ref.chargeId });
+  } catch (err) {
+    const effects = {};
+    const order = await withTransaction(async (client) => {
+      const locked = await lockOrderForFinance(client, orderId);
+      const failures = locked.checkFailures + 1;
+      let attention = locked.attention;
+      if (failures >= PAYMENT_CHECK_ALERT_AFTER && !attention) {
+        attention = 'check_failing';
+        effects.alert = `A consulta do pagamento no PagBank falhou ${failures} vezes seguidas (${err.message}). O pedido não foi cancelado.`;
+      }
+      await client.query(
+        'UPDATE orders SET payment_check_failures = $2, payment_checked_at = now(), payment_attention = $3 WHERE id = $1',
+        [orderId, failures, attention]
+      );
+      await addOrderEvent(client, {
+        orderId, type: 'payment_check_failed', source, admin,
+        fromStatus: locked.status, toStatus: locked.status, fromPayment: locked.paymentStatus, toPayment: locked.paymentStatus,
+        metadata: { error: err.message, transient: !!err.transient, failures },
+      });
+      return locked;
+    });
+    sendPaymentEffectEmails(order, effects);
+    return { ok: false, error: err.message, order };
+  }
+
+  let effects = {};
+  const order = await withTransaction(async (client) => {
+    const locked = await lockOrderForFinance(client, orderId);
+    const before = { status: locked.status, payment: locked.paymentStatus };
+    await addOrderEvent(client, {
+      orderId, type: 'payment_checked', source, admin,
+      fromStatus: before.status, toStatus: before.status, fromPayment: before.payment, toPayment: before.payment,
+      metadata: { result: snap.status, conclusive: !!snap.conclusive, chargeStatus: snap.chargeStatus || null, checkoutStatus: snap.checkoutStatus || null },
+    });
+    if (snap.status === 'expired') {
+      // B-04: checkout comprovadamente vencido/inativo no PagBank e nenhuma cobrança capturada.
+      if (snap.conclusive && allowExpire && locked.paymentStatus === 'pending' && locked.status !== 'cancelado') {
+        await restockOrderItems(client, orderId, locked.items, { note: `Pagamento online não concluído no prazo — pedido ${orderId}` });
+        await client.query("UPDATE orders SET status = 'cancelado', payment_status = 'failed' WHERE id = $1", [orderId]);
+        await addOrderEvent(client, {
+          orderId, type: 'payment_expired', source, admin,
+          fromStatus: locked.status, toStatus: 'cancelado', fromPayment: 'pending', toPayment: 'failed',
+          metadata: { checkoutStatus: snap.checkoutStatus || null }, dedupeKey: 'payment_expired',
+        });
+        locked.status = 'cancelado';
+        locked.paymentStatus = 'failed';
+        effects.expiredNow = true;
+      }
+    } else {
+      effects = { ...effects, ...(await applyGatewaySnapshot(client, locked, snap, { source, admin })) };
+    }
+    // Resposta inconclusiva de pedido já vencido conta como tentativa sem resultado: espaça as
+    // próximas consultas e alerta a equipe, sem cancelar nada.
+    const inconclusive = source === 'sweep' && !snap.conclusive && locked.paymentStatus === 'pending' && locked.status !== 'cancelado';
+    const failures = inconclusive ? locked.checkFailures + 1 : 0;
+    let attention = locked.attention === 'check_failing' && !inconclusive ? null : locked.attention;
+    if (inconclusive && failures >= PAYMENT_CHECK_ALERT_AFTER && !attention) {
+      attention = 'check_failing';
+      effects.alert = `O PagBank ainda não dá uma situação conclusiva para o pagamento (consulta ${failures}, resultado "${snap.status}"). O pedido não foi cancelado.`;
+    }
+    await client.query(
+      `UPDATE orders SET payment_check_failures = $4, payment_checked_at = now(), payment_attention = $2,
+              payment_order_id = COALESCE(payment_order_id, $3)
+        WHERE id = $1`,
+      [orderId, attention, snap.providerOrderId || null, failures]
+    );
+    locked.attention = attention;
+    return locked;
+  });
+  sendPaymentEffectEmails(order, effects);
+  return { ok: true, result: snap.status, conclusive: !!snap.conclusive, order };
+}
+
+// Executa no PagBank uma tentativa de estorno já registrada (fora de transação: chamada de rede)
+// e grava o resultado. Se um webhook confirmou o estorno enquanto a chamada estava em curso, a
+// tentativa já estará 'confirmed' e nada mais muda.
+async function executeRefundAttempt(refundId, { source, admin = null }) {
+  const provider = getActiveProvider();
+  const { rows: [attempt] } = await pool.query(
+    `SELECT id, order_id AS "orderId", idempotency_key AS "idempotencyKey", charge_id AS "chargeId", amount,
+            expected_refunded_total AS "expectedRefundedTotal" FROM payment_refunds WHERE id = $1`,
+    [refundId]
+  );
+  let outcome;
+  try {
+    if (!provider || typeof provider.refund !== 'function') throw Object.assign(new Error('Gateway de pagamento desligado'), { transient: false });
+    outcome = { ok: true, response: await provider.refund(attempt) };
+  } catch (err) {
+    // 40007 = "reembolso já realizado ou valor acima do permitido": ambíguo, exige consulta.
+    // 40005 = "idempotency_key_in_use": o PagBank já recebeu um pedido com esta chave (homologação
+    // no sandbox: a chave fica "em uso" até depois de uma recusa). Nunca é recusa definitiva —
+    // tratar como recusa liberaria uma chave nova e abriria espaço para estorno em dobro.
+    const uncertain = !!err.transient || err.code === '40007' || err.code === '40005';
+    outcome = { ok: false, uncertain, error: err.message };
+  }
+
+  let effects = {};
+  const order = await withTransaction(async (client) => {
+    const locked = await lockOrderForFinance(client, attempt.orderId);
+    const { rows: [row] } = await client.query('SELECT status FROM payment_refunds WHERE id = $1 FOR UPDATE', [refundId]);
+    if (!['requested', 'unknown'].includes(row.status)) return locked; // já resolvido por webhook/consulta
+    const base = {
+      orderId: attempt.orderId, source, admin, fromStatus: locked.status, toStatus: locked.status,
+      fromPayment: locked.paymentStatus,
+    };
+    if (outcome.ok) {
+      const r = outcome.response;
+      await addOrderEvent(client, {
+        ...base, type: 'refund_response', toPayment: locked.paymentStatus,
+        metadata: { refundId, confirmed: r.confirmed, chargeStatus: r.chargeStatus, refundedAmount: r.refundedAmount },
+      });
+      if (r.confirmed) {
+        const paid = r.paidAmount || Number(locked.paidAmount) || Number(locked.total);
+        effects = await applyGatewaySnapshot(client, locked, {
+          status: toCents(r.refundedAmount) >= toCents(paid) ? 'refunded' : 'partially_refunded',
+          chargeId: attempt.chargeId, chargeStatus: r.chargeStatus, paidAmount: paid, refundedAmount: r.refundedAmount,
+        }, { source, admin });
+      }
+      // aceito sem confirmação no corpo: continua 'refund_pending' até webhook/consulta
+      return locked;
+    }
+    const newRowStatus = outcome.uncertain ? 'unknown' : 'failed';
+    await client.query('UPDATE payment_refunds SET status = $2, last_error = $3, updated_at = now() WHERE id = $1',
+      [refundId, newRowStatus, outcome.error]);
+    const attention = outcome.uncertain ? 'refund_uncertain' : locked.attention;
+    await client.query("UPDATE orders SET payment_status = 'refund_failed', payment_attention = $2 WHERE id = $1",
+      [attempt.orderId, attention]);
+    await addOrderEvent(client, {
+      ...base, type: 'refund_failed', toPayment: 'refund_failed',
+      metadata: { refundId, uncertain: outcome.uncertain, error: outcome.error },
+    });
+    if (outcome.uncertain) effects.alert = `O PagBank não respondeu de forma conclusiva ao estorno (${outcome.error}). O estorno NÃO está confirmado: use "Atualizar pagamento" ou "Tentar estorno novamente".`;
+    locked.paymentStatus = 'refund_failed';
+    locked.attention = attention;
+    return locked;
+  });
+  sendPaymentEffectEmails(order, effects);
+  return { order, outcome };
+}
+
+// DC-5: registra a solicitação de estorno do valor ainda não estornado (e, se pedido, cancela o
+// pedido devolvendo as peças) numa transação; depois chama o PagBank.
+async function requestOrderRefund(orderId, { admin, reason, cancelOrder, source = 'admin', requireCancelled = false }) {
+  const provider = getActiveProvider();
+  if (!provider || typeof provider.refund !== 'function') {
+    throw new OrderActionError(409, 'Pagamento online desligado: o estorno precisa ser feito direto no PagBank');
+  }
+  const refundId = await withTransaction(async (client) => {
+    const order = await lockOrderForFinance(client, orderId);
+    if (!order) throw new OrderActionError(404, 'Pedido não encontrado');
+    const { rows: [open] } = await client.query(
+      "SELECT count(*)::int AS n FROM payment_refunds WHERE order_id = $1 AND status IN ('requested', 'unknown')", [orderId]
+    );
+    if (open.n || order.paymentStatus === 'refund_pending') throw new OrderActionError(409, 'Já existe um estorno em andamento para este pedido');
+    if (!PAYMENT_STATUSES_WITH_MONEY.includes(order.paymentStatus) && order.paymentStatus !== 'refund_failed') {
+      throw new OrderActionError(409, 'Este pedido não tem pagamento confirmado para estornar');
+    }
+    if (requireCancelled && order.status !== 'cancelado') {
+      throw new OrderActionError(409, 'Para estornar, cancele o pedido (o estorno é solicitado junto com o cancelamento)');
+    }
+    const paid = order.paidAmount != null ? Number(order.paidAmount) : Number(order.total);
+    const remainingCents = toCents(paid) - toCents(order.refundedAmount);
+    if (remainingCents <= 0) throw new OrderActionError(409, 'Este pagamento já foi totalmente estornado');
+    if (!order.chargeId) throw new OrderActionError(409, 'A cobrança do PagBank ainda não foi identificada. Use "Atualizar pagamento" e tente de novo');
+
+    const id = crypto.randomUUID();
+    await client.query(
+      `INSERT INTO payment_refunds (id, order_id, idempotency_key, charge_id, amount, expected_refunded_total, status, reason, admin_user_id)
+       VALUES ($1,$2,$3,$4,$5,$6,'requested',$7,$8)`,
+      [id, orderId, `estorno-${id}`, order.chargeId, fromCents(remainingCents), fromCents(toCents(order.refundedAmount) + remainingCents),
+        reason || null, admin ? admin.id : null]
+    );
+    let status = order.status;
+    if (cancelOrder && order.status !== 'cancelado') {
+      await restockOrderItems(client, orderId, order.items, { adminUserId: admin ? admin.id : null });
+      status = 'cancelado';
+    }
+    await client.query("UPDATE orders SET status = $2, payment_status = 'refund_pending', payment_attention = CASE WHEN payment_attention IN ('paid_after_cancel', 'refund_uncertain') THEN NULL ELSE payment_attention END WHERE id = $1",
+      [orderId, status]);
+    // Eventos em sequência: cada um parte do estado em que o anterior terminou.
+    if (status !== order.status) {
+      await addOrderEvent(client, {
+        orderId, type: 'order_cancelled', source, admin, reason,
+        fromStatus: order.status, toStatus: status, fromPayment: order.paymentStatus, toPayment: order.paymentStatus,
+      });
+    }
+    if (order.attention === 'paid_after_cancel') {
+      await addOrderEvent(client, {
+        orderId, type: 'admin_decision', source, admin, reason,
+        fromStatus: status, toStatus: status, fromPayment: order.paymentStatus, toPayment: order.paymentStatus,
+        metadata: { decision: 'refund' },
+      });
+    }
+    await addOrderEvent(client, {
+      orderId, type: 'refund_requested', source, admin, reason,
+      fromStatus: status, toStatus: status, fromPayment: order.paymentStatus, toPayment: 'refund_pending',
+      metadata: { refundId: id, amount: fromCents(remainingCents), chargeId: order.chargeId },
+    });
+    return id;
+  });
+  return executeRefundAttempt(refundId, { source, admin });
+}
+
+// Nova tentativa de um estorno que falhou. SEMPRE consulta o PagBank antes (o estorno anterior
+// pode ter acontecido) e, se a consulta falhar, não envia nada. Resultado anterior desconhecido:
+// reenvia com a MESMA chave. Só usa chave nova quando a tentativa anterior foi recusada, ou
+// quando está sem resposta conclusiva há REFUND_UNKNOWN_SETTLE_MINUTES e a consulta mostra que o
+// PagBank não estornou — o valor da nova tentativa sai do saldo que a consulta acabou de gravar.
+const REFUND_UNKNOWN_SETTLE_MINUTES = 10;
+async function retryOrderRefund(orderId, { admin, reason, source = 'admin' }) {
+  const { rows: [current] } = await pool.query('SELECT payment_status AS "paymentStatus" FROM orders WHERE id = $1', [orderId]);
+  if (!current) throw new OrderActionError(404, 'Pedido não encontrado');
+  if (current.paymentStatus !== 'refund_failed') throw new OrderActionError(409, 'Só é possível tentar de novo um estorno que falhou');
+
+  const check = await refreshOrderPayment(orderId, { source, admin, allowExpire: false });
+  if (!check.ok) {
+    throw new OrderActionError(409, `Não foi possível consultar o PagBank agora (${check.error}). Nenhuma nova tentativa de estorno foi enviada; tente mais tarde.`);
+  }
+
+  const claim = await withTransaction(async (client) => {
+    const order = await lockOrderForFinance(client, orderId);
+    const { rows: [last] } = await client.query(
+      `SELECT id, status, updated_at < now() - make_interval(mins => $2) AS settled
+         FROM payment_refunds WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [orderId, REFUND_UNKNOWN_SETTLE_MINUTES]
+    );
+    // a consulta encontrou o estorno anterior já feito no PagBank: só confirma
+    if (last && last.status === 'confirmed' && order.paymentStatus !== 'refund_failed') return { reconciled: true, order };
+    if (order.paymentStatus !== 'refund_failed') throw new OrderActionError(409, 'Só é possível tentar de novo um estorno que falhou');
+    if (!last || last.status !== 'unknown') return { fresh: true };
+    if (last.settled) {
+      // Sem resposta conclusiva há tempo suficiente e o PagBank, consultado agora, não mostra o
+      // estorno: encerra a tentativa antiga e libera uma chave nova.
+      await client.query(
+        "UPDATE payment_refunds SET status = 'failed', last_error = COALESCE(last_error, '') || ' | substituída: consulta ao PagBank sem estorno', updated_at = now() WHERE id = $1",
+        [last.id]
+      );
+      await addOrderEvent(client, {
+        orderId, type: 'refund_superseded', source, admin, reason,
+        fromStatus: order.status, toStatus: order.status, fromPayment: order.paymentStatus, toPayment: order.paymentStatus,
+        metadata: { refundId: last.id, refundedAmount: Number(order.refundedAmount) || 0 },
+      });
+      return { fresh: true };
+    }
+    await client.query("UPDATE payment_refunds SET status = 'requested', attempts = attempts + 1, updated_at = now() WHERE id = $1", [last.id]);
+    await client.query("UPDATE orders SET payment_status = 'refund_pending' WHERE id = $1", [orderId]);
+    await addOrderEvent(client, {
+      orderId, type: 'refund_retry', source, admin, reason,
+      fromStatus: order.status, toStatus: order.status, fromPayment: 'refund_failed', toPayment: 'refund_pending',
+      metadata: { refundId: last.id, sameIdempotencyKey: true },
+    });
+    return { fresh: false, refundId: last.id };
+  });
+  if (claim.reconciled) return { order: claim.order, outcome: { ok: true, reconciled: true } };
+  if (claim.fresh) return requestOrderRefund(orderId, { admin, reason, cancelOrder: false, source });
+  return executeRefundAttempt(claim.refundId, { source, admin });
+}
+
+async function getOrderFinance(orderId) {
+  const { rows: [order] } = await pool.query(
+    `SELECT id, status, total, payment_method AS "paymentMethod", payment_status AS "paymentStatus",
+            paid_amount AS "paidAmount", refunded_amount AS "refundedAmount", paid_at AS "paidAt",
+            payment_reference AS "checkoutId", payment_order_id AS "providerOrderId", payment_charge_id AS "chargeId",
+            payment_checked_at AS "checkedAt", payment_check_failures AS "checkFailures", payment_attention AS "attention"
+       FROM orders WHERE id = $1`,
+    [orderId]
+  );
+  if (!order) return null;
+  const { rows: events } = await pool.query(
+    `SELECT event_type AS "type", from_status AS "fromStatus", to_status AS "toStatus",
+            from_payment_status AS "fromPayment", to_payment_status AS "toPayment", source,
+            admin_name AS "adminName", reason, metadata, created_at AS "createdAt"
+       FROM order_events WHERE order_id = $1 ORDER BY created_at DESC, id DESC LIMIT 200`,
+    [orderId]
+  );
+  const { rows: refunds } = await pool.query(
+    `SELECT id, amount, status, attempts, reason, last_error AS "lastError", created_at AS "createdAt", updated_at AS "updatedAt"
+       FROM payment_refunds WHERE order_id = $1 ORDER BY created_at DESC`,
+    [orderId]
+  );
+  const paid = order.paidAmount != null ? Number(order.paidAmount) : 0;
+  return { ...order, notRefundedAmount: fromCents(Math.max(0, toCents(paid) - toCents(order.refundedAmount))), events, refunds };
+}
+
+function refundOutcomeMessage(outcome) {
+  if (!outcome) return 'Estorno registrado.';
+  if (outcome.reconciled) return 'O PagBank já tinha processado o estorno anterior: estorno confirmado, sem nova cobrança de estorno.';
+  if (outcome.ok && outcome.response && outcome.response.confirmed) return 'Estorno confirmado pelo PagBank.';
+  if (outcome.ok) return 'Estorno aceito pelo PagBank. Aguardando a confirmação — o pedido fica como "estorno pendente".';
+  if (outcome.uncertain) return `O PagBank não respondeu de forma conclusiva (${outcome.error}). O estorno NÃO está confirmado. "Tentar estorno novamente" consulta o PagBank antes de reenviar; se continuar sem resposta, aguarde ${REFUND_UNKNOWN_SETTLE_MINUTES} minutos para uma nova tentativa com outra chave.`;
+  return `O PagBank recusou o estorno: ${outcome.error}`;
+}
+
+// DC-4: pedido cancelado que recebeu pagamento depois. Reativar só com ação da equipe e com o
+// estoque validado na mesma transação (tudo ou nada); sem estoque, nada muda e a tentativa
+// negada fica no histórico.
+async function reactivatePaidOrder(orderId, { admin, reason }) {
+  let denied = null;
+  await withTransaction(async (client) => {
+    const order = await lockOrderForFinance(client, orderId);
+    if (!order) throw new OrderActionError(404, 'Pedido não encontrado');
+    if (order.status !== 'cancelado' || order.paymentStatus !== 'paid' || order.attention !== 'paid_after_cancel') {
+      throw new OrderActionError(409, 'Só é possível reativar por aqui um pedido cancelado que recebeu pagamento depois do cancelamento');
+    }
+    const items = Array.isArray(order.items) ? order.items : [];
+    await client.query('SAVEPOINT reativacao');
+    const reserved = await reserveStockForReactivation(client, orderId, items, admin.id);
+    if (!reserved.ok) {
+      await client.query('ROLLBACK TO SAVEPOINT reativacao');
+      denied = reserved.itemName;
+      await addOrderEvent(client, {
+        orderId, type: 'reactivation_denied', source: 'admin', admin, reason,
+        fromStatus: 'cancelado', toStatus: 'cancelado', fromPayment: 'paid', toPayment: 'paid',
+        metadata: { missingItem: reserved.itemName },
+      });
+      return;
+    }
+    await client.query("UPDATE orders SET status = 'novo', payment_attention = NULL WHERE id = $1", [orderId]);
+    await addOrderEvent(client, {
+      orderId, type: 'admin_decision', source: 'admin', admin, reason,
+      fromStatus: 'cancelado', toStatus: 'novo', fromPayment: 'paid', toPayment: 'paid',
+      metadata: { decision: 'reactivate' },
+    });
+  });
+  if (denied) throw new OrderActionError(409, `Estoque insuficiente para reativar ${denied}. Nada foi alterado; solicite o estorno ou reponha o estoque.`);
 }
 
 function formatOrderAddress(a) {
@@ -481,15 +1071,19 @@ function buildNewOrderNotificationHtml(order) {
   `;
 }
 
-function buildOrderStatusHtml({ id, customerName, status, trackingCode }) {
+function buildOrderStatusHtml({ id, customerName, status, trackingCode, refundRequested = false }) {
   const label = ORDER_STATUS_LABELS[status] || status;
   const tracking = status === 'enviado' && trackingCode
     ? `<p>Código de rastreio: <strong>${escapeHtml(trackingCode)}</strong><br>Acompanhe em <a href="https://rastreamento.correios.com.br/app/index.php">rastreamento.correios.com.br</a> (ou no site da transportadora).</p>`
     : '';
+  // Cancelamento de pedido pago: avisa que o estorno foi SOLICITADO, não que já foi devolvido.
+  const refund = refundRequested
+    ? '<p>O estorno do pagamento foi solicitado ao PagBank. Avisaremos por e-mail assim que ele for confirmado.</p>'
+    : '';
   return `
     <p>Olá, ${escapeHtml(customerName)}!</p>
     <p>O status do seu pedido <strong>${escapeHtml(orderShortCode(id))}</strong> na By NaNa foi atualizado para: <strong>${escapeHtml(label)}</strong>.</p>
-    ${tracking}
+    ${tracking}${refund}
   `;
 }
 
@@ -507,6 +1101,15 @@ function buildPaymentNotCompletedHtml({ id, customerName, reason }) {
     <p>Olá, ${escapeHtml(customerName)}!</p>
     <p>O pagamento do seu pedido <strong>${escapeHtml(orderShortCode(id))}</strong> na By NaNa ${escapeHtml(reason)}, então o pedido foi cancelado e as peças voltaram para a vitrine.</p>
     <p>Se ainda quiser as peças, é só montar a sacola de novo no site ou falar com a gente no WhatsApp: <a href="https://wa.me/${whatsapp}">wa.me/${whatsapp}</a>.</p>
+  `;
+}
+
+// Só é enviado depois que o PagBank confirmou o estorno — nunca na solicitação.
+function buildRefundConfirmedHtml({ id, customerName, amount }) {
+  return `
+    <p>Olá, ${escapeHtml(customerName)}!</p>
+    <p>O PagBank confirmou o estorno de <strong>${escapeHtml(money(amount))}</strong> referente ao seu pedido <strong>${escapeHtml(orderShortCode(id))}</strong> na By NaNa.</p>
+    <p>O prazo para o valor aparecer depende da forma de pagamento (no cartão, pode levar até a próxima fatura).</p>
   `;
 }
 
@@ -856,7 +1459,8 @@ async function getOrders() {
            items, subtotal, discount, shipping, total, coupon_code AS "couponCode",
            payment_method AS "paymentMethod", delivery_method AS "deliveryMethod",
            address, status, payment_status AS "paymentStatus", tracking_code AS "trackingCode",
-           created_at AS "createdAt"
+           paid_amount AS "paidAmount", refunded_amount AS "refundedAmount",
+           payment_attention AS "paymentAttention", created_at AS "createdAt"
     FROM orders
     ORDER BY created_at DESC
     LIMIT 300
@@ -948,10 +1552,38 @@ function readBody(req, maxBytes) {
   });
 }
 
-async function readJSONBody(req, maxBytes = 15 * 1024 * 1024) {
+// Limite padrão pequeno: o corpo é lido ANTES de conferir a sessão do admin (o token vem nele),
+// então qualquer pessoa sem login conseguiria mandar corpos enormes. Só as rotas de upload
+// (readUploadJSONBody) aceitam corpo grande, e no máximo UPLOAD_MAX_CONCURRENT ao mesmo tempo.
+const DEFAULT_BODY_LIMIT = 1024 * 1024;
+const UPLOAD_BODY_LIMIT = 15 * 1024 * 1024;
+const UPLOAD_MAX_CONCURRENT = 2;
+let uploadsInFlight = 0;
+
+class BadRequestError extends Error {}
+
+async function readJSONBody(req, maxBytes = DEFAULT_BODY_LIMIT) {
   const buf = await readBody(req, maxBytes);
   if (!buf.length) return {};
-  return JSON.parse(buf.toString('utf8'));
+  try {
+    return JSON.parse(buf.toString('utf8'));
+  } catch {
+    // JSON inválido é erro de quem enviou (400), não falha do servidor: não gera alerta.
+    throw new BadRequestError('JSON inválido');
+  }
+}
+
+async function readUploadJSONBody(req, maxBytes = UPLOAD_BODY_LIMIT) {
+  if (uploadsInFlight >= UPLOAD_MAX_CONCURRENT) {
+    req.resume(); // descarta o corpo sem guardar
+    throw Object.assign(new Error('upload busy'), { uploadBusy: true });
+  }
+  uploadsInFlight += 1;
+  try {
+    return await readJSONBody(req, maxBytes);
+  } finally {
+    uploadsInFlight -= 1;
+  }
 }
 
 // ---------- login rate limiting (memória local — reinicia com o processo, suficiente pra
@@ -1013,6 +1645,9 @@ function publicRateLimited(req, bucket, max, windowMs) {
 setInterval(() => {
   const cutoff = Date.now() - 60 * 60 * 1000;
   for (const [key, entry] of publicRequestCounters) if (entry.firstAt < cutoff) publicRequestCounters.delete(key);
+  // tentativas de login vencidas também saem do mapa (antes ele só crescia)
+  const loginCutoff = Date.now() - LOGIN_ATTEMPT_WINDOW_MS;
+  for (const [key, entry] of loginAttempts) if (entry.firstAttemptAt < loginCutoff) loginAttempts.delete(key);
 }, 10 * 60 * 1000).unref();
 
 // Corpo máximo das rotas públicas (pedido, newsletter, cupom...). Uploads do admin continuam
@@ -1023,6 +1658,23 @@ const ORDER_RATE_LIMIT_MAX = 10;
 const ORDER_RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 const ORDER_MAX_LINES = 20;
 const ORDER_MAX_QTY_PER_LINE = 10;
+
+// Formas de pagamento oferecidas na sacola (index.html / produto.html). Texto livre vindo do
+// navegador ia direto para o pedido e para a mensagem da equipe.
+const ORDER_PAYMENT_METHODS = ['Pix', 'Cartão de crédito', 'Cartão de débito', ONLINE_PAYMENT_METHOD];
+const BRAZIL_UFS = new Set(['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR',
+  'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO']);
+
+// Ciclo de vida do pedido no painel. Repetir o mesmo status (ex.: só atualizar o rastreio) é
+// sempre permitido. Concluído só volta para "enviado" (desfazer um clique errado); cancelado só
+// volta a valer como novo/em andamento, nunca pula direto para enviado ou concluído.
+const ORDER_STATUS_TRANSITIONS = {
+  novo: ['em_andamento', 'enviado', 'concluido', 'cancelado'],
+  em_andamento: ['novo', 'enviado', 'concluido', 'cancelado'],
+  enviado: ['em_andamento', 'concluido', 'cancelado'],
+  concluido: ['enviado'],
+  cancelado: ['novo', 'em_andamento'],
+};
 
 // Telefone só com dígitos, DDD + número (10 ou 11 dígitos), sem o 55 do país. É a chave usada
 // pra reconhecer "primeira compra" de visitante — "(31) 99999-0000" e "31999990000" são a mesma
@@ -1155,11 +1807,18 @@ function normalizeDateRange(body) {
   return { from, to };
 }
 
+// Venda que conta no faturamento: pedido não cancelado E com dinheiro de verdade (pagamento
+// combinado no WhatsApp ou confirmado pelo gateway). Pedido online ainda aguardando pagamento,
+// com pagamento recusado ou totalmente estornado não é receita. A receita desconta o que já foi
+// estornado (estorno parcial de pedido enviado).
+const REPORT_PAYMENT_FILTER = "payment_status NOT IN ('pending', 'failed', 'refunded')";
+const REPORT_PAYMENT_FILTER_ORDERS = "orders.payment_status NOT IN ('pending', 'failed', 'refunded')";
+
 async function getSalesSummary(from, to) {
   const { rows } = await pool.query(
-    `SELECT COUNT(*)::int AS "orderCount", COALESCE(SUM(total), 0) AS revenue
+    `SELECT COUNT(*)::int AS "orderCount", COALESCE(SUM(total - COALESCE(refunded_amount, 0)), 0) AS revenue
      FROM orders
-     WHERE status != 'cancelado' AND created_at >= ($1::date)::timestamp AT TIME ZONE 'America/Sao_Paulo'
+     WHERE status != 'cancelado' AND ${REPORT_PAYMENT_FILTER} AND created_at >= ($1::date)::timestamp AT TIME ZONE 'America/Sao_Paulo'
        AND created_at < (($2::date + interval '1 day'))::timestamp AT TIME ZONE 'America/Sao_Paulo'`,
     [from, to]
   );
@@ -1170,9 +1829,9 @@ async function getSalesSummary(from, to) {
 async function getSalesByDay(from, to) {
   const { rows } = await pool.query(
     `SELECT to_char(date_trunc('day', created_at AT TIME ZONE 'America/Sao_Paulo'), 'YYYY-MM-DD') AS date,
-            COUNT(*)::int AS orders, COALESCE(SUM(total), 0) AS revenue
+            COUNT(*)::int AS orders, COALESCE(SUM(total - COALESCE(refunded_amount, 0)), 0) AS revenue
      FROM orders
-     WHERE status != 'cancelado' AND created_at >= ($1::date)::timestamp AT TIME ZONE 'America/Sao_Paulo' AND created_at < (($2::date + interval '1 day'))::timestamp AT TIME ZONE 'America/Sao_Paulo'
+     WHERE status != 'cancelado' AND ${REPORT_PAYMENT_FILTER} AND created_at >= ($1::date)::timestamp AT TIME ZONE 'America/Sao_Paulo' AND created_at < (($2::date + interval '1 day'))::timestamp AT TIME ZONE 'America/Sao_Paulo'
      GROUP BY 1 ORDER BY 1 ASC`,
     [from, to]
   );
@@ -1185,7 +1844,7 @@ async function getTopProducts(from, to, limit = 10) {
             SUM((item->>'qty')::int)::int AS qty,
             SUM((item->>'qty')::int * (item->>'price')::numeric) AS revenue
      FROM orders, jsonb_array_elements(items) AS item
-     WHERE status != 'cancelado' AND created_at >= ($1::date)::timestamp AT TIME ZONE 'America/Sao_Paulo' AND created_at < (($2::date + interval '1 day'))::timestamp AT TIME ZONE 'America/Sao_Paulo'
+     WHERE status != 'cancelado' AND ${REPORT_PAYMENT_FILTER} AND created_at >= ($1::date)::timestamp AT TIME ZONE 'America/Sao_Paulo' AND created_at < (($2::date + interval '1 day'))::timestamp AT TIME ZONE 'America/Sao_Paulo'
      GROUP BY item->>'id', item->>'name'
      ORDER BY qty DESC
      LIMIT $3`,
@@ -1203,7 +1862,7 @@ async function getSalesByCategory(from, to) {
      CROSS JOIN LATERAL jsonb_array_elements(items) AS item
      LEFT JOIN products p ON p.id = item->>'id'
      LEFT JOIN categories cat ON cat.id = p.category_id
-     WHERE orders.status != 'cancelado' AND orders.created_at >= ($1::date)::timestamp AT TIME ZONE 'America/Sao_Paulo' AND orders.created_at < (($2::date + interval '1 day'))::timestamp AT TIME ZONE 'America/Sao_Paulo'
+     WHERE orders.status != 'cancelado' AND ${REPORT_PAYMENT_FILTER_ORDERS} AND orders.created_at >= ($1::date)::timestamp AT TIME ZONE 'America/Sao_Paulo' AND orders.created_at < (($2::date + interval '1 day'))::timestamp AT TIME ZONE 'America/Sao_Paulo'
      GROUP BY 1
      ORDER BY revenue DESC`,
     [from, to]
@@ -1215,7 +1874,7 @@ async function getCouponUsage(from, to) {
   const { rows } = await pool.query(
     `SELECT coupon_code AS code, COUNT(*)::int AS uses, COALESCE(SUM(discount), 0) AS "totalDiscount"
      FROM orders
-     WHERE coupon_code IS NOT NULL AND status != 'cancelado'
+     WHERE coupon_code IS NOT NULL AND status != 'cancelado' AND ${REPORT_PAYMENT_FILTER}
        AND created_at >= ($1::date)::timestamp AT TIME ZONE 'America/Sao_Paulo' AND created_at < (($2::date + interval '1 day'))::timestamp AT TIME ZONE 'America/Sao_Paulo'
      GROUP BY coupon_code
      ORDER BY uses DESC`,
@@ -1233,7 +1892,7 @@ async function getPromotionUsage(from, to) {
        SELECT item->>'promoId' AS promo_id, COUNT(*)::int AS uses, SUM((item->>'qty')::int)::int AS qty,
               SUM(((item->>'listPrice')::numeric - (item->>'price')::numeric) * (item->>'qty')::int) AS total_discount
        FROM orders, jsonb_array_elements(items) AS item
-       WHERE item->>'promoId' IS NOT NULL AND status != 'cancelado'
+       WHERE item->>'promoId' IS NOT NULL AND status != 'cancelado' AND ${REPORT_PAYMENT_FILTER}
          AND created_at >= ($1::date)::timestamp AT TIME ZONE 'America/Sao_Paulo' AND created_at < (($2::date + interval '1 day'))::timestamp AT TIME ZONE 'America/Sao_Paulo'
        GROUP BY item->>'promoId'
      ) o
@@ -1766,7 +2425,7 @@ async function handleApi(req, res, pathname) {
 
     // ------ products ------
     if (pathname === '/api/products' && req.method === 'POST') {
-      const body = await readJSONBody(req);
+      const body = await readUploadJSONBody(req);
       const admin = await requireAdmin(body);
       if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
 
@@ -1835,7 +2494,7 @@ async function handleApi(req, res, pathname) {
     }
 
     if (pathname === '/api/products/update' && req.method === 'POST') {
-      const body = await readJSONBody(req);
+      const body = await readUploadJSONBody(req);
       const admin = await requireAdmin(body);
       if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
@@ -1908,7 +2567,7 @@ async function handleApi(req, res, pathname) {
     const PRODUCT_GALLERY_MAX_EXTRA = 7; // 8 fotos no total, contando a capa
 
     if (pathname === '/api/products/images' && req.method === 'POST') {
-      const body = await readJSONBody(req);
+      const body = await readUploadJSONBody(req);
       const admin = await requireAdmin(body);
       if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
       if (!body.productId) return sendJSON(res, 400, { error: 'productId é obrigatório' });
@@ -2599,7 +3258,9 @@ async function handleApi(req, res, pathname) {
       const orderLines = [];
       const orderLineByVariant = new Map();
       for (const item of rawItems) {
-        const qty = Math.max(0, Math.floor(Number(item && item.qty) || 0));
+        const rawQty = Number(item && item.qty);
+        // 1.5 virava 1 em silêncio; quantidade tem que ser um número inteiro de peças
+        const qty = Number.isInteger(rawQty) && rawQty > 0 ? rawQty : 0;
         if (!item || !item.variantId || !qty) {
           return sendJSON(res, 400, { error: `Escolha um tamanho válido para ${(item && item.name) || 'o produto'}` });
         }
@@ -2619,6 +3280,9 @@ async function handleApi(req, res, pathname) {
       if (!['Entrega', 'Retirada em loja'].includes(deliveryMethod)) {
         return sendJSON(res, 400, { error: 'Forma de entrega inválida' });
       }
+      if (!ORDER_PAYMENT_METHODS.includes(paymentMethod)) {
+        return sendJSON(res, 400, { error: 'Forma de pagamento inválida' });
+      }
       const couponCodeInput = (body.couponCode || '').trim().toUpperCase() || null;
       const address = body.address && typeof body.address === 'object'
         ? Object.fromEntries(['cep', 'rua', 'numero', 'complemento', 'bairro', 'cidade', 'estado'].map((field) => [field, String(body.address[field] || '').trim().slice(0, 120)]))
@@ -2628,7 +3292,7 @@ async function handleApi(req, res, pathname) {
         const missingAddress = !address || requiredAddressFields.some((field) => !String(address[field] || '').trim());
         const cepDigits = address ? String(address.cep || '').replace(/\D/g, '') : '';
         const uf = address ? String(address.estado || '').trim().toUpperCase() : '';
-        if (missingAddress || cepDigits.length !== 8 || !/^[A-Z]{2}$/.test(uf)) {
+        if (missingAddress || cepDigits.length !== 8 || !BRAZIL_UFS.has(uf)) {
           return sendJSON(res, 400, { error: 'Informe um endereço de entrega completo e válido' });
         }
       }
@@ -2739,6 +3403,15 @@ async function handleApi(req, res, pathname) {
           if (await couponUses(client, coupon.code) >= coupon.maxUses) coupon = null;
         }
 
+        // Peça "sob consulta" não tem valor para cobrar no PagBank: o checkout sairia só com os
+        // itens com preço e o pedido ficaria "pago" levando junto uma peça que ninguém pagou.
+        if (paymentMethod === ONLINE_PAYMENT_METHOD && items.some((it) => it.price == null)) {
+          await client.query('ROLLBACK');
+          return sendJSON(res, 400, {
+            error: 'Sua sacola tem peça com preço sob consulta. Escolha outra forma de pagamento para combinar o valor com a gente no WhatsApp.',
+          });
+        }
+
         const itemCount = items.reduce((sum, it) => sum + (it.price != null ? it.qty : 0), 0);
         subtotal = items.reduce((sum, it) => sum + (it.price != null ? it.price * it.qty : 0), 0);
         discountInfo = PromoEngine.bestDiscount(subtotal, { coupon, itemCount, payment: paymentMethod });
@@ -2822,16 +3495,29 @@ async function handleApi(req, res, pathname) {
         try {
           const session = await getActiveProvider().createCheckoutSession({ orderId: id, total, customerName, customerEmail, items });
           checkoutUrl = session.checkoutUrl;
-          await pool.query(
-            'UPDATE orders SET payment_reference = COALESCE($1, payment_reference), checkout_url = $2 WHERE id = $3',
-            [session.providerReference || null, checkoutUrl || null, id]
-          );
+          await withTransaction(async (client) => {
+            await client.query(
+              'UPDATE orders SET payment_reference = COALESCE($1, payment_reference), checkout_url = $2 WHERE id = $3',
+              [session.providerReference || null, checkoutUrl || null, id]
+            );
+            await addOrderEvent(client, {
+              orderId: id, type: 'checkout_created', source: 'checkout', fromStatus: 'novo', toStatus: 'novo',
+              fromPayment: 'pending', toPayment: 'pending',
+              metadata: { checkoutId: session.providerReference || null, amount: total }, dedupeKey: 'checkout_created',
+            });
+          });
         } catch (err) {
           console.error(`[${(process.env.PAYMENT_PROVIDER || '').trim()}] falha ao criar checkout, caindo para o fluxo manual:`, err.message);
           // O pedido nasceu 'pending' (ver isOnlinePayment acima) esperando essa preferência dar
           // certo; sem checkoutUrl a compra segue pelo WhatsApp, então o registro tem que voltar
           // a refletir isso — senão fica "pendente" pra sempre sem nenhum jeito de ser pago.
-          await pool.query("UPDATE orders SET payment_status = 'manual' WHERE id = $1", [id]);
+          await withTransaction(async (client) => {
+            await client.query("UPDATE orders SET payment_status = 'manual' WHERE id = $1 AND payment_status = 'pending'", [id]);
+            await addOrderEvent(client, {
+              orderId: id, type: 'checkout_failed', source: 'checkout', fromStatus: 'novo', toStatus: 'novo',
+              fromPayment: 'pending', toPayment: 'manual', metadata: { error: err.message },
+            });
+          }).catch((dbErr) => console.error('[checkout] falha ao registrar a queda para o fluxo manual:', dbErr.message));
         }
       }
 
@@ -2871,83 +3557,79 @@ async function handleApi(req, res, pathname) {
         return sendJSON(res, 200, { ok: true });
       }
 
-      const { orderId, providerReference } = result;
-      const client = await pool.connect();
+      const { orderId } = result;
+
+      // Evento do checkout (ex.: EXPIRED): só entra no histórico. O cancelamento continua
+      // dependendo da consulta conclusiva feita pela varredura (B-04).
+      if (result.kind === 'checkout') {
+        await withTransaction(async (client) => {
+          const order = await lockOrderForFinance(client, orderId);
+          if (!order) return;
+          await addOrderEvent(client, {
+            orderId, type: 'checkout_expired_notice', source: 'webhook',
+            fromStatus: order.status, toStatus: order.status, fromPayment: order.paymentStatus, toPayment: order.paymentStatus,
+            metadata: { checkoutId: result.providerReference || null, checkoutStatus: result.checkoutStatus },
+            dedupeKey: `checkout:${result.checkoutStatus}:${result.providerReference || ''}`,
+          });
+        });
+        return sendJSON(res, 200, { ok: true });
+      }
+
+      // Pedido travado: notificações repetidas, simultâneas ou fora de ordem são aplicadas uma de
+      // cada vez e applyGatewaySnapshot nunca deixa a situação andar para trás.
       let order;
-      let status = result.status;
-      let cancelledNow = false;
-      let paidAfterCancel = false;
-      try {
-        await client.query('BEGIN');
-        const { rows } = await client.query(
-          `SELECT payment_status AS "paymentStatus", status, items, email, customer_name AS "customerName"
-             FROM orders WHERE id = $1 FOR UPDATE`,
-          [orderId]
-        );
-        if (!rows.length) {
-          await client.query('ROLLBACK');
-          return sendJSON(res, 200, { ok: true });
-        }
-        order = rows[0];
-        // Notificações podem chegar fora de ordem ou repetidas: um pedido pago só sai de 'paid'
-        // por estorno, e um estornado não volta atrás — senão um aviso atrasado de "aguardando"
-        // ou de uma tentativa recusada faria a loja deixar de enviar um pedido já pago.
-        if (!isAllowedPaymentTransition(order.paymentStatus, status)) status = order.paymentStatus;
-
-        // Pagamento recusado ou estornado: o pedido não vai sair, então as peças voltam pra
-        // vitrine na hora (antes ficavam presas até alguém cancelar manualmente no painel).
-        if ((status === 'failed' || status === 'refunded') && order.status !== 'cancelado') {
-          await restockOrderItems(client, orderId, order.items, {
-            note: `Pagamento ${status === 'failed' ? 'recusado' : 'estornado'} no pedido ${orderId}`,
-          });
-          await client.query("UPDATE orders SET status = 'cancelado' WHERE id = $1", [orderId]);
-          cancelledNow = true;
-        }
-        paidAfterCancel = status === 'paid' && order.paymentStatus !== 'paid' && order.status === 'cancelado';
-
-        await client.query(
-          `UPDATE orders SET payment_status = $1, payment_reference = COALESCE($2, payment_reference),
-                  paid_at = CASE WHEN $1 = 'paid' AND paid_at IS NULL THEN now() ELSE paid_at END
-            WHERE id = $3`,
-          [status, providerReference || null, orderId]
-        );
-        await client.query('COMMIT');
-      } catch (err) {
-        await client.query('ROLLBACK');
-        throw err;
-      } finally {
-        client.release();
-      }
-
-      if (status === 'paid' && order.paymentStatus !== 'paid' && order.email && !paidAfterCancel) {
-        sendEmail({
-          to: order.email,
-          subject: `Pagamento aprovado — pedido ${orderShortCode(orderId)} — By NaNa`,
-          html: buildPaymentApprovedHtml({ id: orderId, customerName: order.customerName }),
-        });
-      }
-      if (cancelledNow && status === 'failed' && order.email) {
-        sendEmail({
-          to: order.email,
-          subject: `Pagamento não concluído — pedido ${orderShortCode(orderId)} — By NaNa`,
-          html: buildPaymentNotCompletedHtml({ id: orderId, customerName: order.customerName, reason: 'não foi aprovado' }),
-        });
-      }
-      // Pagamento caiu num pedido que já estava cancelado (expirou ou foi cancelado no painel e
-      // as peças podem ter sido vendidas de novo): a loja precisa decidir entre enviar ou estornar.
-      if (paidAfterCancel) {
-        console.warn(`[webhook ${providerKey}] pagamento aprovado em pedido cancelado: ${orderId}`);
-        const notifyEmail = (process.env.STORE_NOTIFY_EMAIL || '').trim();
-        if (notifyEmail) {
-          sendEmail({
-            to: notifyEmail,
-            subject: `ATENÇÃO: pagamento aprovado em pedido cancelado ${orderShortCode(orderId)}`,
-            html: `<p>O pedido <strong>${escapeHtml(orderShortCode(orderId))}</strong> (${escapeHtml(order.customerName)}) estava cancelado e acabou de ter o pagamento aprovado.</p>
-                   <p>Confira o estoque e decida entre reativar o pedido no painel ou estornar o pagamento no PagBank.</p>`,
-          });
-        }
-      }
+      let effects = {};
+      await withTransaction(async (client) => {
+        order = await lockOrderForFinance(client, orderId);
+        if (!order) return;
+        effects = await applyGatewaySnapshot(client, order, result, { source: 'webhook' });
+      });
+      if (order) sendPaymentEffectEmails(order, effects);
       return sendJSON(res, 200, { ok: true });
+    }
+
+    // ------ financeiro do pedido no painel (Fase 1) ------
+    // Toda ação valida sessão e regra aqui no servidor; esconder botão no painel não basta.
+    if (pathname.startsWith('/api/orders/payment/') && req.method === 'POST') {
+      const action = pathname.slice('/api/orders/payment/'.length);
+      if (!['detail', 'refresh', 'refund', 'retry-refund', 'reactivate'].includes(action)) {
+        return sendJSON(res, 404, { error: 'Ação desconhecida' });
+      }
+      const body = await readJSONBody(req);
+      const admin = await requireAdmin(body);
+      if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
+      const orderId = String(body.id || '');
+      if (!orderId) return sendJSON(res, 400, { error: 'id é obrigatório' });
+      const reason = String(body.reason || '').trim().slice(0, 500);
+      try {
+        if (action === 'detail') {
+          const finance = await getOrderFinance(orderId);
+          if (!finance) return sendJSON(res, 404, { error: 'Pedido não encontrado' });
+          return sendJSON(res, 200, { finance });
+        }
+        if ((action === 'refund' || action === 'reactivate') && reason.length < 3) {
+          return sendJSON(res, 400, { error: 'Informe a justificativa da decisão' });
+        }
+        let message;
+        if (action === 'refresh') {
+          const result = await refreshOrderPayment(orderId, { source: 'admin', admin });
+          message = result.ok ? 'Pagamento consultado no PagBank.' : `Não foi possível consultar o PagBank agora: ${result.error}. O pedido não foi alterado.`;
+        } else if (action === 'refund') {
+          const { outcome } = await requestOrderRefund(orderId, { admin, reason, cancelOrder: false, requireCancelled: true });
+          message = refundOutcomeMessage(outcome);
+        } else if (action === 'retry-refund') {
+          const { outcome } = await retryOrderRefund(orderId, { admin, reason });
+          message = refundOutcomeMessage(outcome);
+        } else {
+          await reactivatePaidOrder(orderId, { admin, reason });
+          message = 'Pedido reativado e peças baixadas do estoque.';
+        }
+        logActivity(admin, `order.payment_${action.replace('-', '_')}`, 'order', orderId, reason ? { reason } : null);
+        return sendJSON(res, 200, { message, finance: await getOrderFinance(orderId), orders: await getOrders() });
+      } catch (err) {
+        if (err instanceof OrderActionError) return sendJSON(res, err.status, { error: err.message });
+        throw err;
+      }
     }
 
     if (pathname === '/api/orders/list' && req.method === 'POST') {
@@ -2967,13 +3649,15 @@ async function handleApi(req, res, pathname) {
       }
       const trackingCode = String(body.trackingCode || '').trim().slice(0, 60) || null;
       if (!body.id) return sendJSON(res, 400, { error: 'id é obrigatório' });
-      const client = await pool.connect();
       let order;
       let statusChanged;
+      let paidCancellation = false;
+      const client = await pool.connect();
       try {
         await client.query('BEGIN');
         const orderResult = await client.query(
-          'SELECT status, items, email, customer_name AS "customerName", payment_status AS "paymentStatus" FROM orders WHERE id=$1 FOR UPDATE',
+          `SELECT status, items, email, customer_name AS "customerName", payment_status AS "paymentStatus",
+                  payment_attention AS "attention" FROM orders WHERE id=$1 FOR UPDATE`,
           [body.id]
         );
         if (!orderResult.rowCount) {
@@ -2982,53 +3666,88 @@ async function handleApi(req, res, pathname) {
         }
         order = orderResult.rows[0];
         // Pedido de pagamento online só sai da loja depois que o gateway confirmou: 'manual'
-        // (combinado no WhatsApp) e 'paid' liberam; pendente, recusado ou estornado não.
-        if (['enviado', 'concluido'].includes(status) && !['manual', 'paid'].includes(order.paymentStatus)) {
+        // (combinado no WhatsApp), 'paid' e 'partially_refunded' (pago, com devolução de parte
+        // do valor) liberam; pendente, recusado, em estorno ou estornado não.
+        if (['enviado', 'concluido'].includes(status) && !['manual', 'paid', 'partially_refunded'].includes(order.paymentStatus)) {
           await client.query('ROLLBACK');
           return sendJSON(res, 409, { error: 'O pagamento online desse pedido ainda não foi confirmado. Ele só pode ser enviado ou concluído depois de pago.' });
         }
         statusChanged = order.status !== status;
+        if (statusChanged && !(ORDER_STATUS_TRANSITIONS[order.status] || []).includes(status)) {
+          await client.query('ROLLBACK');
+          return sendJSON(res, 409, { error: `Um pedido "${ORDER_STATUS_LABELS[order.status]}" não pode passar direto para "${ORDER_STATUS_LABELS[status]}".` });
+        }
         const items = Array.isArray(order.items) ? order.items : [];
         if (order.status !== 'cancelado' && status === 'cancelado') {
-          await restockOrderItems(client, body.id, items, { adminUserId: admin.id });
+          if (PAYMENT_STATUSES_WITH_MONEY.includes(order.paymentStatus)) {
+            // DC-5/B-03: cancelar pedido pago passa obrigatoriamente pelo estorno no PagBank.
+            await client.query('ROLLBACK');
+            paidCancellation = true;
+          } else if (PAYMENT_STATUSES_IN_REFUND.includes(order.paymentStatus)) {
+            await client.query('ROLLBACK');
+            return sendJSON(res, 409, { error: 'Há um estorno em andamento ou com falha neste pedido. Resolva o estorno no financeiro do pedido.' });
+          } else {
+            await restockOrderItems(client, body.id, items, { adminUserId: admin.id });
+          }
         } else if (order.status === 'cancelado' && status !== 'cancelado') {
-          await lockVariantsInOrder(client, items.map((item) => item.variantId));
-          for (const item of items) {
-            if (!item.variantId) continue;
-            const qty = Math.max(0, Math.floor(Number(item.qty) || 0));
-            const locked = await client.query('SELECT stock FROM product_variants WHERE id=$1 FOR UPDATE', [item.variantId]);
-            if (!locked.rowCount || locked.rows[0].stock < qty) {
-              await client.query('ROLLBACK');
-              return sendJSON(res, 409, { error: `Estoque insuficiente para reativar ${item.name}` });
-            }
-            const stockAfter = locked.rows[0].stock - qty;
-            await client.query('UPDATE product_variants SET stock=$1 WHERE id=$2', [stockAfter, item.variantId]);
-            await recordInventoryMovement(client, {
-              variantId: item.variantId, type: 'sale', quantity: -qty, stockAfter,
-              orderId: body.id, adminUserId: admin.id, note: `Reativação do pedido ${body.id}`,
-            });
+          // Dinheiro devolvido ou sendo devolvido: o pedido não pode voltar a valer.
+          if (['refunded', 'partially_refunded', ...PAYMENT_STATUSES_IN_REFUND].includes(order.paymentStatus)) {
+            await client.query('ROLLBACK');
+            return sendJSON(res, 409, { error: 'O pagamento deste pedido foi estornado ou está em estorno; ele não pode ser reativado.' });
+          }
+          const reserved = await reserveStockForReactivation(client, body.id, items, admin.id);
+          if (!reserved.ok) {
+            await client.query('ROLLBACK');
+            return sendJSON(res, 409, { error: `Estoque insuficiente para reativar ${reserved.itemName}` });
           }
         }
-        await client.query(
-          'UPDATE orders SET status = $1, tracking_code = COALESCE($3, tracking_code) WHERE id = $2',
-          [status, body.id, status === 'enviado' ? trackingCode : null]
-        );
-        await client.query('COMMIT');
+        if (!paidCancellation) {
+          // Enviar/concluir um pedido com valor divergente é a equipe dizendo que conferiu.
+          const clearAttention = (order.status === 'cancelado' && status !== 'cancelado' && order.attention === 'paid_after_cancel')
+            || (['enviado', 'concluido'].includes(status) && order.attention === 'amount_mismatch');
+          await client.query(
+            `UPDATE orders SET status = $1, tracking_code = COALESCE($3, tracking_code),
+                    payment_attention = CASE WHEN $4 THEN NULL ELSE payment_attention END
+              WHERE id = $2`,
+            [status, body.id, status === 'enviado' ? trackingCode : null, clearAttention]
+          );
+          if (statusChanged) {
+            await addOrderEvent(client, {
+              orderId: body.id, type: clearAttention ? 'admin_decision' : 'order_status_changed', source: 'admin', admin,
+              fromStatus: order.status, toStatus: status, fromPayment: order.paymentStatus, toPayment: order.paymentStatus,
+              metadata: clearAttention ? { decision: order.attention === 'amount_mismatch' ? 'amount_checked' : 'reactivate' } : (status === 'enviado' && trackingCode ? { trackingCode } : null),
+            });
+          }
+          await client.query('COMMIT');
+        }
       } catch (err) {
-        await client.query('ROLLBACK');
+        await client.query('ROLLBACK').catch(() => {});
         throw err;
       } finally {
         client.release();
       }
-      logActivity(admin, 'order.status_update', 'order', body.id, { status });
+
+      let message;
+      if (paidCancellation) {
+        try {
+          const { outcome } = await requestOrderRefund(body.id, {
+            admin, reason: String(body.reason || '').trim().slice(0, 500) || 'Cancelamento do pedido no painel', cancelOrder: true,
+          });
+          message = refundOutcomeMessage(outcome);
+        } catch (err) {
+          if (err instanceof OrderActionError) return sendJSON(res, err.status, { error: err.message });
+          throw err;
+        }
+      }
+      logActivity(admin, 'order.status_update', 'order', body.id, { status, from: order.status, paymentStatus: order.paymentStatus });
       if (statusChanged && order.email) {
         await sendEmail({
           to: order.email,
           subject: `Pedido ${orderShortCode(body.id)} atualizado — By NaNa`,
-          html: buildOrderStatusHtml({ id: body.id, customerName: order.customerName, status, trackingCode }),
+          html: buildOrderStatusHtml({ id: body.id, customerName: order.customerName, status, trackingCode, refundRequested: paidCancellation }),
         });
       }
-      return sendJSON(res, 200, { orders: await getOrders() });
+      return sendJSON(res, 200, { orders: await getOrders(), ...(message ? { message } : {}) });
     }
 
     // ------ customers (cadastro/login público + CRM no admin) ------
@@ -3429,7 +4148,7 @@ async function handleApi(req, res, pathname) {
 
     // ------ stories (carrossel de vídeo estilo Instagram) ------
     if (pathname === '/api/stories' && req.method === 'POST') {
-      const body = await readJSONBody(req, 40 * 1024 * 1024);
+      const body = await readUploadJSONBody(req, 40 * 1024 * 1024);
       const admin = await requireAdmin(body);
       if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
 
@@ -3566,7 +4285,7 @@ async function handleApi(req, res, pathname) {
     }
 
     if (pathname === '/api/site-images' && req.method === 'POST') {
-      const body = await readJSONBody(req);
+      const body = await readUploadJSONBody(req);
       const admin = await requireAdmin(body);
       if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
 
@@ -3587,6 +4306,8 @@ async function handleApi(req, res, pathname) {
 
     return sendJSON(res, 404, { error: 'Rota não encontrada' });
   } catch (err) {
+    if (err instanceof BadRequestError) return sendJSON(res, 400, { error: 'Requisição inválida' });
+    if (err && err.uploadBusy) return sendJSON(res, 503, { error: 'Outro envio de arquivo está em andamento. Tente de novo em alguns segundos.' });
     console.error(err);
     const tooLarge = err && err.message === 'payload too large';
     if (!tooLarge) alertServerError(`${req.method} ${pathname}`, err);
@@ -4059,57 +4780,50 @@ async function sweepAbandonedCarts() {
 
 setInterval(sweepAbandonedCarts, ABANDONED_CART_SWEEP_INTERVAL_MS);
 
-// ---------- expiração de pedidos com pagamento online que nunca foi concluído ----------
+// ---------- expiração de pedidos com pagamento online que nunca foi concluído (B-04) ----------
 // O pedido online reserva o estoque ao ser criado; se a cliente abandona a página do PagBank,
-// nenhum webhook chega e a peça ficaria "esgotada" pra sempre. Passado o prazo do link de
-// pagamento (+ 2h de folga pra notificação atrasada), o pedido é cancelado e o estoque volta.
-// Pedidos manuais (WhatsApp) não entram: quem decide cancelá-los é a loja.
+// a peça ficaria "esgotada" pra sempre. Passado o prazo do link de pagamento (+ 2h de folga), o
+// servidor CONSULTA o PagBank antes de decidir: pago -> aplica o pagamento; checkout vencido
+// sem cobrança capturada -> cancela e devolve o estoque; consulta falhou ou inconclusiva -> não
+// cancela, registra e tenta de novo mais tarde (intervalo crescente, alerta para a equipe a partir
+// de PAYMENT_CHECK_ALERT_AFTER falhas e parada após PAYMENT_CHECK_MAX_FAILURES).
+// Também reconcilia estornos aguardando confirmação. Pedidos manuais (WhatsApp) não entram.
 const PENDING_ORDER_GRACE_HOURS = CHECKOUT_EXPIRATION_HOURS + 2;
+const PAYMENT_SWEEP_INTERVAL_MS = Number(process.env.PAYMENT_SWEEP_INTERVAL_MS) || ABANDONED_CART_SWEEP_INTERVAL_MS;
+let paymentSweepRunning = false;
 
 async function sweepExpiredOnlineOrders() {
+  // Sem gateway ativo não há como confirmar nada: nenhum pedido é cancelado por falta de dado.
+  if (!getActiveProvider() || paymentSweepRunning) return;
+  paymentSweepRunning = true;
   try {
     const { rows } = await pool.query(
       `SELECT id FROM orders
-        WHERE payment_status = 'pending' AND status != 'cancelado'
-          AND created_at < now() - make_interval(hours => $1)
+        WHERE payment_check_failures < $2
+          AND (payment_checked_at IS NULL
+               OR payment_checked_at < now() - LEAST(interval '6 hours', interval '15 minutes' * power(2, payment_check_failures)))
+          AND ((payment_status = 'pending' AND status != 'cancelado' AND created_at < now() - make_interval(hours => $1))
+               OR (payment_status = 'refund_pending' AND EXISTS (
+                     SELECT 1 FROM payment_refunds r
+                      WHERE r.order_id = orders.id AND r.status IN ('requested', 'unknown')
+                        AND r.updated_at < now() - interval '10 minutes')))
         ORDER BY created_at ASC LIMIT 50`,
-      [PENDING_ORDER_GRACE_HOURS]
+      [PENDING_ORDER_GRACE_HOURS, PAYMENT_CHECK_MAX_FAILURES]
     );
     for (const { id } of rows) {
-      const client = await pool.connect();
-      let order = null;
       try {
-        await client.query('BEGIN');
-        const locked = await client.query(
-          `SELECT items, email, customer_name AS "customerName" FROM orders
-            WHERE id = $1 AND payment_status = 'pending' AND status != 'cancelado' FOR UPDATE`,
-          [id]
-        );
-        if (locked.rowCount) {
-          order = locked.rows[0];
-          await restockOrderItems(client, id, order.items, { note: `Pagamento online não concluído no prazo — pedido ${id}` });
-          await client.query("UPDATE orders SET status = 'cancelado', payment_status = 'failed' WHERE id = $1", [id]);
-        }
-        await client.query('COMMIT');
+        await refreshOrderPayment(id, { source: 'sweep' });
       } catch (err) {
-        await client.query('ROLLBACK');
-        throw err;
-      } finally {
-        client.release();
-      }
-      if (order && order.email) {
-        sendEmail({
-          to: order.email,
-          subject: `Pagamento não concluído — pedido ${orderShortCode(id)} — By NaNa`,
-          html: buildPaymentNotCompletedHtml({ id, customerName: order.customerName, reason: 'não foi concluído no prazo' }),
-        });
+        console.error(`[pedidos pendentes] falha ao conferir ${id}:`, err.message);
       }
     }
   } catch (err) {
     console.error('[pedidos pendentes] falha na varredura:', err.message);
+  } finally {
+    paymentSweepRunning = false;
   }
 }
 
-setInterval(sweepExpiredOnlineOrders, ABANDONED_CART_SWEEP_INTERVAL_MS);
+setInterval(sweepExpiredOnlineOrders, PAYMENT_SWEEP_INTERVAL_MS);
 // Também logo após subir: no plano free a instância dorme e o intervalo não roda enquanto isso.
-setTimeout(sweepExpiredOnlineOrders, 30_000).unref();
+setTimeout(sweepExpiredOnlineOrders, Math.min(30_000, PAYMENT_SWEEP_INTERVAL_MS)).unref();

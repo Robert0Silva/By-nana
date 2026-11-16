@@ -392,3 +392,72 @@ CREATE UNIQUE INDEX IF NOT EXISTS orders_idempotency_key_idx ON orders (idempote
 -- rótulo do desconto aplicado ("Pix 5%", "Cupom X"), devolvido no reenvio de um pedido pela
 -- chave de idempotência pra mensagem do WhatsApp sair igual à da primeira tentativa.
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_label TEXT;
+
+-- ===================== Fase 1 (nov/2026): segurança financeira e PagBank =====================
+-- Tudo aditivo: estados novos de pagamento, colunas novas com padrão neutro e duas tabelas novas.
+-- Nenhum dado existente muda de valor. Reversão: db/rollback/fase1-pagamentos.down.sql.
+
+-- Estados de estorno. O CHECK é recriado como superconjunto do anterior (mesmo padrão usado
+-- para orders_status_check acima) — toda linha válida antes continua válida.
+ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_payment_status_check;
+ALTER TABLE orders ADD CONSTRAINT orders_payment_status_check
+  CHECK (payment_status IN ('manual', 'pending', 'paid', 'failed', 'refunded',
+                            'refund_pending', 'partially_refunded', 'refund_failed'));
+
+-- Valores confirmados pelo gateway (não pelo navegador). paid_amount fica nulo até um pagamento
+-- ser confirmado; refunded_amount é o total já estornado e confirmado pelo PagBank.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS paid_amount NUMERIC(10, 2);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS refunded_amount NUMERIC(10, 2) NOT NULL DEFAULT 0;
+-- payment_reference continua sendo o checkout (CHEC_...); estes guardam o pedido (ORDE_...) e a
+-- cobrança (CHAR_...) do PagBank, necessários para consultar e estornar.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_order_id TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_charge_id TEXT;
+-- Última consulta ao gateway e falhas seguidas (para espaçar as novas tentativas e alertar).
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_checked_at TIMESTAMPTZ;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_check_failures INTEGER NOT NULL DEFAULT 0;
+-- Situação que exige decisão da equipe: 'paid_after_cancel' (DC-4), 'check_failing'
+-- (consulta ao PagBank falhando repetidamente), 'refund_uncertain' (estorno sem resposta).
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_attention TEXT;
+
+-- Histórico do pedido (financeiro e decisões da equipe). Gravado na mesma transação da mudança.
+-- dedupe_key evita registrar duas vezes o mesmo fato (webhook repetido ou concorrente).
+CREATE TABLE IF NOT EXISTS order_events (
+  id                  BIGSERIAL PRIMARY KEY,
+  order_id            TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  event_type          TEXT NOT NULL,
+  from_status         TEXT,
+  to_status           TEXT,
+  from_payment_status TEXT,
+  to_payment_status   TEXT,
+  source              TEXT NOT NULL,
+  admin_user_id       UUID REFERENCES admin_users(id) ON DELETE SET NULL,
+  admin_name          TEXT,
+  reason              TEXT,
+  metadata            JSONB,
+  dedupe_key          TEXT,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_order_events_order ON order_events(order_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS order_events_dedupe_idx ON order_events(order_id, dedupe_key) WHERE dedupe_key IS NOT NULL;
+
+-- Cada tentativa de estorno. A chave de idempotência é enviada ao PagBank; uma nova tentativa
+-- depois de resultado desconhecido reaproveita a mesma chave. O índice parcial garante no máximo
+-- uma tentativa em aberto por pedido (duas solicitações simultâneas não geram dois estornos).
+CREATE TABLE IF NOT EXISTS payment_refunds (
+  id                  UUID PRIMARY KEY,
+  order_id            TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  idempotency_key     TEXT NOT NULL UNIQUE,
+  charge_id           TEXT NOT NULL,
+  amount              NUMERIC(10, 2) NOT NULL CHECK (amount > 0),
+  -- total estornado que o pedido terá quando esta tentativa for confirmada
+  expected_refunded_total NUMERIC(10, 2) NOT NULL,
+  status              TEXT NOT NULL CHECK (status IN ('requested', 'unknown', 'confirmed', 'failed')),
+  attempts            INTEGER NOT NULL DEFAULT 1,
+  reason              TEXT,
+  admin_user_id       UUID REFERENCES admin_users(id) ON DELETE SET NULL,
+  last_error          TEXT,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_payment_refunds_order ON payment_refunds(order_id);
+CREATE UNIQUE INDEX IF NOT EXISTS payment_refunds_open_idx ON payment_refunds(order_id) WHERE status IN ('requested', 'unknown');

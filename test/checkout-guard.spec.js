@@ -9,6 +9,9 @@
 // valida só o comportamento do front (quantas vezes ele TENTA enviar), não a criação do pedido
 // em si (isso já é coberto por test/routes.test.js) — então nenhum pedido de teste é gravado no
 // banco de dados real.
+// O servidor que este teste sobe roda as varreduras automáticas (carrinho abandonado com e-mail,
+// pedidos online vencidos) contra o banco configurado — por isso também exige banco local.
+require('./require-local-db');
 const { test, expect } = require('@playwright/test');
 const { spawn } = require('node:child_process');
 const path = require('node:path');

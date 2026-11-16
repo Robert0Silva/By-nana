@@ -496,6 +496,19 @@
 .admin-order-payment-badge.pay-paid{background:#e3f3e6;color:#2f7d4f;}
 .admin-order-payment-badge.pay-failed{background:#f7e3d8;color:var(--wine);}
 .admin-order-payment-badge.pay-refunded{background:#eee;color:var(--ink-soft);}
+.admin-order-payment-badge.pay-refund_pending{background:#fdf1dc;color:var(--camel);}
+.admin-order-payment-badge.pay-partially_refunded{background:#eee;color:var(--ink-soft);}
+.admin-order-payment-badge.pay-refund_failed{background:#f7e3d8;color:var(--wine);}
+.admin-order-finance{flex-basis:100%;border-top:1px solid rgba(0,0,0,.08);padding-top:10px;margin-top:4px;display:flex;flex-direction:column;gap:10px;}
+.admin-order-finance[hidden]{display:none;}
+.admin-order-finance-alert{background:#f7e3d8;color:var(--wine);padding:8px 12px;border-radius:10px;font-size:.8rem;margin:0;}
+.admin-order-finance-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px 16px;margin:0;}
+.admin-order-finance-grid dt{font-size:.7rem;color:var(--ink-soft);}
+.admin-order-finance-grid dd{margin:0;font-size:.85rem;font-weight:600;word-break:break-all;}
+.admin-order-finance-actions{display:flex;flex-wrap:wrap;gap:8px;}
+.admin-order-finance-title{font-size:.8rem;margin:0;}
+.admin-order-finance-events{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:.8rem;max-height:260px;overflow:auto;}
+.admin-order-finance-events li{display:flex;flex-direction:column;gap:2px;}
 .admin-order-meta{font-size:.76rem;color:var(--ink-soft);}
 .admin-order-address{font-size:.76rem;color:var(--ink-soft);}
 .admin-order-items{font-size:.78rem;color:var(--ink-soft);margin:2px 0 0;}
