@@ -456,3 +456,43 @@ test('rota do painel recusa corpo grande antes de conferir a sessão', async () 
   });
   assert.equal(response.status, 413);
 });
+
+async function createFirstPurchaseCoupon() {
+  const code = `PRIMEIRA${crypto.randomUUID().slice(0, 6).toUpperCase()}`;
+  await pool.query("INSERT INTO coupons (code, discount_type, discount_value, first_purchase_only) VALUES ($1,'percent',10,true)", [code]);
+  created.coupons.push(code);
+  return code;
+}
+
+test('cupom de 1ª compra não volta a valer trocando só o telefone (mesmo e-mail)', async () => {
+  const product = await createProduct({ price: 100, variants: [{ size: 'P', stock: 5 }] });
+  const code = await createFirstPurchaseCoupon();
+  const customerEmail = `regras-1a-${crypto.randomUUID().slice(0, 8)}@example.com`;
+  const line = [{ id: product.id, variantId: product.variants[0], qty: 1 }];
+  const first = await placeOrder(line, { couponCode: code, customerEmail });
+  assert.equal(first.status, 201);
+  assert.equal(first.data.total, 90, '1ª compra ganha o cupom');
+  const second = await placeOrder(line, { couponCode: code, customerEmail: customerEmail.toUpperCase() });
+  assert.equal(second.status, 201);
+  assert.equal(second.data.total, 100, 'mesmo e-mail com outro telefone não ganha o cupom de novo');
+});
+
+test('cupom de 1ª compra: dois pedidos simultâneos do mesmo telefone ganham o desconto só uma vez', async () => {
+  const product = await createProduct({ price: 100, variants: [{ size: 'P', stock: 5 }] });
+  const code = await createFirstPurchaseCoupon();
+  const customerPhone = `319${String(crypto.randomInt(1e8)).padStart(8, '0')}`;
+  const line = [{ id: product.id, variantId: product.variants[0], qty: 1 }];
+  const results = await Promise.all([0, 1].map(() => placeOrder(line, { couponCode: code, customerPhone })));
+  assert.deepEqual(results.map((r) => r.status), [201, 201]);
+  assert.deepEqual(results.map((r) => r.data.total).sort(), [100, 90].sort(), 'só um dos dois leva o desconto');
+});
+
+test('cupom de 1ª compra reconhece o telefone gravado com +55', async () => {
+  const product = await createProduct({ price: 100, variants: [{ size: 'P', stock: 5 }] });
+  const code = await createFirstPurchaseCoupon();
+  const digits = `319${String(crypto.randomInt(1e8)).padStart(8, '0')}`;
+  const line = [{ id: product.id, variantId: product.variants[0], qty: 1 }];
+  assert.equal((await placeOrder(line, { customerPhone: `+55 ${digits}` })).status, 201);
+  const again = await placeOrder(line, { couponCode: code, customerPhone: digits });
+  assert.equal(again.data.total, 100);
+});

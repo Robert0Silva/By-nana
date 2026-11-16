@@ -1067,6 +1067,7 @@ function buildNewOrderNotificationHtml(order) {
     <p><strong>Novo pedido ${escapeHtml(orderShortCode(order.id))}</strong> no site.</p>
     <p>Cliente: ${escapeHtml(order.customerName)}<br>Telefone: ${escapeHtml(order.customerPhone)}${order.customerEmail ? `<br>E-mail: ${escapeHtml(order.customerEmail)}` : ''}</p>
     ${buildOrderSummaryHtml(order)}
+    ${order.totalWithoutPix != null ? `<p><strong>Desconto Pix aplicado:</strong> confirme que o pagamento foi feito por Pix. Se a cliente pagar de outro jeito, o total é ${money(order.totalWithoutPix)}.</p>` : ''}
     <p>O estoque já foi reservado. Se a cliente não chamar no WhatsApp, vale entrar em contato.</p>
   `;
 }
@@ -1460,7 +1461,7 @@ async function getOrders() {
            payment_method AS "paymentMethod", delivery_method AS "deliveryMethod",
            address, status, payment_status AS "paymentStatus", tracking_code AS "trackingCode",
            paid_amount AS "paidAmount", refunded_amount AS "refundedAmount",
-           payment_attention AS "paymentAttention", created_at AS "createdAt"
+           payment_attention AS "paymentAttention", discount_label AS "discountLabel", created_at AS "createdAt"
     FROM orders
     ORDER BY created_at DESC
     LIMIT 300
@@ -3316,21 +3317,6 @@ async function handleApi(req, res, pathname) {
       }
       let coupon = PromoEngine.findCoupon(coupons, couponCodeInput);
 
-      // cupom "só 1ª compra": vale pra quem nunca teve um pedido não-cancelado — por
-      // customer_id quando logada, senão pelo telefone informado (visitante). Em vez de
-      // rejeitar o pedido inteiro, só descarta o cupom (mesmo tratamento de "cupom expirou"
-      // que o carrinho já faz) pra não travar o fechamento por causa de um desconto extra.
-      if (coupon && coupon.firstPurchaseOnly) {
-        const priorOrder = customerId
-          ? await pool.query("SELECT 1 FROM orders WHERE customer_id = $1 AND status != 'cancelado' LIMIT 1", [customerId])
-          : await pool.query(
-            `SELECT 1 FROM orders
-              WHERE right(regexp_replace(customer_phone, '[^0-9]', '', 'g'), 11) = $1 AND status != 'cancelado' LIMIT 1`,
-            [customerPhoneDigits]
-          );
-        if (priorOrder.rowCount) coupon = null;
-      }
-
       const id = `pedido-${crypto.randomUUID()}`;
       const client = await pool.connect();
       let items;
@@ -3340,6 +3326,7 @@ async function handleApi(req, res, pathname) {
       let total;
       let isOnlinePayment;
       let discountInfo;
+      let totalWithoutPix = null;
       try {
         await client.query('BEGIN');
         items = [];
@@ -3398,6 +3385,33 @@ async function handleApi(req, res, pathname) {
         // Limite de usos: a linha do cupom fica travada até o COMMIT, então dois pedidos
         // simultâneos com o último uso disponível são contados um depois do outro. Esgotado, o
         // cupom só é descartado (como o de 1ª compra acima) e o total do servidor já sai sem ele.
+        // Cupom "só 1ª compra": vale pra quem nunca teve pedido não cancelado — nem pela conta,
+        // nem pelo telefone, nem pelo e-mail informado (antes bastava trocar de telefone). A
+        // checagem roda dentro da transação, com trava por telefone/e-mail, então dois pedidos
+        // simultâneos da mesma pessoa não ganham o desconto os dois. Em vez de rejeitar o pedido,
+        // só descarta o cupom (mesmo tratamento de "cupom expirou" da sacola).
+        if (coupon && coupon.firstPurchaseOnly) {
+          const lockKeys = [`1a-compra:tel:${customerPhoneDigits}`];
+          if (customerEmail) lockKeys.push(`1a-compra:email:${customerEmail.toLowerCase()}`);
+          if (customerId) lockKeys.push(`1a-compra:conta:${customerId}`);
+          for (const key of lockKeys.sort()) {
+            await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [key]);
+          }
+          const prior = await client.query(
+            `SELECT 1 FROM orders
+              WHERE status != 'cancelado'
+                AND ((customer_id IS NOT NULL AND customer_id = $1)
+                  OR (CASE WHEN length(regexp_replace(customer_phone, '[^0-9]', '', 'g')) IN (12, 13)
+                            AND regexp_replace(customer_phone, '[^0-9]', '', 'g') LIKE '55%'
+                           THEN substr(regexp_replace(customer_phone, '[^0-9]', '', 'g'), 3)
+                           ELSE regexp_replace(customer_phone, '[^0-9]', '', 'g') END) = $2
+                  OR ($3::text IS NOT NULL AND lower(email) = lower($3)))
+              LIMIT 1`,
+            [customerId, customerPhoneDigits, customerEmail]
+          );
+          if (prior.rowCount) coupon = null;
+        }
+
         if (coupon && coupon.maxUses != null) {
           await client.query('SELECT 1 FROM coupons WHERE code = $1 FOR UPDATE', [coupon.code]);
           if (await couponUses(client, coupon.code) >= coupon.maxUses) coupon = null;
@@ -3428,6 +3442,13 @@ async function handleApi(req, res, pathname) {
           }
         }
         total = Math.round((Math.max(0, subtotal - discountAmount) + shippingCost) * 100) / 100;
+        // Desconto Pix é combinado no WhatsApp: se a cliente acabar pagando de outro jeito, a
+        // equipe precisa saber o total sem ele (pode valer outro desconto, como o por quantidade).
+        if (discountInfo && discountInfo.type === 'pix') {
+          const alt = PromoEngine.bestDiscount(subtotal, { coupon, itemCount, payment: 'Cartão de crédito' });
+          const altDiscount = alt ? Math.round(alt.amount * 100) / 100 : 0;
+          totalWithoutPix = Math.round((Math.max(0, subtotal - altDiscount) + shippingCost) * 100) / 100;
+        }
 
         // Sem provedor configurado, ou quando a cliente escolheu uma forma de pagamento manual
         // (Pix combinado, dinheiro etc.), o pedido nasce 'manual' e o pagamento segue combinado
@@ -3461,7 +3482,7 @@ async function handleApi(req, res, pathname) {
       const orderSummary = {
         id, customerName, customerPhone, customerEmail, items, subtotal, discount: discountAmount,
         discountLabel: discountInfo ? discountInfo.label : null, shipping: shippingCost, total,
-        paymentMethod, deliveryMethod, address: deliveryMethod === 'Entrega' ? address : null, isOnlinePayment,
+        paymentMethod, deliveryMethod, address: deliveryMethod === 'Entrega' ? address : null, isOnlinePayment, totalWithoutPix,
       };
       // E-mails saem em segundo plano, depois da resposta: a cliente não fica esperando o
       // provedor de e-mail (e não recarrega a página achando que travou, duplicando o pedido).
