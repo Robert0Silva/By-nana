@@ -1331,9 +1331,6 @@ body.pdp-buy-bar-open .float-whats{bottom:88px;}
 @media (max-width:480px){.sobre-linha li{grid-template-columns:1fr;gap:2px;}}
 .sobre-citacao{margin:22px 0;padding:4px 0 4px 20px;border-left:2px solid var(--wine);font-family:var(--serif);font-style:italic;font-size:clamp(1.3rem,2vw,1.6rem);line-height:1.3;}
 .sobre-assinatura{font-family:var(--serif);font-style:italic;font-size:1.25rem;margin-top:24px;}
-.sobre-familia{margin:8px 0 28px;}
-.sobre-familia img{display:block;width:100%;max-width:440px;height:auto;aspect-ratio:4/5;object-fit:cover;}
-.sobre-familia figcaption{margin-top:12px;font-family:var(--serif);font-style:italic;font-size:1.05rem;color:var(--ink-soft);}
 .cta-final{border-radius:0;margin:0;padding:clamp(76px,9vw,120px) 24px;background:#873246;}
 .cta-final .eyebrow{color:#ead2b0;}
 .cta-final h2{font-size:clamp(2.7rem,5vw,4.8rem);}
