@@ -13,6 +13,11 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 20
+      # O Render não define NODE_ENV sozinho. Em produção, sem SITE_URL válida, links de e-mail
+      # (redefinir senha, carrinho abandonado) deixam de ser montados a partir do Host da
+      # requisição, que pode ser forjado (configuredPublicOrigin em serve.js).
+      - key: NODE_ENV
+        value: production
       # Preenchido à mão, de propósito, e não com fromDatabase: o site só passa para o banco
       # by-nana-db depois que a cópia do Neon for restaurada e conferida (docs/migracao-render.md).
       # Apontar para o banco novo ainda vazio faria o migrate.js cadastrar o catálogo de exemplo.
