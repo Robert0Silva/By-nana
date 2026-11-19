@@ -23,10 +23,12 @@ services:
       # Apontar para o banco novo ainda vazio faria o migrate.js cadastrar o catálogo de exemplo.
       - key: DATABASE_URL
         sync: false
+      # O próprio Render gera um valor aleatório de 256 bits na criação do serviço; ninguém
+      # precisa digitar nem guardar. Trocar o valor depois só desloga clientes e admins.
       - key: SESSION_SECRET
-        sync: false
+        generateValue: true
       - key: ADMIN_SESSION_SECRET
-        sync: false
+        generateValue: true
       # Usados só uma vez por `node db/seed-admin.js` para criar o primeiro admin (owner).
       - key: SEED_ADMIN_NAME
         sync: false
