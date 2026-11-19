@@ -9,8 +9,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,600;1,500&family=Poppins:wght@300;400;500;600&family=Great+Vibes&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/css/style.css?v=20260825" />
-<link rel="stylesheet" href="assets/css/admin.css?v=20260825" />
+<link rel="stylesheet" href="assets/css/style.css?v=20261023" />
+<link rel="stylesheet" href="assets/css/admin.css?v=20261015" />
 </head>
 <body class="admin-body">
 <a class="skip-link" href="#admin-main">Pular para o conteúdo</a>
@@ -20,8 +20,8 @@
     <span class="brand-mark admin-login-mark">By NaNa</span>
     <h1>Painel Admin</h1>
     <p>Entre com seu e-mail e senha para gerenciar o catálogo, pedidos e clientes.</p>
-    <input type="email" id="loginEmail" placeholder="E-mail" autocomplete="username" required />
-    <input type="password" id="loginPassword" placeholder="Senha" autocomplete="current-password" required />
+    <input type="email" id="loginEmail" aria-label="E-mail" placeholder="E-mail" autocomplete="username" required />
+    <input type="password" id="loginPassword" aria-label="Senha" placeholder="Senha" autocomplete="current-password" required />
     <button type="submit" class="btn btn-primary btn-block">Entrar</button>
     <a href="/" class="btn btn-ghost btn-block">Sair</a>
     <p class="admin-error" id="loginError" hidden>E-mail ou senha inválidos.</p>
@@ -30,7 +30,13 @@
 
 <div id="adminApp" class="admin-app" hidden>
   <aside class="admin-sidebar">
-    <a href="/" class="admin-sidebar-brand"><span class="brand-mark">By NaNa</span></a>
+    <div class="admin-sidebar-top">
+      <a href="/" class="admin-sidebar-brand"><span class="brand-mark">By NaNa</span></a>
+      <button type="button" class="btn btn-ghost admin-menu-toggle" id="adminMenuToggle" aria-expanded="false" aria-controls="adminTabs">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+        <span id="adminMenuLabel">Menu</span>
+      </button>
+    </div>
     <nav class="admin-tabs" id="adminTabs">
       <button type="button" class="admin-tab is-active" data-target="dashboard"><span class="admin-tab-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>Dashboard</button>
       <div class="admin-tab-group" data-group="catalogo">
@@ -80,6 +86,7 @@
         <div class="admin-tab-submenu" id="submenu-vendas">
           <button type="button" class="admin-tab" data-target="pedidos">Pedidos</button>
           <button type="button" class="admin-tab" data-target="clientes">Clientes</button>
+          <button type="button" class="admin-tab" data-target="carrinhos">Carrinhos abandonados</button>
           <button type="button" class="admin-tab" data-target="frete">Frete</button>
           <button type="button" class="admin-tab" data-target="avaliacoes">Avaliações</button>
         </div>
@@ -123,7 +130,7 @@
       </div>
       <form class="admin-topbar-search" id="globalSearchForm" role="search">
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-        <input type="search" id="globalSearch" placeholder="Buscar produto, pedido, cliente..." />
+        <input type="search" id="globalSearch" aria-label="Buscar no painel" placeholder="Buscar produto, pedido, cliente..." />
       </form>
       <div class="admin-header-actions">
         <div class="admin-notif-wrap">
@@ -160,6 +167,10 @@
           <button type="button" class="btn btn-ghost" data-admin-jump="novidades">Organizar novidades</button>
         </div>
       </div>
+      <section class="admin-card admin-todo" aria-labelledby="dashTodoTitle">
+        <h2 id="dashTodoTitle">Para fazer hoje</h2>
+        <div class="admin-todo-list" id="dashTodo"><p class="admin-empty-block">Carregando pendências...</p></div>
+      </section>
       <div class="admin-stat-grid">
         <div class="admin-stat-card">
           <span class="admin-stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.5c0-1.1 1.1-2 2.5-2s2.5.7 2.5 1.8c0 2.4-5 1.4-5 3.8 0 1.1 1.1 1.9 2.5 1.9s2.5-.9 2.5-2"/></svg></span>
@@ -218,7 +229,7 @@
         <h2>Categorias</h2>
         <p class="admin-card-hint">Usadas nos filtros, nos cards de "Categorias" da home e no mega-menu do topo. O campo "Grupo" define em qual coluna do mega-menu a categoria aparece — deixe em branco para ela cair numa coluna genérica "Categorias".</p>
         <form id="categoryForm" class="admin-inline-form">
-          <input type="text" id="categoryName" placeholder="Nova categoria (ex: Acessórios)" required />
+          <input type="text" id="categoryName" aria-label="Nome da nova categoria" placeholder="Nova categoria (ex: Acessórios)" required />
           <button type="submit" class="btn btn-primary">Adicionar</button>
         </form>
         <div class="admin-category-list" id="categoryList"></div>
@@ -231,7 +242,7 @@
         <h2>Coleções</h2>
         <p class="admin-card-hint">Opcional: agrupe peças de uma mesma coleção/temporada.</p>
         <form id="collectionForm" class="admin-inline-form">
-          <input type="text" id="collectionName" placeholder="Nova coleção (ex: Verão 2026)" required />
+          <input type="text" id="collectionName" aria-label="Nome da nova coleção" placeholder="Nova coleção (ex: Verão 2026)" required />
           <button type="submit" class="btn btn-primary">Adicionar</button>
         </form>
         <ul class="admin-tag-list" id="collectionList"></ul>
@@ -239,14 +250,14 @@
     </section>
 
     <section class="admin-panel" id="panel-produtos" hidden>
-      <section class="admin-card admin-card-wide admin-product-editor">
+      <section class="admin-card admin-card-wide admin-product-editor" id="productEditorCard" hidden>
         <div class="admin-product-editor-head">
           <div>
             <span class="admin-eyebrow" id="productFormEyebrow">Novo produto</span>
             <h2 id="productFormTitle">Cadastre o produto completo</h2>
             <p class="admin-card-hint">Informações, foto, grade e estoque são salvos juntos.</p>
           </div>
-          <button type="button" class="btn btn-ghost" id="pCancelEdit" hidden>Fechar edição</button>
+          <button type="button" class="btn btn-ghost" id="pCancelEdit">← Voltar para a lista</button>
         </div>
         <div class="admin-product-progress" aria-live="polite">
           <div><span id="pCompletionLabel">0% preenchido</span><span id="pCompletionHint">Comece pelo nome e pela categoria.</span></div>
@@ -367,6 +378,10 @@
             <p class="admin-field-help">O SKU pode ficar vazio. O estoque informado aqui cria o saldo inicial; alterações posteriores ficam registradas no histórico.</p>
           </section>
 
+          <label class="account-check admin-visibility-check">
+            <input type="checkbox" id="pActive" checked />
+            <span><strong>Visível na loja</strong> — desmarque para salvar como rascunho ou tirar do ar sem apagar.</span>
+          </label>
           <div class="admin-form-actions admin-product-savebar">
             <div>
               <strong id="pReviewTitle">Produto pronto para publicar?</strong>
@@ -378,14 +393,21 @@
         </form>
       </section>
 
-      <section class="admin-card admin-card-wide">
+      <section class="admin-card admin-card-wide" id="productListCard">
         <div class="admin-list-heading">
           <div><h2>Produtos no catálogo (<span id="productCount">0</span>)</h2><p class="admin-card-hint">Edite informações, grade e estoque no mesmo lugar.</p></div>
           <button type="button" class="btn btn-primary" id="pNewProduct">＋ Novo produto</button>
         </div>
         <div class="admin-catalog-toolbar">
-          <input type="search" id="productSearch" class="admin-search" placeholder="Buscar por nome, categoria ou coleção..." />
+          <input type="search" id="productSearch" aria-label="Buscar produtos" class="admin-search" placeholder="Buscar por nome, categoria ou coleção..." />
           <select id="productCategoryFilter" class="admin-select" aria-label="Filtrar produtos por categoria"><option value="">Todas as categorias</option></select>
+          <select id="productStatusFilter" class="admin-select" aria-label="Filtrar produtos por situação">
+            <option value="">Todas as situações</option>
+            <option value="visible">Visíveis na loja</option>
+            <option value="hidden">Ocultos / rascunhos</option>
+            <option value="low">Estoque baixo</option>
+            <option value="empty">Esgotados</option>
+          </select>
           <select id="productSort" class="admin-select" aria-label="Ordenar produtos">
             <option value="recent">Mais recentes</option>
             <option value="name">Nome A–Z</option>
@@ -401,7 +423,7 @@
       <section class="admin-card admin-card-wide">
         <h2>Novidades da home</h2>
         <p class="admin-card-hint">Escolha quais peças aparecem na seção "Novidades" da página inicial e em que ordem. Sem nenhuma peça destacada aqui, a seção mostra automaticamente as últimas cadastradas.</p>
-        <input type="search" id="featuredSearch" class="admin-search" placeholder="Buscar produto para destacar..." />
+        <input type="search" id="featuredSearch" aria-label="Buscar produto para Novidades" class="admin-search" placeholder="Buscar produto para destacar..." />
         <div class="admin-featured-list" id="featuredList"></div>
       </section>
     </section>
@@ -410,7 +432,7 @@
       <section class="admin-card admin-card-wide">
         <h2>Leve também (sacola)</h2>
         <p class="admin-card-hint">Escolha quais peças aparecem como sugestão de "leve também" dentro da sacola, e em que ordem — pense em acessórios ou itens de menor valor, não necessariamente relacionados ao que a cliente já colocou no carrinho. Sem nenhuma peça marcada aqui, a sacola mostra automaticamente as de menor preço em estoque.</p>
-        <input type="search" id="upsellSearch" class="admin-search" placeholder="Buscar produto para marcar..." />
+        <input type="search" id="upsellSearch" aria-label="Buscar produto para Leve também" class="admin-search" placeholder="Buscar produto para marcar..." />
         <div class="admin-featured-list" id="upsellList"></div>
       </section>
     </section>
@@ -502,6 +524,12 @@
               <input type="date" id="couponEnd" />
             </label>
           </div>
+          <div class="admin-form-row">
+            <label>
+              Limite de usos (opcional)
+              <input type="number" id="couponMaxUses" min="1" step="1" placeholder="Vazio = ilimitado" />
+            </label>
+          </div>
           <label class="account-check">
             <input type="checkbox" id="couponFirstPurchaseOnly" />
             Válido só na 1ª compra (bloqueado pra quem já tem pedido)
@@ -542,6 +570,16 @@
               <input type="number" id="shippingFreeAbove" min="0" step="0.01" placeholder="Ex: 300" />
             </label>
           </div>
+          <div class="admin-form-row">
+            <label>
+              Prazo mínimo (dias úteis, opcional)
+              <input type="number" id="shippingDaysMin" min="0" max="90" step="1" placeholder="Ex: 3" />
+            </label>
+            <label>
+              Prazo máximo (dias úteis, opcional)
+              <input type="number" id="shippingDaysMax" min="0" max="90" step="1" placeholder="Ex: 7" />
+            </label>
+          </div>
           <label class="account-check">
             <input type="checkbox" id="shippingActive" checked />
             Regra ativa
@@ -568,7 +606,8 @@
       <section class="admin-card admin-card-wide">
         <h2>Pedidos (<span id="orderCount">0</span>)</h2>
         <p class="admin-card-hint">Pedidos fechados pelo cliente na sacola do site, registrados no instante em que ele abre o WhatsApp para confirmar. Atualize o status conforme for atendendo.</p>
-        <input type="search" id="orderSearch" class="admin-search" placeholder="Buscar por nome ou telefone..." />
+        <div class="admin-status-tabs" id="orderStatusTabs" aria-label="Filtrar pedidos por status"></div>
+        <input type="search" id="orderSearch" aria-label="Buscar pedidos" class="admin-search" placeholder="Buscar por nº do pedido, nome, telefone ou peça..." />
         <div class="admin-order-list" id="orderList"></div>
       </section>
     </section>
@@ -578,10 +617,20 @@
         <h2>Clientes (<span id="customerCount">0</span>)</h2>
         <p class="admin-card-hint">Cadastros feitos pelos próprios clientes no site — use como base para ações de CRM (aniversário, novidades, campanhas). O CPF é exibido parcialmente por privacidade.</p>
         <div class="admin-toolbar-row">
-          <input type="search" id="customerSearch" class="admin-search" placeholder="Buscar por nome ou e-mail..." />
+          <input type="search" id="customerSearch" aria-label="Buscar clientes" class="admin-search" placeholder="Buscar por nome ou e-mail..." />
           <button type="button" id="customerExport" class="btn btn-outline">Exportar CSV</button>
         </div>
         <div class="admin-customer-list" id="customerList"></div>
+      </section>
+    </section>
+
+    <section class="admin-panel" id="panel-carrinhos" hidden>
+      <section class="admin-card admin-card-wide">
+        <h2>Carrinhos abandonados (<span id="abandonedCount">0</span>)</h2>
+        <p class="admin-card-hint">Clientes que informaram o e-mail na sacola e não fecharam o pedido (últimos 30 dias). O site manda um lembrete automático por e-mail depois de 2h sem atividade; aqui você acompanha e pode fazer um contato pessoal.</p>
+        <div class="admin-stat-grid admin-abandoned-stats" id="abandonedStats"></div>
+        <div class="admin-status-tabs" id="abandonedTabs" aria-label="Filtrar carrinhos"></div>
+        <div class="admin-customer-list" id="abandonedList"></div>
       </section>
     </section>
 
@@ -608,7 +657,7 @@
       <section class="admin-card admin-card-wide">
         <h2>Avaliações (<span id="reviewCount">0</span>)</h2>
         <p class="admin-card-hint">Avaliações ficam visíveis no site assim que enviadas por clientes que compraram o produto. Remova aqui as que forem inadequadas.</p>
-        <input type="search" id="reviewSearch" class="admin-search" placeholder="Buscar por produto ou cliente..." />
+        <input type="search" id="reviewSearch" aria-label="Buscar avaliações" class="admin-search" placeholder="Buscar por produto ou cliente..." />
         <div class="admin-order-list" id="reviewList"></div>
       </section>
     </section>
@@ -782,7 +831,7 @@
   </div>
 </div>
 
-<script src="assets/js/promo.js?v=20260825"></script>
-<script src="assets/js/admin.js?v=20260825"></script>
+<script src="assets/js/promo.js?v=20261015"></script>
+<script src="assets/js/admin.js?v=20261024"></script>
 </body>
 </html>

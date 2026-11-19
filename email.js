@@ -18,6 +18,8 @@ async function sendEmail({ to, subject, html }) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ from: EMAIL_FROM, to, subject, html }),
+      // sem timeout, uma lentidão do Resend seguraria a requisição de quem chamou (ex.: pedido)
+      signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) {
       console.error(`[email] Resend respondeu ${res.status} ao enviar para ${to}: ${await res.text()}`);

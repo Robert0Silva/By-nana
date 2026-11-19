@@ -4,7 +4,7 @@ const { spawn } = require('node:child_process');
 const path = require('node:path');
 const test = require('node:test');
 const { Pool } = require('pg');
-require('dotenv').config({ quiet: true });
+require('./require-local-db');
 
 // Mesmo esquema de hash usado em serve.js (scryptSync + salt, formato "salt:hash") — os testes
 // abaixo inserem usuários direto no banco pra não depender de credenciais reais de produção.
@@ -65,6 +65,37 @@ test('serve as páginas públicas e os assets principais', async () => {
   }
 });
 
+test('serve Central de Ajuda e Trocas com canonical próprio', async () => {
+  for (const route of ['/ajuda.html', '/trocas-e-devolucoes.html']) {
+    const response = await fetch(`${origin}${route}`);
+    assert.equal(response.status, 200, route);
+    const html = await response.text();
+    assert.match(html, new RegExp(`<link rel="canonical" href="[^"]+${route}"`), route);
+    assert.doesNotMatch(html, /<!--POLICY_CANONICAL-->/, route);
+  }
+});
+
+test('categoria tem página própria com título e canonical, e categoria inexistente dá 404', async () => {
+  const data = await (await fetch(`${origin}/api/data`)).json();
+  const name = data.categories[0];
+  assert.ok(name, 'precisa de ao menos uma categoria cadastrada');
+  const slug = name.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+  const response = await fetch(`${origin}/categoria/${slug}`);
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /<base href="\/" \/>/);
+  assert.ok(html.includes(`<link rel="canonical" href="`) && html.includes(`/categoria/${slug}"`));
+  assert.ok(html.includes(`<title>${name.replace(/&/g, '&amp;')} — By NaNa</title>`));
+
+  const missing = await fetch(`${origin}/categoria/nao-existe-xyz`);
+  assert.equal(missing.status, 404);
+
+  const sitemap = await (await fetch(`${origin}/sitemap.xml`)).text();
+  assert.match(sitemap, /\/ajuda\.html<\/loc>/);
+  assert.match(sitemap, /\/categoria\/[a-z0-9-]+<\/loc>/);
+});
+
 test('assets versionados usam cache longo e variantes WebP são servidas', async () => {
   const css = await fetch(`${origin}/assets/css/style.css?v=20260825`);
   assert.equal(css.status, 200);
@@ -99,6 +130,32 @@ test('não expõe arquivos internos do projeto', async () => {
   for (const route of ['/.env', '/serve.js', '/package.json', '/db/schema.sql']) {
     const response = await fetch(`${origin}${route}`);
     assert.equal(response.status, 404, route);
+  }
+});
+
+// fetch() normaliza "%2e%2e" antes de enviar, então o caminho cru vai por http.request —
+// é assim que um atacante (curl --path-as-is) chegaria ao servidor.
+function rawGetStatus(rawPath) {
+  return new Promise((resolve, reject) => {
+    const req = require('node:http').request({ host: '127.0.0.1', port, path: rawPath, method: 'GET' }, (res) => {
+      res.resume();
+      resolve(res.statusCode);
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+test('não permite path traversal codificado dentro de /assets/', async () => {
+  for (const route of [
+    '/assets/..%2fserve.js',
+    '/assets/%2e%2e/serve.js',
+    '/assets/%2E%2E/package.json',
+    '/assets/css/..%2f..%2f.env',
+    '/assets/..%5cserve.js',
+    '/assets/./..%2fdb/schema.sql',
+  ]) {
+    assert.equal(await rawGetStatus(route), 404, route);
   }
 });
 
@@ -159,7 +216,7 @@ test('CSP não permite scripts ou estilos inline inseguros', async () => {
 });
 
 test('bloqueia acesso anônimo a dados administrativos', async () => {
-  for (const route of ['/api/orders/list', '/api/customers/list', '/api/admin/dashboard']) {
+  for (const route of ['/api/orders/list', '/api/customers/list', '/api/admin/dashboard', '/api/admin/products/list', '/api/products/visibility', '/api/admin/abandoned-carts/list']) {
     const response = await fetch(`${origin}${route}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -513,7 +570,7 @@ test('cupom válido aplica desconto no pedido; código inexistente é ignorado s
     await pool.query('UPDATE product_variants SET stock = $1 WHERE id = $2', [Math.max(originalStock, 5), variantId]);
 
     const placeOrder = async (couponCodeToUse) => {
-      const phone = `31900${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 10)}`;
+      const phone = `31900${Date.now().toString().slice(-5)}${Math.floor(Math.random() * 10)}`; // 11 dígitos, como um celular real
       const response = await fetch(`${origin}/api/orders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -521,7 +578,7 @@ test('cupom válido aplica desconto no pedido; código inexistente é ignorado s
           customerName: 'Teste Cupom',
           customerPhone: phone,
           items: [{ id: variant.product_id, variantId, qty: 1, name: variant.name }],
-          paymentMethod: 'Dinheiro', // evita o desconto automático de Pix, que mascararia o do cupom
+          paymentMethod: 'Cartão de crédito', // evita o desconto automático de Pix, que mascararia o do cupom
           deliveryMethod: 'Retirada em loja',
           couponCode: couponCodeToUse,
         }),
@@ -555,6 +612,232 @@ test('cupom válido aplica desconto no pedido; código inexistente é ignorado s
     }
     await pool.query('DELETE FROM coupons WHERE code = $1', [couponCode]);
     await pool.query('DELETE FROM admin_users WHERE id = $1', [adminId]);
+    await pool.end();
+  }
+});
+
+// Produto oculto (products.active = false) sai da vitrine, da página de produto e do checkout,
+// mas continua visível no painel e pode ser republicado — insere um produto descartável direto
+// no banco pra não mexer na vitrine real.
+test('produto oculto some da loja e do checkout, mas o painel ainda o enxerga e republica', async () => {
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const productId = `teste-oculto-${Date.now()}`;
+  const variantId = crypto.randomUUID();
+  const adminId = crypto.randomUUID();
+  const email = `admin-oculto-${Date.now()}@example.com`;
+  const password = 'senhaDeTeste123';
+  try {
+    const category = await pool.query('SELECT id FROM categories ORDER BY id LIMIT 1');
+    assert.ok(category.rows.length, 'precisa existir ao menos uma categoria');
+    await pool.query(
+      `INSERT INTO products (id, name, category_id, price, img, description, active)
+       VALUES ($1, 'Produto Oculto de Teste', $2, 10, 'assets/img/processed/logo.png', 'teste', false)`,
+      [productId, category.rows[0].id]
+    );
+    await pool.query('INSERT INTO product_variants (id, product_id, size, stock) VALUES ($1, $2, $3, 5)', [variantId, productId, 'U']);
+    await pool.query(
+      'INSERT INTO admin_users (id, name, email, password_hash, role) VALUES ($1,$2,$3,$4,$5)',
+      [adminId, 'Admin Teste', email, hashPasswordForTest(password), 'staff']
+    );
+
+    const publicData = await (await fetch(`${origin}/api/data`)).json();
+    assert.ok(!publicData.products.some((p) => p.id === productId), 'oculto não pode aparecer em /api/data');
+    const page = await fetch(`${origin}/produto/${productId}`);
+    assert.equal(page.status, 404);
+
+    const order = await fetch(`${origin}/api/orders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        customerName: 'Teste Automatizado',
+        customerPhone: `31900${Date.now().toString().slice(-6)}`,
+        items: [{ id: productId, variantId, qty: 1, name: 'Produto Oculto de Teste' }],
+        paymentMethod: 'Pix',
+        deliveryMethod: 'Retirada em loja',
+      }),
+    });
+    assert.equal(order.status, 400, 'checkout não pode vender produto oculto');
+
+    const login = await (await fetch(`${origin}/api/admin/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    })).json();
+    const adminList = await (await fetch(`${origin}/api/admin/products/list`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adminToken: login.token }),
+    })).json();
+    const hidden = adminList.products.find((p) => p.id === productId);
+    assert.ok(hidden, 'o painel precisa listar o produto oculto');
+    assert.equal(hidden.active, false);
+
+    const show = await fetch(`${origin}/api/products/visibility`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adminToken: login.token, id: productId, active: true }),
+    });
+    assert.equal(show.status, 200);
+    const afterShow = await (await fetch(`${origin}/api/data`)).json();
+    assert.ok(afterShow.products.some((p) => p.id === productId), 'republicado deve voltar para /api/data');
+  } finally {
+    await pool.query("DELETE FROM admin_activity_log WHERE entity_id = $1", [productId]).catch(() => {});
+    await pool.query('DELETE FROM products WHERE id = $1', [productId]);
+    await pool.query('DELETE FROM admin_users WHERE id = $1', [adminId]);
+    await pool.end();
+  }
+});
+
+// CPF e data de nascimento são opcionais — cadastro só com nome, contato e senha funciona.
+test('cadastro sem CPF e sem data de nascimento é aceito', async () => {
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const email = `cliente-sem-cpf-${Date.now()}@example.com`;
+  try {
+    const response = await fetch(`${origin}/api/customers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firstName: 'Cliente',
+        lastName: 'Sem CPF',
+        email,
+        phone: '31999997777',
+        password: 'senhaDeTeste123',
+        privacyAccepted: true,
+      }),
+    });
+    const data = await response.json();
+    assert.equal(response.status, 201, JSON.stringify(data));
+    const row = await pool.query('SELECT cpf, birth_date FROM customers WHERE lower(email) = $1', [email]);
+    assert.equal(row.rows[0].cpf, null);
+    assert.equal(row.rows[0].birth_date, null);
+  } finally {
+    await pool.query('DELETE FROM customers WHERE lower(email) = $1', [email]);
+    await pool.end();
+  }
+});
+
+// Cupons de parceiras/agendados/inativos não podem vazar pela vitrine: /api/data só traz o de
+// boas-vindas vigente, e o resto só é revelado digitando o código exato.
+test('cupons privados não aparecem em /api/data, mas validam pelo código', async () => {
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const code = `PRIVADO${Date.now().toString(36).toUpperCase()}`;
+  try {
+    await pool.query(
+      `INSERT INTO coupons (code, discount_type, discount_value, active, first_purchase_only) VALUES ($1, 'percent', 12, true, false)`,
+      [code]
+    );
+    const catalog = await (await fetch(`${origin}/api/data`)).json();
+    assert.ok(!catalog.coupons.some((c) => c.code === code), 'cupom privado não pode vir na vitrine');
+    assert.ok(catalog.coupons.every((c) => c.firstPurchaseOnly && c.active), 'só o cupom de boas-vindas ativo é público');
+
+    const valid = await fetch(`${origin}/api/coupons/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '203.0.113.10' },
+      body: JSON.stringify({ code: code.toLowerCase() }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).coupon.code, code);
+
+    const invalid = await fetch(`${origin}/api/coupons/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '203.0.113.10' },
+      body: JSON.stringify({ code: 'NAO-EXISTE-123' }),
+    });
+    assert.equal(invalid.status, 404);
+  } finally {
+    await pool.query('DELETE FROM coupons WHERE code = $1', [code]);
+    await pool.end();
+  }
+});
+
+// Sem limite, um script reservava todo o estoque com pedidos falsos. O IP vem do
+// X-Forwarded-For (último hop), então um IP de documentação isola este teste dos demais.
+test('/api/orders limita pedidos em sequência do mesmo IP', async () => {
+  const statuses = [];
+  for (let i = 0; i < 11; i += 1) {
+    const response = await fetch(`${origin}/api/orders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '198.51.100.77' },
+      body: JSON.stringify({}),
+    });
+    statuses.push(response.status);
+  }
+  assert.ok(statuses.slice(0, 10).every((status) => status === 400), statuses.join(','));
+  assert.equal(statuses[10], 429);
+});
+
+test('/api/orders recusa telefone inválido, pedido gigante e corpo grande demais', async () => {
+  const post = (body, ip) => fetch(`${origin}/api/orders`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip },
+    body: typeof body === 'string' ? body : JSON.stringify(body),
+  });
+  const base = { customerName: 'Teste', paymentMethod: 'Pix', deliveryMethod: 'Retirada em loja' };
+  const badPhone = await post({ ...base, customerPhone: '123', items: [{ id: 'x', variantId: 'y', qty: 1 }] }, '198.51.100.80');
+  assert.equal(badPhone.status, 400);
+  assert.match((await badPhone.json()).error, /telefone/i);
+
+  const tooMany = await post({ ...base, customerPhone: '31999990000', items: [{ id: 'x', variantId: 'y', qty: 500 }] }, '198.51.100.81');
+  assert.equal(tooMany.status, 400);
+
+  const huge = await post(JSON.stringify({ ...base, customerPhone: '31999990000', padding: 'x'.repeat(200 * 1024) }), '198.51.100.82');
+  assert.equal(huge.status, 413);
+});
+
+// A mensagem do WhatsApp é montada com o que o servidor devolve; o cupom só é gravado no
+// pedido quando foi ele o desconto aplicado (Pix/quantidade não se somam e podem vencer).
+test('pedido devolve totais do servidor e não grava cupom que não foi aplicado', async () => {
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const code = `CUPOM3${Date.now().toString(36).toUpperCase()}`;
+  let orderId;
+  let variantId;
+  let originalStock = null;
+  try {
+    const { rows } = await pool.query(
+      `SELECT v.id AS variant_id, v.stock, v.size, v.color, p.id AS product_id, p.name, p.price
+         FROM product_variants v JOIN products p ON p.id = v.product_id
+        WHERE p.active AND p.price IS NOT NULL ORDER BY p.created_at LIMIT 1`
+    );
+    assert.ok(rows.length, 'precisa de uma variação com preço');
+    const variant = rows[0];
+    variantId = variant.variant_id;
+    originalStock = variant.stock;
+    await pool.query('UPDATE product_variants SET stock = $1 WHERE id = $2', [Math.max(originalStock, 5), variantId]);
+    // 3% de cupom perde para os 5% do Pix
+    await pool.query(`INSERT INTO coupons (code, discount_type, discount_value, active) VALUES ($1, 'percent', 3, true)`, [code]);
+
+    const response = await fetch(`${origin}/api/orders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '198.51.100.90' },
+      body: JSON.stringify({
+        customerName: 'Teste Totais',
+        customerPhone: `31900${Date.now().toString().slice(-6)}`,
+        items: [{ id: variant.product_id, variantId, qty: 1, name: variant.name, variantLabel: 'rótulo forjado' }],
+        paymentMethod: 'Pix',
+        deliveryMethod: 'Retirada em loja',
+        couponCode: code,
+      }),
+    });
+    const data = await response.json();
+    assert.equal(response.status, 201, JSON.stringify(data));
+    orderId = data.orderId;
+    assert.match(data.orderCode, /^#[0-9A-F]{8}$/);
+    const expectedDiscount = Math.round(Number(variant.price) * 0.05 * 100) / 100;
+    assert.ok(Math.abs(data.discount - expectedDiscount) < 0.01, `desconto Pix esperado ${expectedDiscount}, veio ${data.discount}`);
+    assert.ok(Math.abs(data.total - (Number(variant.price) - expectedDiscount)) < 0.01);
+    assert.equal(data.items[0].variantLabel, [variant.size, variant.color].filter(Boolean).join(' - '));
+
+    const row = await pool.query('SELECT coupon_code AS "couponCode" FROM orders WHERE id = $1', [orderId]);
+    assert.equal(row.rows[0].couponCode, null);
+  } finally {
+    if (orderId) {
+      await pool.query('DELETE FROM inventory_movements WHERE order_id = $1', [orderId]);
+      await pool.query('DELETE FROM orders WHERE id = $1', [orderId]);
+    }
+    if (variantId && originalStock !== null) {
+      await pool.query('UPDATE product_variants SET stock = $1 WHERE id = $2', [originalStock, variantId]);
+    }
+    await pool.query('DELETE FROM coupons WHERE code = $1', [code]);
     await pool.end();
   }
 });

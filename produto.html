@@ -18,7 +18,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,600;1,500&family=Poppins:wght@300;400;500;600&family=Great+Vibes&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/assets/css/style.css?v=20260825" />
+<link rel="stylesheet" href="/assets/css/style.css?v=20261023" />
 </head>
 <body data-page="produto">
 
@@ -150,6 +150,17 @@
           </div>
           <button class="text-fav-btn" id="pdpFav">♡ Salvar nos favoritos</button>
 
+          <form class="pdp-ship" id="pdpShipForm" hidden>
+            <label for="pdpShipCep">Calcular frete e prazo</label>
+            <div class="pdp-ship-row">
+              <input type="text" id="pdpShipCep" inputmode="numeric" autocomplete="postal-code" maxlength="9" placeholder="00000-000" />
+              <button type="submit" class="btn btn-ghost">Calcular</button>
+            </div>
+            <a class="pdp-ship-help" href="https://buscacepinter.correios.com.br/app/endereco/index.php" target="_blank" rel="noopener">Não sei meu CEP</a>
+            <a class="pdp-ship-help" href="/trocas-e-devolucoes.html">Troca de tamanho em até 7 dias</a>
+            <div class="pdp-ship-result" id="pdpShipResult" aria-live="polite"></div>
+          </form>
+
           <details class="pdp-accordion" id="pdpMeasurementsBlock" hidden>
             <summary>Medidas deste tamanho</summary>
             <p class="pdp-accordion-text" id="pdpMeasurements"></p>
@@ -191,7 +202,7 @@
             <button type="button" data-value="4" aria-label="4 estrelas">★</button>
             <button type="button" data-value="5" aria-label="5 estrelas">★</button>
           </div>
-          <textarea id="pdpReviewComment" rows="3" maxlength="1000" placeholder="Conte como foi sua experiência (opcional)"></textarea>
+          <textarea id="pdpReviewComment" aria-label="Comentário da avaliação" rows="3" maxlength="1000" placeholder="Conte como foi sua experiência (opcional)"></textarea>
           <button type="submit" class="btn btn-primary" id="pdpReviewSubmit">Enviar avaliação</button>
           <p class="account-form-msg" id="pdpReviewMsg" hidden></p>
         </form>
@@ -213,7 +224,7 @@
     <p class="footer-note">By Nana Comércio de Vestuário Ltda · CNPJ 52.505.441/0001-49</p>
     <p class="footer-note">Av. Guanabara, 237 · bynanaloja@gmail.com · Atendimento das 14h às 19h ou com horário agendado</p>
     <p class="footer-note">Envio em até 3 dias úteis por aplicativo ou Correios · Retirada das 14h às 19h</p>
-    <p class="footer-note"><a href="/politica-privacidade.html">Política de Privacidade e Termos de Uso</a></p>
+    <p class="footer-note"><a href="/ajuda.html">Central de Ajuda</a> · <a href="/trocas-e-devolucoes.html">Trocas e Devoluções</a> · <a href="/politica-privacidade.html">Política de Privacidade e Termos de Uso</a></p>
     <a href="/admin" class="footer-admin-link">Área administrativa</a>
   </div>
 </footer>
@@ -227,6 +238,12 @@
     </button>
   </div>
   <div class="bag-scroll">
+    <div class="bag-confirmation" id="bagConfirmation" role="status" hidden>
+      <p class="bag-confirmation-title">Pedido <strong id="bagConfirmationCode"></strong> registrado 🤍</p>
+      <p class="bag-confirmation-text">Abrimos o WhatsApp com o resumo do seu pedido. É só enviar a mensagem para a gente confirmar disponibilidade, pagamento e entrega.</p>
+      <a class="btn btn-primary btn-block" id="bagConfirmationWhats" href="#" target="_blank" rel="noopener">Abrir o WhatsApp de novo</a>
+      <button type="button" class="account-link bag-confirmation-orders" id="bagConfirmationOrders" hidden>Acompanhar em Minha conta › Pedidos</button>
+    </div>
     <div class="bag-shipping-progress" id="bagShippingProgress" hidden>
       <p class="bag-shipping-progress-text" id="bagShippingProgressText"></p>
       <div class="bag-shipping-progress-track"><span id="bagShippingProgressFill"></span></div>
@@ -236,6 +253,11 @@
     <div class="bag-upsell" id="bagUpsell" hidden><!-- gerado via JS --></div>
 
     <div class="bag-details" id="bagDetails" hidden>
+      <ol class="bag-steps" id="bagSteps" aria-label="Etapas para finalizar">
+        <li class="is-done" data-step="bag"><span>1</span>Sacola</li>
+        <li data-step="contact"><span>2</span>Seus dados</li>
+        <li data-step="delivery"><span>3</span>Entrega e pagamento</li>
+      </ol>
       <div class="bag-field-group">
         <span class="bag-group-label">Seus dados</span>
         <div class="bag-contact-fields">
@@ -248,28 +270,28 @@
       <div class="bag-field-group">
         <span class="bag-group-label">Forma de pagamento</span>
         <div class="bag-chip-row" id="paymentRow">
-          <label class="bag-chip"><input type="radio" name="payment" value="Pix" />Pix</label>
-          <label class="bag-chip"><input type="radio" name="payment" value="Cartão de crédito" />Cartão de crédito</label>
-          <label class="bag-chip"><input type="radio" name="payment" value="Cartão de débito" />Cartão de débito</label>
-          <label class="bag-chip payment-online-chip" hidden><input type="radio" name="payment" value="Pagamento online (Pix/cartão)" />Pagar agora (Pix/cartão)</label>
+          <label class="bag-chip"><input type="radio" name="payment" autocomplete="off" value="Pix" />Pix</label>
+          <label class="bag-chip"><input type="radio" name="payment" autocomplete="off" value="Cartão de crédito" />Cartão de crédito</label>
+          <label class="bag-chip"><input type="radio" name="payment" autocomplete="off" value="Cartão de débito" />Cartão de débito</label>
+          <label class="bag-chip payment-online-chip" hidden><input type="radio" name="payment" autocomplete="off" value="Pagamento online (Pix/cartão)" />Pagar agora (Pix/cartão)</label>
         </div>
       </div>
 
       <div class="bag-field-group">
         <span class="bag-group-label">Retirada ou entrega?</span>
         <div class="bag-chip-row" id="deliveryRow">
-          <label class="bag-chip"><input type="radio" name="delivery" value="Retirada em loja" />Retirada em loja</label>
-          <label class="bag-chip"><input type="radio" name="delivery" value="Entrega" />Entrega</label>
+          <label class="bag-chip"><input type="radio" name="delivery" autocomplete="off" value="Retirada em loja" />Retirada em loja</label>
+          <label class="bag-chip"><input type="radio" name="delivery" autocomplete="off" value="Entrega" />Entrega</label>
         </div>
       </div>
 
       <div class="bag-field-group">
         <label class="account-check">
-          <input type="checkbox" id="bagIsGift" />
+          <input type="checkbox" id="bagIsGift" autocomplete="off" />
           É um presente?
         </label>
         <div class="bag-gift-message" id="bagGiftMessageWrap" hidden>
-          <textarea id="bagGiftMessage" rows="2" placeholder="Mensagem para o cartão (opcional)"></textarea>
+          <textarea id="bagGiftMessage" aria-label="Mensagem para o cartão de presente" rows="2" placeholder="Mensagem para o cartão (opcional)"></textarea>
         </div>
       </div>
 
@@ -310,11 +332,11 @@
       <span id="bagShippingValue">R$ 0,00</span>
     </div>
     <div class="bag-total">
-      <span>Total (itens com preço)</span>
+      <span id="bagTotalLabel">Total</span>
       <strong id="bagTotal">R$ 0,00</strong>
     </div>
-    <p class="bag-note">Peças "sob consulta" têm valor combinado no WhatsApp.</p>
-    <p class="bag-form-error" id="bagFormError" hidden></p>
+    <p class="bag-note" id="bagConsultNote" hidden>Peças "sob consulta" têm valor combinado no WhatsApp e não entram no total.</p>
+    <p class="bag-form-error" id="bagFormError" role="alert" hidden></p>
     <p class="bag-security-badge">🔒 Compra 100% segura</p>
     <a href="#" id="bagCheckout" target="_blank" rel="noopener" class="btn btn-primary btn-block">Finalizar no WhatsApp</a>
   </div>
@@ -365,10 +387,10 @@
       <label>E-mail<input type="email" id="suEmail" required autocomplete="email" /></label>
       <div class="account-form-row">
         <label>Telefone<input type="tel" id="suPhone" required autocomplete="tel" placeholder="(31) 90000-0000" /></label>
-        <label>Data de nascimento<input type="date" id="suBirthDate" required autocomplete="bday" /></label>
+        <label>Nascimento <small>(opcional)</small><input type="date" id="suBirthDate" autocomplete="bday" /></label>
       </div>
       <div class="account-form-row">
-        <label>CPF<input type="text" id="suCpf" required inputmode="numeric" placeholder="000.000.000-00" maxlength="14" /></label>
+        <label>CPF <small>(opcional)</small><input type="text" id="suCpf" inputmode="numeric" placeholder="000.000.000-00" maxlength="14" /></label>
         <label>Gênero
           <select id="suGender">
             <option value="nao_informado">Prefiro não informar</option>
@@ -526,8 +548,8 @@
   <button class="add-btn" id="pdpBuyBarAdd">Adicionar à sacola</button>
 </div>
 
-<script src="/assets/js/analytics.js?v=20260825"></script>
-<script src="/assets/js/promo.js?v=20260825"></script>
-<script src="/assets/js/main.js?v=20260825"></script>
+<script src="/assets/js/analytics.js?v=20261015"></script>
+<script src="/assets/js/promo.js?v=20261015"></script>
+<script src="/assets/js/main.js?v=20261026"></script>
 </body>
 </html>

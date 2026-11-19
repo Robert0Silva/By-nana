@@ -496,6 +496,19 @@
 .admin-order-payment-badge.pay-paid{background:#e3f3e6;color:#2f7d4f;}
 .admin-order-payment-badge.pay-failed{background:#f7e3d8;color:var(--wine);}
 .admin-order-payment-badge.pay-refunded{background:#eee;color:var(--ink-soft);}
+.admin-order-payment-badge.pay-refund_pending{background:#fdf1dc;color:var(--camel);}
+.admin-order-payment-badge.pay-partially_refunded{background:#eee;color:var(--ink-soft);}
+.admin-order-payment-badge.pay-refund_failed{background:#f7e3d8;color:var(--wine);}
+.admin-order-finance{flex-basis:100%;border-top:1px solid rgba(0,0,0,.08);padding-top:10px;margin-top:4px;display:flex;flex-direction:column;gap:10px;}
+.admin-order-finance[hidden]{display:none;}
+.admin-order-finance-alert{background:#f7e3d8;color:var(--wine);padding:8px 12px;border-radius:10px;font-size:.8rem;margin:0;}
+.admin-order-finance-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px 16px;margin:0;}
+.admin-order-finance-grid dt{font-size:.7rem;color:var(--ink-soft);}
+.admin-order-finance-grid dd{margin:0;font-size:.85rem;font-weight:600;word-break:break-all;}
+.admin-order-finance-actions{display:flex;flex-wrap:wrap;gap:8px;}
+.admin-order-finance-title{font-size:.8rem;margin:0;}
+.admin-order-finance-events{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:.8rem;max-height:260px;overflow:auto;}
+.admin-order-finance-events li{display:flex;flex-direction:column;gap:2px;}
 .admin-order-meta{font-size:.76rem;color:var(--ink-soft);}
 .admin-order-address{font-size:.76rem;color:var(--ink-soft);}
 .admin-order-items{font-size:.78rem;color:var(--ink-soft);margin:2px 0 0;}
@@ -699,7 +712,8 @@
 #pCompletionLabel{font-weight:700;color:var(--ink);}
 .admin-progress-track{height:7px;border-radius:99px;background:var(--cream);overflow:hidden;}
 .admin-progress-track span{display:block;width:0;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--camel),var(--gold));transition:width .25s ease;}
-.admin-catalog-toolbar{display:grid;grid-template-columns:minmax(220px,1fr) 210px 180px;gap:10px;margin:16px 0 20px;}
+.admin-catalog-toolbar{display:grid;grid-template-columns:minmax(200px,1fr) 190px 190px 170px;gap:10px;margin:16px 0 20px;}
+@media (max-width:1250px){ .admin-catalog-toolbar{grid-template-columns:1fr 1fr;} }
 .admin-catalog-toolbar .admin-search{max-width:none;margin:0;border-radius:9px;}
 .admin-select{width:100%;padding:10px 13px;border-radius:9px;border:1px solid var(--line);background:var(--cream);color:var(--ink);font-family:var(--sans);font-size:.8rem;}
 .admin-product-item{border-radius:10px;background:#faf9f6;transition:transform .2s ease,box-shadow .2s ease;}
@@ -714,3 +728,146 @@
   .admin-product-progress{padding:0 18px 18px;}
   .admin-product-progress>div:first-child{flex-direction:column;gap:3px;}
 }
+
+/* ---------- toasts + diálogo de confirmação (substituem alert()/confirm()) ---------- */
+.admin-toast-stack{
+  position:fixed;right:20px;bottom:calc(20px + env(safe-area-inset-bottom, 0px));z-index:300;
+  display:flex;flex-direction:column;gap:10px;max-width:min(380px, calc(100vw - 40px));
+}
+.admin-toast{
+  display:flex;align-items:center;gap:12px;padding:12px 14px 12px 16px;border-radius:12px;
+  background:var(--ink);color:var(--white);font-size:.86rem;box-shadow:var(--shadow);
+  border-left:4px solid #3d8b5a;animation:adminToastIn .2s ease-out;
+}
+.admin-toast.is-error{border-left-color:#d0566b;}
+.admin-toast.is-info{border-left-color:var(--gold);}
+.admin-toast span{flex:1;line-height:1.45;}
+.admin-toast-action{
+  background:none;border:1px solid rgba(255,255,255,.4);color:var(--white);border-radius:999px;
+  padding:4px 12px;font-family:var(--sans);font-size:.78rem;font-weight:600;cursor:pointer;
+}
+.admin-toast-close{background:none;border:none;color:rgba(255,255,255,.7);cursor:pointer;font-size:.8rem;padding:4px;}
+@keyframes adminToastIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:none;}}
+
+.admin-confirm-overlay{
+  position:fixed;inset:0;z-index:310;background:rgba(30,28,26,.45);
+  display:flex;align-items:center;justify-content:center;padding:20px;
+}
+.admin-confirm{
+  background:var(--white);border-radius:var(--radius);box-shadow:var(--shadow);
+  padding:26px 24px 20px;width:100%;max-width:420px;
+}
+.admin-confirm p{color:var(--ink);font-size:.95rem;margin-bottom:20px;}
+.admin-confirm-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;}
+.btn-danger{background:var(--wine);color:var(--white);}
+.btn-danger:hover{background:#5e1f2c;box-shadow:var(--shadow);}
+
+/* ---------- pedidos: abas de status + ação de WhatsApp ---------- */
+.admin-status-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;}
+.admin-status-tab{
+  display:inline-flex;align-items:center;gap:7px;padding:7px 14px;border-radius:999px;
+  border:1px solid var(--line);background:var(--white);color:var(--ink-soft);cursor:pointer;
+  font-family:var(--sans);font-size:.8rem;font-weight:500;
+}
+.admin-status-tab span{
+  min-width:20px;padding:1px 6px;border-radius:999px;background:var(--cream);font-size:.72rem;font-weight:700;text-align:center;
+}
+.admin-status-tab:hover{border-color:var(--ink);color:var(--ink);}
+.admin-status-tab.is-active{background:var(--ink);border-color:var(--ink);color:var(--white);}
+.admin-status-tab.is-active span{background:rgba(255,255,255,.18);}
+.admin-order-whats{padding:8px 14px;font-size:.78rem;white-space:nowrap;}
+
+/* ---------- lista de produtos: selos, ocultos e estoque rápido ---------- */
+.admin-product-item-media{position:relative;}
+.admin-product-badges{position:absolute;top:8px;left:8px;right:8px;display:flex;gap:6px;flex-wrap:wrap;}
+.admin-product-badge{
+  font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.03em;
+  padding:4px 9px;border-radius:999px;background:var(--white);color:var(--ink);box-shadow:var(--shadow-soft);
+}
+.admin-product-badge.is-hidden{background:var(--ink);color:var(--white);}
+.admin-product-badge.is-low{background:#fdf1dc;color:#8a5b18;}
+.admin-product-badge.is-empty{background:#f7e3d8;color:var(--wine);}
+.admin-product-item.is-hidden img{opacity:.55;filter:grayscale(.4);}
+.admin-product-item-visibility{color:var(--ink-soft) !important;}
+.admin-product-item-visibility:hover{background:var(--ink) !important;color:#fff !important;border-color:var(--ink) !important;}
+.admin-quick-stock{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px;}
+.admin-quick-stock-rows{display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:6px;}
+.admin-quick-stock-row{display:flex;flex-direction:column;gap:3px;font-size:.7rem;color:var(--ink-soft);font-weight:600;}
+.admin-quick-stock-row input{
+  width:100%;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--white);
+  font-family:var(--sans);font-size:.85rem;color:var(--ink);
+}
+.admin-quick-stock-row.is-empty input{border-color:#e4b5a2;background:#fdf5f1;}
+.admin-product-item .admin-quick-stock-save{margin-top:0;background:var(--ink);color:var(--white);border-color:var(--ink);font-weight:600;}
+.admin-product-item .admin-quick-stock-save:hover{background:var(--wine);border-color:var(--wine);}
+.admin-visibility-check{margin:4px 0 14px;padding:12px 14px;border-radius:10px;background:var(--cream);font-size:.84rem;}
+
+/* ---------- dashboard: "Para fazer hoje" ---------- */
+.admin-todo{margin-bottom:22px;}
+.admin-todo-list{display:flex;flex-direction:column;gap:8px;}
+.admin-todo-item{
+  display:flex;align-items:center;gap:12px;padding:10px 12px 10px 14px;border-radius:12px;
+  background:var(--cream);border:1px solid var(--line);flex-wrap:wrap;
+}
+.admin-todo-dot{width:9px;height:9px;border-radius:50%;flex:none;background:var(--gold);}
+.admin-todo-item.is-urgent .admin-todo-dot{background:var(--wine);}
+.admin-todo-item.is-warn .admin-todo-dot{background:var(--camel);}
+.admin-todo-text{flex:1 1 220px;font-size:.86rem;color:var(--ink);}
+.admin-todo-action{padding:7px 14px;font-size:.78rem;}
+.admin-todo-done{margin:0;font-size:.88rem;color:#2f7d4f;font-weight:500;}
+
+/* ---------- galeria pendente (produto novo, enviada ao salvar) ---------- */
+.admin-gallery-thumb.is-pending img{opacity:.75;}
+.admin-gallery-pending-tag{
+  position:absolute;left:6px;bottom:6px;padding:2px 7px;border-radius:999px;
+  background:var(--ink);color:#fff;font-size:.6rem;font-weight:600;text-transform:uppercase;letter-spacing:.03em;
+}
+.admin-gallery-remove-pending{position:absolute;top:4px;right:4px;display:grid;place-items:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:rgba(28,22,18,.72);color:#fff;cursor:pointer;font-size:.7rem;}
+.admin-gallery-remove-pending:hover{background:var(--wine);}
+
+/* ---------- celular/tablet: menu vira gaveta recolhível atrás do botão "Menu" ---------- */
+.admin-sidebar-top{display:flex;align-items:center;justify-content:space-between;gap:12px;}
+.admin-menu-toggle{display:none;}
+@media (max-width:1050px){
+  .admin-sidebar{position:sticky;top:0;z-index:30;gap:0;padding:10px 16px;box-shadow:0 6px 18px -14px rgba(30,28,26,.4);}
+  .admin-menu-toggle{display:inline-flex;align-items:center;gap:8px;padding:8px 14px;font-size:.78rem;}
+  .admin-sidebar-brand .brand-mark{font-size:1.4rem;}
+  .admin-sidebar:not(.is-open) .admin-tabs,
+  .admin-sidebar:not(.is-open) .admin-sidebar-viewsite{display:none;}
+  .admin-sidebar.is-open .admin-tabs{
+    flex-direction:column;flex-wrap:nowrap;gap:2px;margin-top:12px;
+  }
+  .admin-sidebar.is-open{max-height:100vh;max-height:100dvh;overflow-y:auto;overscroll-behavior:contain;}
+  .admin-sidebar.is-open .admin-tab-group{border-top:1px solid var(--line);padding-top:6px;margin-top:4px;}
+  .admin-sidebar.is-open .admin-tab-group-btn{
+    width:100%;border:0;background:transparent;padding:8px 6px 2px;pointer-events:none;
+    font-size:.68rem;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-soft);
+  }
+  .admin-sidebar.is-open .admin-tab-group-btn .chevron{display:none;}
+  .admin-sidebar.is-open .admin-tab-submenu{
+    position:static;opacity:1;pointer-events:auto;transform:none;min-width:0;
+    border:0;box-shadow:none;padding:0;background:transparent;
+  }
+  .admin-sidebar.is-open .admin-tab{padding:11px 12px;font-size:.9rem;}
+  .admin-sidebar.is-open .admin-sidebar-viewsite{margin-top:8px;}
+  /* com a barra do menu fixa no topo, o cabeçalho da página rola junto com o conteúdo */
+  .admin-header{position:static;}
+}
+@media (max-width:600px){
+  .admin-topbar-heading .admin-sub{display:none;}
+  .admin-header{padding:12px 16px;}
+  .admin-header-actions .btn{padding:8px 14px;font-size:.72rem;}
+  .admin-main{padding-top:18px;}
+  .admin-card{padding:18px 16px;}
+  .admin-order-item{flex-direction:column;align-items:stretch;}
+  .admin-order-actions{flex-direction:row;align-items:center;justify-content:space-between;flex-wrap:wrap;}
+  .admin-status-tabs{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;margin-inline:-2px;}
+  .admin-status-tab{flex:none;}
+}
+
+/* status "enviado" + campo do diálogo de rastreio */
+.admin-order-status-pill.st-enviado{background:#e3eefb;color:#24507f;}
+.admin-order-item-status.st-enviado{background:#4a7fb5;}
+.admin-order-status-select.st-enviado{border-color:#4a7fb5;}
+.admin-confirm label{display:block;color:var(--ink);font-size:.95rem;margin-bottom:10px;}
+.admin-confirm input[type=text]{width:100%;margin-bottom:20px;}

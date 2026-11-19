@@ -48,6 +48,14 @@
     return String(str == null ? '' : str).replace(/[&<>"']/g, (c) => ESCAPE_MAP[c]);
   }
 
+  // mesmo slug do serve.js (/categoria/:slug): "Calças & Saias" -> "calcas-saias"
+  function categorySlug(name) {
+    return String(name || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  }
+  const categoryPath = (name) => `/categoria/${categorySlug(name)}`;
+  const CATEGORY_PATH_RE = /^\/categoria\/([^/]+)\/?$/;
+
   function safeStoredJson(key, fallback, isValid) {
     try {
       const raw = localStorage.getItem(key);
@@ -94,9 +102,37 @@
   // ---------- coupon (applied on top of the bag subtotal) ----------
   const COUPON_KEY = 'bynana_coupon';
   let appliedCouponCode = localStorage.getItem(COUPON_KEY) || '';
+  // Só o cupom de boas-vindas vem em /api/data; os demais são conferidos no servidor quando
+  // a cliente digita o código (POST /api/coupons/validate) e ficam guardados aqui.
+  let VALIDATED_COUPONS = [];
+  // Enquanto o cupom salvo de uma visita anterior não é revalidado, ele não pode ser descartado
+  // por "não estar na lista" — a lista pública não traz mais todos os cupons.
+  let couponRestorePending = !!appliedCouponCode;
 
   function activeCoupon() {
-    return appliedCouponCode ? window.PromoEngine.findCoupon(COUPONS, appliedCouponCode) : null;
+    return appliedCouponCode ? window.PromoEngine.findCoupon([...COUPONS, ...VALIDATED_COUPONS], appliedCouponCode) : null;
+  }
+
+  async function validateCouponCode(code) {
+    const res = await fetch('/api/coupons/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    if (res.status === 404) return null;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.coupon) throw new Error(data.error || 'Não foi possível validar o cupom agora.');
+    VALIDATED_COUPONS = [...VALIDATED_COUPONS.filter((c) => c.code !== data.coupon.code), data.coupon];
+    return data.coupon;
+  }
+
+  async function restoreAppliedCoupon() {
+    if (!couponRestorePending) return;
+    if (!activeCoupon()) {
+      try { await validateCouponCode(appliedCouponCode); } catch { /* sem rede: tenta de novo na próxima visita */ }
+    }
+    couponRestorePending = false;
+    renderCart();
   }
 
   // ---------- carrinho: chave por produto+variação (produto sem variação usa variantId nulo) ----------
@@ -273,7 +309,22 @@
     if (!rule) return { applicable: false, cost: 0, label: '', free: false };
     const subtotal = cartSubtotal(keys);
     const free = rule.freeAbove != null && subtotal >= Number(rule.freeAbove);
-    return { applicable: true, cost: free ? 0 : Number(rule.price), label: rule.label || '', free };
+    return { applicable: true, cost: free ? 0 : Number(rule.price), label: rule.label || '', free, days: shippingDaysText(rule) };
+  }
+
+  function shippingRuleFor(uf) {
+    const active = SHIPPING_RULES.filter((r) => r.active);
+    const target = (uf || '').trim().toUpperCase();
+    return active.find((r) => r.uf.toUpperCase() === target) || active.find((r) => r.uf === '*') || null;
+  }
+
+  // "3 a 7 dias úteis" / "5 dias úteis"; vazio quando a regra não tem prazo cadastrado.
+  function shippingDaysText(rule) {
+    if (!rule || rule.daysMin == null) return '';
+    const min = Number(rule.daysMin);
+    const max = Number(rule.daysMax ?? min);
+    if (max <= 1 && min === max) return `${max} dia útil`;
+    return min === max ? `${min} dias úteis` : `${min} a ${max} dias úteis`;
   }
 
   // Antes de a cliente escolher UF (ou de escolher "Entrega"), usa o menor valor de freeAbove
@@ -356,6 +407,14 @@
     pdpRestockSelect.innerHTML = soldOutVariants
       .map((v) => `<option value="${v.id}">${escapeHtml(variantLabel(v))}</option>`)
       .join('');
+    // veio do botão "Avise-me quando chegar" do card: já abre o formulário, rola até ele e foca o contato
+    if (soldOutVariants.length && location.hash === '#avise-me') {
+      pdpRestockForm.hidden = false;
+      requestAnimationFrame(() => {
+        pdpRestockBlock.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        pdpRestockContact.focus({ preventScroll: true });
+      });
+    }
   }
 
   if (pdpRestockToggle) {
@@ -524,10 +583,20 @@
             .join('')}
         </div>`
       : '';
+    // 2ª foto da galeria aparece ao passar o mouse (padrão das grandes marcas: mostra o look de
+    // outro ângulo sem precisar abrir a peça). Só existe se a galeria tiver uma foto diferente da capa.
+    const altImg = (p.images || []).find((url) => url && url !== p.img);
+    if (altImg) div.classList.add('has-alt-img');
+    // esgotado vira captura de contato ("avise-me") em vez de um botão morto; o formulário fica
+    // na página da peça, que abre já com ele aberto (#avise-me).
+    const actionHtml = soldOut
+      ? `<a class="notify-btn" href="/produto/${p.id}#avise-me">Avise-me quando chegar</a>`
+      : `<button class="add-btn" data-id="${p.id}" ${defaultVariant ? `data-variant-id="${defaultVariant.id}"` : ''}>Adicionar à sacola</button>`;
 
     div.innerHTML = `
       <a class="product-media" href="/produto/${p.id}">
         <img src="${escapeHtml(p.img)}" ${responsiveImageAttrs(p.img)} alt="${escapeHtml(p.name)}" loading="lazy" decoding="async" />
+        ${altImg ? `<img class="product-media-alt" src="${escapeHtml(altImg)}" ${responsiveImageAttrs(altImg)} alt="" aria-hidden="true" loading="lazy" decoding="async" />` : ''}
         <div class="product-badges">
           <span class="product-tag">${escapeHtml(p.tag)}</span>
           ${promo ? `<span class="discount-badge">-${promo.percent}%</span>` : ''}
@@ -546,7 +615,7 @@
         ${colorDotsHtml(variants)}
         ${variantHtml}
         <div class="product-actions">
-          <button class="add-btn${soldOut ? ' is-soldout' : ''}" data-id="${p.id}" ${defaultVariant ? `data-variant-id="${defaultVariant.id}"` : ''} ${soldOut ? 'disabled' : ''}>${soldOut ? 'Esgotado' : 'Adicionar à sacola'}</button>
+          ${actionHtml}
           <a class="ask-btn" target="_blank" rel="noopener" href="${waLink(
             `Olá! Tenho interesse na peça "${p.name}" que vi no catálogo By NaNa. Pode me passar mais detalhes?`
           )}" aria-label="Perguntar no WhatsApp">${WA_ICON}</a>
@@ -652,7 +721,14 @@
         if (pb == null) return -1;
         return currentSort === 'price-asc' ? pa - pb : pb - pa;
       });
+    } else if (currentSort === 'best-sellers') {
+      // ranking dos últimos 90 dias (/api/data → bestSellers); o resto segue em "mais recentes".
+      const rank = new Map(BEST_SELLERS.map((b, i) => [b.productId, i]));
+      list = [...list].sort((a, b) => (rank.has(a.id) ? rank.get(a.id) : Infinity) - (rank.has(b.id) ? rank.get(b.id) : Infinity));
     }
+    // esgotados sempre no fim, em qualquer ordenação — a cliente vê primeiro o que pode comprar.
+    // sort estável: dentro de cada grupo a ordem escolhida acima é preservada.
+    list = [...list].sort((a, b) => Number(isProductSoldOut(a)) - Number(isProductSoldOut(b)));
 
     if (list.length === 0) {
       if (currentSearch) {
@@ -666,9 +742,48 @@
       }
     }
     emptyState.hidden = list.length !== 0;
-    list.forEach((p) => grid.appendChild(productCard(p)));
+    // paginação no cliente: mudou filtro/busca/ordem → volta pro 1º bloco; re-render com os
+    // mesmos filtros (ex.: favoritar uma peça) mantém aberto o que a cliente já tinha carregado.
+    const gridKey = [filter, currentSearch, currentCollection, currentSize, currentColor, currentPriceRange, currentSort].join('|');
+    if (gridKey !== lastGridKey) gridVisibleCount = GRID_PAGE_SIZE;
+    lastGridKey = gridKey;
+    currentGridList = list;
+    list.slice(0, gridVisibleCount).forEach((p) => grid.appendChild(productCard(p)));
+    updateLoadMore();
     syncAddButtons();
     renderCategorySeoBlock(filter);
+    syncCatalogUrl();
+    updateCatalogFilterCount();
+  }
+
+  // ---------- "Ver mais peças" ----------
+  const GRID_PAGE_SIZE = 24;
+  let gridVisibleCount = GRID_PAGE_SIZE;
+  let lastGridKey = '';
+  let currentGridList = [];
+  const loadMoreBtn = document.getElementById('loadMoreBtn');
+
+  function updateLoadMore() {
+    if (!loadMoreBtn) return;
+    const remaining = currentGridList.length - gridVisibleCount;
+    loadMoreBtn.hidden = remaining <= 0;
+    if (remaining > 0) {
+      loadMoreBtn.textContent = `Ver mais peças (${remaining} restante${remaining > 1 ? 's' : ''})`;
+    }
+  }
+
+  if (loadMoreBtn) {
+    loadMoreBtn.addEventListener('click', () => {
+      const start = gridVisibleCount;
+      gridVisibleCount += GRID_PAGE_SIZE;
+      const fresh = currentGridList.slice(start, gridVisibleCount).map((p) => productCard(p));
+      fresh.forEach((card) => grid.appendChild(card));
+      syncAddButtons();
+      updateLoadMore();
+      // foco na 1ª peça nova, pra quem navega por teclado/leitor de tela continuar de onde parou
+      const firstLink = fresh[0] && fresh[0].querySelector('a, button');
+      if (firstLink) firstLink.focus({ preventScroll: true });
+    });
   }
 
   // ---------- filters + search (built dynamically from categories/collections) ----------
@@ -726,13 +841,46 @@
     if (!catGrid) return;
     catGrid.innerHTML = '';
     const fallbackImg = 'assets/img/processed/logo.png';
+    // capa = peças com foto, as que têm estoque primeiro. Se a foto escolhida não carregar (ex.:
+    // cadastro de teste com arquivo apagado), passa para a próxima peça em vez de mostrar imagem
+    // quebrada; o logo só entra quando nenhuma serve.
+    const coverCandidates = (list) => [
+      ...list.filter((p) => p.img && !isProductSoldOut(p)).map((p) => p.img),
+      ...list.filter((p) => p.img && isProductSoldOut(p)).map((p) => p.img),
+      fallbackImg,
+    ];
+    const coverImgHtml = (candidates, alt) =>
+      `<img src="${candidates[0]}" ${responsiveImageAttrs(candidates[0], '(max-width: 520px) 76vw, 25vw')} alt="${escapeHtml(alt)}" loading="lazy" decoding="async" />`;
+    const attachCoverFallback = (card, candidates) => {
+      const img = card.querySelector('img');
+      let index = 0;
+      img.addEventListener('error', () => {
+        // 1º tenta o .jpg original da mesma peça (pode faltar só a versão .webp); depois a próxima peça
+        if (img.hasAttribute('srcset')) {
+          img.removeAttribute('srcset');
+          img.removeAttribute('sizes');
+          img.src = candidates[index];
+          return;
+        }
+        if (index >= candidates.length - 1) return;
+        index += 1;
+        img.src = candidates[index];
+      });
+    };
+    const usedCovers = new Set();
     CATEGORIES.forEach((cat) => {
-      const rep = PRODUCTS.find((p) => p.category === cat);
-      const btn = document.createElement('button');
+      const candidates = coverCandidates(PRODUCTS.filter((p) => p.category === cat));
+      usedCovers.add(candidates[0]);
+      const btn = document.createElement('a');
+      btn.href = categoryPath(cat);
       btn.className = 'cat-card';
       btn.dataset.filter = cat;
-      btn.innerHTML = `<img src="${rep ? rep.img : fallbackImg}" ${responsiveImageAttrs(rep ? rep.img : fallbackImg, '(max-width: 520px) 76vw, 25vw')} alt="${escapeHtml(cat)}" loading="lazy" decoding="async" /><span>${escapeHtml(cat)}</span>`;
-      btn.addEventListener('click', () => {
+      btn.innerHTML = `${coverImgHtml(candidates, cat)}<span>${escapeHtml(cat)}</span>`;
+      attachCoverFallback(btn, candidates);
+      btn.addEventListener('click', (e) => {
+        // o href existe para o Google e para abrir em nova aba; o clique comum filtra na hora
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+        e.preventDefault();
         setFilter(cat);
         document.getElementById('colecao').scrollIntoView({ behavior: 'smooth' });
       });
@@ -741,7 +889,15 @@
     const allBtn = document.createElement('button');
     allBtn.className = 'cat-card';
     allBtn.dataset.filter = 'Todos';
-    allBtn.innerHTML = `<img src="${PRODUCTS[0] ? PRODUCTS[0].img : fallbackImg}" ${responsiveImageAttrs(PRODUCTS[0] ? PRODUCTS[0].img : fallbackImg, '(max-width: 520px) 76vw, 25vw')} alt="Ver tudo" loading="lazy" decoding="async" /><span>Ver tudo</span>`;
+    // "Ver tudo" evita repetir a foto que já é capa de outra categoria (as repetidas ficam de reserva)
+    const allPool = coverCandidates(PRODUCTS).filter((img) => img !== fallbackImg);
+    const allCandidates = [
+      ...allPool.filter((img) => !usedCovers.has(img)),
+      ...allPool.filter((img) => usedCovers.has(img)),
+      fallbackImg,
+    ];
+    allBtn.innerHTML = `${coverImgHtml(allCandidates, 'Ver tudo')}<span>Ver tudo</span>`;
+    attachCoverFallback(allBtn, allCandidates);
     allBtn.addEventListener('click', () => {
       setFilter('Todos');
       document.getElementById('colecao').scrollIntoView({ behavior: 'smooth' });
@@ -815,6 +971,7 @@
 
     sortSelect.innerHTML = `
       <option value="recent">Mais recentes</option>
+      ${BEST_SELLERS.length ? '<option value="best-sellers">Mais vendidos</option>' : ''}
       <option value="price-asc">Menor preço</option>
       <option value="price-desc">Maior preço</option>
     `;
@@ -838,6 +995,84 @@
     }
   }
 
+  // ---------- filtros refletidos na URL (link compartilhável + voltar da página de produto) ----------
+  const collectionSelectEl = () => (collectionWrap ? collectionWrap.querySelector('select') : null);
+
+  function syncCatalogUrl() {
+    if (!grid) return;
+    const params = new URLSearchParams(location.search);
+    const isCategory = currentFilter && currentFilter !== 'Todos' && CATEGORIES.includes(currentFilter);
+    const onCategoryPath = CATEGORY_PATH_RE.test(location.pathname);
+    // categoria tem endereço próprio (/categoria/slug); outros filtros seguem na query string
+    const pathname = isCategory ? categoryPath(currentFilter) : (onCategoryPath ? '/' : location.pathname);
+    const values = {
+      categoria: currentFilter && currentFilter !== 'Todos' && !isCategory ? currentFilter : '',
+      colecao: currentCollection,
+      tamanho: currentSize,
+      cor: currentColor,
+      preco: currentPriceRange,
+      ordem: currentSort !== 'recent' ? currentSort : '',
+      busca: currentSearch,
+    };
+    // só mexe nas próprias chaves — outros parâmetros (ex.: retorno do checkout) ficam intactos.
+    Object.entries(values).forEach(([key, value]) => (value ? params.set(key, value) : params.delete(key)));
+    const query = params.toString();
+    const url = `${pathname}${query ? `?${query}` : ''}${location.hash}`;
+    if (url !== `${location.pathname}${location.search}${location.hash}`) history.replaceState(history.state, '', url);
+  }
+
+  function applyCatalogParams(params) {
+    const size = params.get('tamanho') || '';
+    if (size && sizeFiltersEl && availableSizes().includes(size)) {
+      currentSize = size;
+      sizeFiltersEl.querySelectorAll('[data-size]').forEach((b) => b.classList.toggle('is-active', b.dataset.size === size));
+    }
+    const color = (params.get('cor') || '').toLowerCase();
+    const colorBtn = color && colorFiltersEl
+      ? [...colorFiltersEl.querySelectorAll('[data-color]')].find((b) => b.dataset.color.toLowerCase() === color)
+      : null;
+    if (colorBtn) {
+      currentColor = colorBtn.dataset.color;
+      colorFiltersEl.querySelectorAll('[data-color]').forEach((b) => b.classList.toggle('is-active', b === colorBtn));
+    }
+    const price = params.get('preco') || '';
+    if (price && priceFilterSelect && PRICE_RANGES.some((r) => r.id === price)) {
+      currentPriceRange = price;
+      priceFilterSelect.value = price;
+    }
+    const sort = params.get('ordem') || '';
+    if (sort && sortSelect && [...sortSelect.options].some((o) => o.value === sort)) {
+      currentSort = sort;
+      sortSelect.value = sort;
+    }
+    const collection = params.get('colecao') || '';
+    const select = collectionSelectEl();
+    if (collection && select && COLLECTIONS.includes(collection)) {
+      currentCollection = collection;
+      select.value = collection;
+    }
+  }
+
+  // ---------- filtros no celular: recolhidos atrás de um botão com contador ----------
+  const catalogFilterToggle = document.getElementById('catalogFilterToggle');
+  const catalogFilters = document.getElementById('catalogFilters');
+  const catalogFilterCount = document.getElementById('catalogFilterCount');
+  if (catalogFilterToggle && catalogFilters) {
+    catalogFilterToggle.addEventListener('click', () => {
+      const open = !catalogFilters.classList.contains('is-open');
+      catalogFilters.classList.toggle('is-open', open);
+      catalogFilterToggle.setAttribute('aria-expanded', String(open));
+    });
+  }
+
+  function updateCatalogFilterCount() {
+    if (!catalogFilterCount) return;
+    const count = [currentSize, currentColor, currentPriceRange, currentSort !== 'recent' ? currentSort : ''].filter(Boolean).length;
+    catalogFilterCount.textContent = count;
+    catalogFilterCount.hidden = count === 0;
+    catalogFilterToggle.setAttribute('aria-label', count ? `Filtrar e ordenar (${count} ativo${count > 1 ? 's' : ''})` : 'Filtrar e ordenar');
+  }
+
   // ---------- mega-menu (categorias agrupadas no header) ----------
   const megaMenuEl = document.getElementById('megaMenu');
 
@@ -858,7 +1093,7 @@
         ([groupName, names]) => `
         <div class="mega-menu-col">
           <p class="mega-menu-col-title">${escapeHtml(groupName)}</p>
-          <ul>${names.map((n) => `<li><a href="#colecao" data-cat="${escapeHtml(n)}">${escapeHtml(n)}</a></li>`).join('')}</ul>
+          <ul>${names.map((n) => `<li><a href="${escapeHtml(categoryPath(n))}" data-cat="${escapeHtml(n)}">${escapeHtml(n)}</a></li>`).join('')}</ul>
         </div>`
       )
       .join('');
@@ -874,7 +1109,7 @@
       setFilter(link.dataset.cat);
       colecao.scrollIntoView({ behavior: 'smooth' });
     } else {
-      location.href = `/?categoria=${encodeURIComponent(link.dataset.cat)}#colecao`;
+      location.href = categoryPath(link.dataset.cat);
     }
   });
 
@@ -883,7 +1118,10 @@
   function renderNovidades() {
     if (!novidadesGrid) return;
     novidadesGrid.innerHTML = '';
-    NOVIDADES.forEach((p) => novidadesGrid.appendChild(productCard(p)));
+    // mesma regra da coleção: esgotados no fim, mantendo a ordem da curadoria dentro de cada grupo
+    [...NOVIDADES]
+      .sort((a, b) => Number(isProductSoldOut(a)) - Number(isProductSoldOut(b)))
+      .forEach((p) => novidadesGrid.appendChild(productCard(p)));
   }
 
   // ---------- mais vendidos (prova social — vem de /api/data, sem receita/dado sensível) ----------
@@ -932,6 +1170,84 @@
       // ex.: buscando a partir da página de produto — volta pra home já filtrando.
       location.href = `/?busca=${encodeURIComponent(term)}#colecao`;
     }
+    hideSearchSuggest();
+  });
+
+  // ---------- busca preditiva: sugestões com foto e preço enquanto digita ----------
+  // Mesmo critério da busca do catálogo (matchesSearch); disponíveis primeiro. Enter ou
+  // "Ver todos" seguem pelo submit normal acima.
+  const SUGGEST_MAX = 5;
+  const searchSuggest = document.createElement('div');
+  searchSuggest.className = 'search-suggest';
+  searchSuggest.id = 'searchSuggest';
+  searchSuggest.hidden = true;
+  headerSearchForm.appendChild(searchSuggest);
+  headerSearchInput.setAttribute('aria-controls', 'searchSuggest');
+  headerSearchInput.setAttribute('aria-expanded', 'false');
+  headerSearchInput.setAttribute('autocomplete', 'off');
+
+  function hideSearchSuggest() {
+    searchSuggest.hidden = true;
+    headerSearchInput.setAttribute('aria-expanded', 'false');
+  }
+
+  function renderSearchSuggest() {
+    const term = headerSearchInput.value.trim().toLowerCase();
+    if (term.length < 2 || !PRODUCTS.length) return hideSearchSuggest();
+    const matches = PRODUCTS.filter((p) => matchesSearch(p, term)).sort(
+      (a, b) => Number(isProductSoldOut(a)) - Number(isProductSoldOut(b))
+    );
+    searchSuggest.innerHTML = matches.length
+      ? `<ul class="search-suggest-list">${matches
+          .slice(0, SUGGEST_MAX)
+          .map((p) => {
+            const { price } = getEffective(p);
+            const priceText = p.price == null ? 'Sob consulta' : money(price);
+            return `<li><a class="search-suggest-item" href="/produto/${p.id}">
+              <img src="${escapeHtml(p.img)}" ${responsiveImageAttrs(p.img, '48px')} alt="" loading="lazy" decoding="async" />
+              <span class="search-suggest-text"><span class="search-suggest-name">${escapeHtml(p.name)}</span>
+              <span class="search-suggest-price">${isProductSoldOut(p) ? 'Esgotado · ' : ''}${priceText}</span></span>
+            </a></li>`;
+          })
+          .join('')}</ul>
+        <button type="submit" class="search-suggest-all">Ver ${matches.length === 1 ? 'o resultado' : `todos os ${matches.length} resultados`}</button>`
+      : `<p class="search-suggest-empty">Nenhuma peça encontrada para "${escapeHtml(headerSearchInput.value.trim())}".</p>`;
+    searchSuggest.hidden = false;
+    headerSearchInput.setAttribute('aria-expanded', 'true');
+  }
+
+  headerSearchInput.addEventListener('input', renderSearchSuggest);
+  // reabre ao voltar para o campo — exceto quando o próprio Esc devolve o foco (aí deve continuar fechada)
+  let suppressSuggestOnFocus = false;
+  headerSearchInput.addEventListener('focus', () => {
+    if (suppressSuggestOnFocus) suppressSuggestOnFocus = false;
+    else renderSearchSuggest();
+  });
+  // setas navegam entre as sugestões; Esc fecha
+  headerSearchForm.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !searchSuggest.hidden) {
+      hideSearchSuggest();
+      if (document.activeElement !== headerSearchInput) {
+        suppressSuggestOnFocus = true;
+        headerSearchInput.focus();
+      }
+      return;
+    }
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    const items = [...searchSuggest.querySelectorAll('.search-suggest-item, .search-suggest-all')];
+    if (searchSuggest.hidden || !items.length) return;
+    e.preventDefault();
+    const index = items.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown') items[Math.min(index + 1, items.length - 1)].focus();
+    else if (index <= 0) headerSearchInput.focus();
+    else items[index - 1].focus();
+  });
+  // clique numa sugestão não tira o foco do campo — senão o focusout abaixo fecharia a lista antes
+  // do clique chegar ao link (Safari não foca links ao clicar)
+  searchSuggest.addEventListener('mousedown', (e) => e.preventDefault());
+  // fecha ao clicar/tabular para fora da busca
+  headerSearchForm.addEventListener('focusout', (e) => {
+    if (!headerSearchForm.contains(e.relatedTarget)) hideSearchSuggest();
   });
 
   const bagCount = document.getElementById('bagCount');
@@ -953,6 +1269,10 @@
   const mobileBarText = document.getElementById('mobileBarText');
   const checkoutBtn = document.getElementById('bagCheckout');
   const bagFormError = document.getElementById('bagFormError');
+  const bagTotalLabelEl = document.getElementById('bagTotalLabel');
+  const bagConsultNoteEl = document.getElementById('bagConsultNote');
+  const bagSecurityBadgeEl = document.querySelector('#bagDrawer .bag-security-badge');
+  const ONLINE_PAYMENT_VALUE = 'Pagamento online (Pix/cartão)';
 
   function saveCart() {
     localStorage.setItem(CART_KEY, JSON.stringify(cart));
@@ -1069,48 +1389,109 @@
     });
   });
 
-  function validateCheckout() {
-    if (!bagNameInput.value.trim()) return 'Informe seu nome.';
-    if (!bagPhoneInput.value.trim()) return 'Informe seu telefone.';
-    const email = bagEmailInput.value.trim();
-    if (email && !/^\S+@\S+\.\S+$/.test(email)) return 'Informe um e-mail válido (ou deixe em branco).';
-    if (!selectedPayment) return 'Selecione a forma de pagamento.';
-    if (!selectedDelivery) return 'Selecione retirada em loja ou entrega.';
-    if (selectedDelivery === 'Entrega') {
-      if (address.cep.replace(/\D/g, '').length !== 8) return 'Informe um CEP válido.';
-      if (!address.rua.trim()) return 'Preencha a rua (confira o CEP ou digite manualmente).';
-      if (!address.numero.trim()) return 'Informe o número do endereço.';
-      if (SHIPPING_RULES.some((r) => r.active) && !shippingQuote(Object.keys(cart)).applicable) {
-        return 'No momento não entregamos nessa região. Escolha retirada em loja ou fale no WhatsApp.';
-      }
+  // Retorna { message, field } do primeiro problema (field = id do campo/grupo a destacar) ou null.
+  function validateContact() {
+    if (!bagNameInput.value.trim()) return { message: 'Informe seu nome.', field: 'bagName' };
+    if (bagPhoneInput.value.replace(/\D/g, '').length < 10) {
+      return { message: 'Informe um telefone com DDD, ex.: (31) 90000-0000.', field: 'bagPhone' };
     }
-    return '';
+    const email = bagEmailInput.value.trim();
+    if (email && !/^\S+@\S+\.\S+$/.test(email)) return { message: 'Informe um e-mail válido (ou deixe em branco).', field: 'bagEmail' };
+    return null;
   }
 
-  function buildOrderMessage(keys) {
-    let msg = 'Olá! Vim pelo site da By NaNa e quero fazer um pedido:\n\n';
-    msg += `Nome: ${bagNameInput.value.trim()}\nTelefone: ${bagPhoneInput.value.trim()}\n\n`;
-    keys.forEach((key) => {
-      const entry = cart[key];
-      if (!entry) return;
-      const p = PRODUCTS.find((x) => x.id === entry.productId);
-      if (!p) return;
-      const variant = entry.variantId ? (p.variants || []).find((v) => v.id === entry.variantId) : null;
-      const { price, promo } = getEffective(p);
-      const priceText = promo ? `${money(price)} (de ${money(p.price)})` : money(price);
-      const variantText = variant ? ` (${variantLabel(variant)})` : '';
-      msg += `• ${entry.qty}x ${p.name}${variantText} — ${priceText}\n`;
-    });
-    const subtotal = cartSubtotal(keys);
-    const discount = cartDiscountInfo(keys);
-    const quote = shippingQuote(keys);
-    const total = cartFinalTotal(keys) + quote.cost;
-    msg += `\nSubtotal (itens com preço): ${money(subtotal)}`;
-    if (discount) msg += `\n🏷️ ${discount.label}`;
-    if (quote.applicable) {
-      msg += `\n🚚 Frete${quote.label ? ` (${quote.label})` : ''}: ${quote.free ? 'Grátis' : money(quote.cost)}`;
+  function validateDelivery() {
+    if (!selectedPayment) return { message: 'Selecione a forma de pagamento.', field: 'paymentRow' };
+    if (!selectedDelivery) return { message: 'Selecione retirada em loja ou entrega.', field: 'deliveryRow' };
+    if (selectedDelivery === 'Entrega') {
+      if (address.cep.replace(/\D/g, '').length !== 8) return { message: 'Informe um CEP válido.', field: 'cepInput' };
+      if (!address.rua.trim()) return { message: 'Preencha a rua (confira o CEP ou digite manualmente).', field: 'addrRua' };
+      if (!address.numero.trim()) return { message: 'Informe o número do endereço.', field: 'addrNumero' };
+      if (SHIPPING_RULES.some((r) => r.active) && !shippingQuote(Object.keys(cart)).applicable) {
+        return { message: 'No momento não entregamos nessa região. Escolha retirada em loja ou fale no WhatsApp.', field: 'deliveryRow' };
+      }
     }
-    msg += `\nTotal: ${money(total)}`;
+    return null;
+  }
+
+  function validateCheckout() {
+    return validateContact() || validateDelivery();
+  }
+
+  // ---------- erros no próprio campo + indicador de etapas da sacola ----------
+  function clearFieldErrors() {
+    document.querySelectorAll('#bagDrawer .is-invalid').forEach((el) => {
+      el.classList.remove('is-invalid');
+      el.removeAttribute('aria-invalid');
+      el.removeAttribute('aria-describedby');
+    });
+    document.querySelectorAll('#bagDrawer .bag-field-error').forEach((el) => el.remove());
+  }
+
+  function showFieldError({ message, field }) {
+    clearFieldErrors();
+    bagFormError.textContent = message;
+    bagFormError.hidden = false;
+    const el = document.getElementById(field);
+    if (!el) return;
+    // endereço escondido (ex.: CEP ainda não buscado) não pode receber foco — mostra antes.
+    if (el.closest('#bagAddressFields')) bagAddressFields.hidden = false;
+    el.classList.add('is-invalid');
+    el.setAttribute('aria-invalid', 'true');
+    const note = document.createElement('p');
+    note.className = 'bag-field-error';
+    note.id = `${field}Error`;
+    note.textContent = message;
+    el.setAttribute('aria-describedby', note.id);
+    // dentro do <label> (coluna flex) pra não virar uma célula extra nas grades de campos.
+    const label = el.closest('label');
+    if (label) label.appendChild(note);
+    else (el.closest('.bag-cep-row') || el).insertAdjacentElement('afterend', note);
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const focusTarget = el.matches('input, select, textarea') ? el : el.querySelector('input');
+    if (focusTarget) focusTarget.focus({ preventScroll: true });
+  }
+
+  const bagSteps = document.getElementById('bagSteps');
+  function updateBagSteps() {
+    if (!bagSteps) return;
+    const contactOk = !validateContact();
+    const deliveryOk = contactOk && !validateDelivery();
+    bagSteps.querySelector('[data-step="contact"]').classList.toggle('is-done', contactOk);
+    bagSteps.querySelector('[data-step="delivery"]').classList.toggle('is-done', deliveryOk);
+    bagSteps.querySelector('[data-step="contact"]').classList.toggle('is-current', !contactOk);
+    bagSteps.querySelector('[data-step="delivery"]').classList.toggle('is-current', contactOk && !deliveryOk);
+  }
+
+  document.getElementById('bagDrawer').addEventListener('input', () => {
+    clearFieldErrors();
+    updateBagSteps();
+  });
+  document.getElementById('bagDrawer').addEventListener('change', () => {
+    clearFieldErrors();
+    updateBagSteps();
+  });
+
+  // Monta a mensagem com o pedido como o SERVIDOR registrou (itens, desconto, frete e total
+  // devolvidos por /api/orders) — se o cálculo do navegador divergir (ex.: cupom de 1ª compra
+  // recusado no servidor), a cliente recebe o valor que vale, não o que a sacola mostrava.
+  function buildOrderMessage(keys, order) {
+    let msg = `Olá! Vim pelo site da By NaNa e quero fazer o pedido ${order.orderCode}:\n\n`;
+    msg += `Nome: ${bagNameInput.value.trim()}\nTelefone: ${bagPhoneInput.value.trim()}\n\n`;
+    order.items.forEach((item) => {
+      let priceText = 'sob consulta';
+      if (item.price != null) {
+        priceText = item.listPrice != null && item.price < item.listPrice ? `${money(item.price)} (de ${money(item.listPrice)})` : money(item.price);
+      }
+      msg += `• ${item.qty}x ${item.name}${item.variantLabel ? ` (${item.variantLabel})` : ''} — ${priceText}\n`;
+    });
+    const quote = shippingQuote(keys);
+    msg += `\nSubtotal (itens com preço): ${money(order.subtotal)}`;
+    if (order.discount > 0) msg += `\n🏷️ ${order.discountLabel || 'Desconto'}: - ${money(order.discount)}`;
+    if (selectedDelivery === 'Entrega') {
+      msg += `\n🚚 Frete${quote.label ? ` (${quote.label})` : ''}: ${order.shipping > 0 ? money(order.shipping) : 'Grátis'}`;
+    }
+    msg += `\nTotal: ${money(order.total)}`;
     msg += `\n\n💳 Pagamento: ${selectedPayment}`;
     msg += `\n🚚 Entrega: ${selectedDelivery}`;
     if (bagIsGift.checked) {
@@ -1123,6 +1504,30 @@
     }
     return msg;
   }
+
+  // Chave de idempotência da tentativa de fechamento: se a resposta do pedido se perder (rede
+  // caiu, aba recarregou o fetch), o reenvio do mesmo conteúdo usa a mesma chave e o servidor
+  // devolve o pedido já gravado em vez de criar outro. Mudou a sacola ou os dados, chave nova.
+  // Fica no sessionStorage pra sobreviver a um recarregamento da aba (a sacola continua no
+  // localStorage, então quem recarrega e envia de novo manda o mesmo conteúdo).
+  const ORDER_ATTEMPT_KEY = 'bynana-order-attempt';
+  function readOrderAttempt() {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(ORDER_ATTEMPT_KEY) || 'null');
+      return saved && typeof saved.key === 'string' && typeof saved.fingerprint === 'string' ? saved : null;
+    } catch {
+      return null;
+    }
+  }
+  function writeOrderAttempt(attempt) {
+    try {
+      if (attempt) sessionStorage.setItem(ORDER_ATTEMPT_KEY, JSON.stringify(attempt));
+      else sessionStorage.removeItem(ORDER_ATTEMPT_KEY);
+    } catch {
+      // sem sessionStorage (aba privada restrita), a chave vale só enquanto a página estiver aberta
+    }
+  }
+  let pendingOrderAttempt = readOrderAttempt();
 
   async function persistOrder(keys) {
     const items = keys.map((key) => {
@@ -1159,14 +1564,35 @@
       address: selectedDelivery === 'Entrega' ? address : null,
       customerToken: localStorage.getItem(CUSTOMER_TOKEN_KEY) || null,
     };
+    // só o hash do conteúdo vai pro sessionStorage, não nome/telefone/endereço em texto
+    let fingerprint = JSON.stringify(payload);
+    let hashed = false;
+    try {
+      const digest = await window.crypto.subtle.digest('SHA-256', new window.TextEncoder().encode(fingerprint));
+      fingerprint = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+      hashed = true;
+    } catch {
+      // sem crypto.subtle (página fora de HTTPS): a chave vale só enquanto a página estiver aberta
+    }
+    if (!pendingOrderAttempt || pendingOrderAttempt.fingerprint !== fingerprint) {
+      pendingOrderAttempt = { fingerprint, key: window.crypto?.randomUUID ? window.crypto.randomUUID() : null };
+      if (pendingOrderAttempt.key && hashed) writeOrderAttempt(pendingOrderAttempt);
+    }
+    payload.idempotencyKey = pendingOrderAttempt.key;
     const res = await fetch('/api/orders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
     const data = await res.json().catch(() => ({}));
+    // resposta definitiva (pedido gravado ou recusado com motivo): a próxima tentativa é outra.
+    // Erro 5xx não gravou nada no servidor, então o reenvio pode manter a mesma chave.
+    if (res.status < 500) {
+      pendingOrderAttempt = null;
+      writeOrderAttempt(null);
+    }
     if (!res.ok) throw new Error(data.error || 'Não foi possível reservar o estoque');
-    return { orderId: data.orderId, checkoutUrl: data.checkoutUrl || null };
+    return { ...data, checkoutUrl: data.checkoutUrl || null };
   }
 
   // Re-sincroniza só os dados de produto/estoque após uma falha de checkout (ex.: estoque
@@ -1245,10 +1671,10 @@
     if (checkoutInFlight) return;
     const error = validateCheckout();
     if (error) {
-      bagFormError.textContent = error;
-      bagFormError.hidden = false;
+      showFieldError(error);
       return;
     }
+    clearFieldErrors();
     bagFormError.hidden = true;
     checkoutInFlight = true;
     checkoutBtn.classList.add('is-loading');
@@ -1261,17 +1687,24 @@
       const p = entry ? PRODUCTS.find((x) => x.id === entry.productId) : null;
       return p ? { id: p.id, name: p.name, qty: entry.qty, price: getEffective(p).price } : null;
     }).filter(Boolean);
-    persistOrder(ids).then(({ orderId, checkoutUrl }) => {
+    persistOrder(ids).then((order) => {
+      const { orderId, checkoutUrl } = order;
       if (checkoutUrl) {
         // Pagamento online: a confirmação de compra (trackPurchase) só acontece quando a
         // cliente volta aprovada (ver handleCheckoutReturn em init()) — antes disso o pagamento
         // ainda nem foi feito, só a sessão de checkout foi criada no gateway.
-        localStorage.setItem(PENDING_PURCHASE_KEY, JSON.stringify({ orderId, total: checkoutTotal, items: checkoutItems }));
+        localStorage.setItem(PENDING_PURCHASE_KEY, JSON.stringify({ orderId, total: order.total, items: checkoutItems }));
         window.location.href = checkoutUrl;
         return;
       }
-      window.byNanaAnalytics?.trackPurchase(orderId, checkoutTotal, checkoutItems);
-      window.open(waLink(buildOrderMessage(ids)), '_blank', 'noopener');
+      // Pedido pelo WhatsApp ainda não é venda: disponibilidade e pagamento são combinados na
+      // conversa. Registrar "purchase" aqui inflaria receita e conversões no GA4/Meta Ads.
+      window.byNanaAnalytics?.trackWhatsappOrder(orderId, order.total, checkoutItems);
+      const orderWhatsLink = waLink(buildOrderMessage(ids, order));
+      // abrir depois de um await pode ser barrado pelo bloqueador de pop-up — a tela de
+      // confirmação sempre oferece o link de novo.
+      window.open(orderWhatsLink, '_blank', 'noopener');
+      showOrderConfirmation(orderId, orderWhatsLink);
       checkoutInFlight = false;
       checkoutBtn.classList.remove('is-loading');
       checkoutBtn.removeAttribute('aria-disabled');
@@ -1287,6 +1720,36 @@
     });
   });
 
+  // ---------- confirmação depois de fechar o pedido ----------
+  // o pedido já reservou o estoque no servidor: a sacola é esvaziada pra evitar pedido duplicado
+  // e a cliente fica com o nº do pedido + o link do WhatsApp à mão.
+  const bagConfirmation = document.getElementById('bagConfirmation');
+  const orderShortCode = (id) => `#${String(id).replace(/^pedido-/, '').slice(0, 8).toUpperCase()}`;
+
+  function showOrderConfirmation(orderId, whatsLink) {
+    document.getElementById('bagConfirmationCode').textContent = orderShortCode(orderId);
+    document.getElementById('bagConfirmationWhats').href = whatsLink;
+    document.getElementById('bagConfirmationOrders').hidden = !currentCustomer;
+    cart = {};
+    saveCart();
+    bagConfirmation.hidden = false;
+    bagDrawer.classList.add('is-confirmed');
+    bagConfirmation.scrollIntoView({ block: 'start' });
+    announce(`Pedido ${orderShortCode(orderId)} registrado.`);
+  }
+
+  function hideOrderConfirmation() {
+    if (!bagConfirmation || bagConfirmation.hidden) return;
+    bagConfirmation.hidden = true;
+    bagDrawer.classList.remove('is-confirmed');
+  }
+
+  document.getElementById('bagConfirmationOrders').addEventListener('click', () => {
+    closeBag();
+    openAccountModal();
+    showProfileTab('pedidos');
+  });
+
   // ---------- coupon input ----------
   const couponInput = document.getElementById('couponInput');
   const couponApplyBtn = document.getElementById('couponApply');
@@ -1294,12 +1757,18 @@
 
   function showCouponStatus() {
     const coupon = activeCoupon();
-    if (appliedCouponCode && !coupon) {
+    if (appliedCouponCode && !coupon && !couponRestorePending) {
       appliedCouponCode = '';
       localStorage.removeItem(COUPON_KEY);
     }
     if (coupon) {
-      couponStatus.innerHTML = `Cupom <strong>${escapeHtml(coupon.code)}</strong> aplicado ✓ <button type="button" class="coupon-remove">remover</button>`;
+      // Os descontos não se somam (ver PromoEngine.bestDiscount): quando Pix ou quantidade dão
+      // mais, dizer só "aplicado ✓" faz a cliente achar que o cupom não funcionou.
+      const best = cartDiscountInfo(Object.keys(cart));
+      const note = best && best.type !== 'coupon'
+        ? ` — o desconto "${escapeHtml(best.label)}" é maior e já está aplicado (os descontos não se somam)`
+        : ' aplicado ✓';
+      couponStatus.innerHTML = `Cupom <strong>${escapeHtml(coupon.code)}</strong>${note} <button type="button" class="coupon-remove">remover</button>`;
       couponStatus.className = 'bag-coupon-status is-ok';
       couponStatus.hidden = false;
       couponInput.value = coupon.code;
@@ -1308,10 +1777,23 @@
     }
   }
 
-  couponApplyBtn.addEventListener('click', () => {
+  couponApplyBtn.addEventListener('click', async () => {
     const code = couponInput.value.trim();
     if (!code) return;
-    const coupon = window.PromoEngine.findCoupon(COUPONS, code);
+    let coupon = window.PromoEngine.findCoupon([...COUPONS, ...VALIDATED_COUPONS], code);
+    if (!coupon) {
+      couponApplyBtn.disabled = true;
+      try {
+        coupon = await validateCouponCode(code);
+      } catch (err) {
+        couponStatus.textContent = err.message;
+        couponStatus.className = 'bag-coupon-status is-error';
+        couponStatus.hidden = false;
+        return;
+      } finally {
+        couponApplyBtn.disabled = false;
+      }
+    }
     if (!coupon) {
       couponStatus.textContent = 'Cupom inválido ou expirado.';
       couponStatus.className = 'bag-coupon-status is-error';
@@ -1339,6 +1821,7 @@
   function renderCart() {
     const keys = Object.keys(cart);
     const totalQty = keys.reduce((sum, key) => sum + cart[key].qty, 0);
+    if (keys.length) hideOrderConfirmation();
     bagCount.textContent = totalQty;
 
     const shipInfo = totalQty > 0 ? freeShippingInfo(keys) : null;
@@ -1407,10 +1890,34 @@
     }
     bagShippingRow.hidden = !quote.applicable;
     if (quote.applicable) {
-      bagShippingLabelEl.textContent = quote.label ? `Frete (${quote.label})` : 'Frete';
+      const shipDetail = [quote.label, quote.days].filter(Boolean).join(' · ');
+      bagShippingLabelEl.textContent = shipDetail ? `Frete (${shipDetail})` : 'Frete';
       bagShippingValueEl.textContent = quote.free ? 'Grátis' : money(quote.cost);
     }
     bagTotalEl.textContent = money(final);
+    // "sob consulta" não entra na soma — só avisa quando a sacola realmente tem uma peça assim.
+    const hasConsultItem = keys.some((key) => {
+      const p = PRODUCTS.find((x) => x.id === cart[key].productId);
+      return p && p.price == null;
+    });
+    bagTotalLabelEl.textContent = hasConsultItem ? 'Total (itens com preço)' : 'Total';
+    bagConsultNoteEl.hidden = !hasConsultItem;
+    // Peça sob consulta não tem valor para cobrar online (o servidor também recusa): a opção
+    // "Pagar agora" fica indisponível até a sacola ter só peças com preço.
+    document.querySelectorAll('input[name="payment"]').forEach((input) => {
+      if (input.value !== ONLINE_PAYMENT_VALUE) return;
+      input.disabled = hasConsultItem;
+      const chip = input.closest('.bag-chip');
+      if (chip) chip.title = hasConsultItem ? 'Indisponível com peça de preço sob consulta' : '';
+      if (hasConsultItem && input.checked) {
+        input.checked = false;
+        selectedPayment = '';
+        updateChipStyles('payment');
+      }
+    });
+    bagSecurityBadgeEl.textContent = selectedPayment === ONLINE_PAYMENT_VALUE
+      ? '🔒 Pagamento processado com segurança pelo PagBank'
+      : '💬 Você confirma tudo com a gente no WhatsApp antes de pagar';
 
     bagDetails.hidden = keys.length === 0;
     if (keys.length === 0) {
@@ -1480,7 +1987,7 @@
       else cart[key] = { productId, variantId: null, qty: 1 };
       saveCart();
       announce(`${product.name} adicionada à sacola.`);
-      window.byNanaAnalytics?.trackAddToCart(product, null);
+      window.byNanaAnalytics?.trackAddToCart(product, null, getEffective(product).price);
       return true;
     }
 
@@ -1498,7 +2005,7 @@
     else cart[key] = { productId, variantId: variantId || null, qty: 1 };
     saveCart();
     announce(`${product.name} adicionada à sacola.`);
-    window.byNanaAnalytics?.trackAddToCart(product, variant);
+    window.byNanaAnalytics?.trackAddToCart(product, variant, getEffective(product).price);
     return true;
   }
 
@@ -1618,12 +2125,14 @@
   function openBag() {
     setMobileMenu(false);
     prefillBagContact();
+    updateBagSteps();
     bagDrawer.classList.add('is-open');
     bagOverlay.classList.add('is-open');
     openModalFocus(bagDrawer);
   }
   function closeBag() {
     bagDrawer.classList.remove('is-open');
+    hideOrderConfirmation();
     bagOverlay.classList.remove('is-open');
     closeModalFocus(bagDrawer);
   }
@@ -1658,7 +2167,10 @@
           ${
             s.cover
               ? `<img src="${s.cover}" alt="${escapeHtml(s.title || 'Story')}" />`
-              : `<video src="${s.video}" preload="metadata" muted playsinline></video>`
+              // preload="none": com "metadata", um MP4 sem faststart obriga o navegador a baixar o
+              // arquivo inteiro só pra montar a miniatura (8,8 MB na home, no 4G). O vídeo só
+              // carrega quando a cliente abre o story; até lá a bolha mostra o fundo do anel.
+              : `<video src="${escapeHtml(s.video)}" preload="none" muted playsinline></video>`
           }
         </span>
         ${s.title ? `<span class="story-bubble-label">${escapeHtml(s.title)}</span>` : ''}
@@ -1812,13 +2324,14 @@
       .map((key) => {
         const entry = cart[key];
         const p = PRODUCTS.find((x) => x.id === entry.productId);
-        return p ? { qty: entry.qty, name: p.name } : null;
+        // o servidor resolve nome e preço pelo id (ver /api/cart-activity)
+        return p ? { id: p.id, qty: entry.qty } : null;
       })
       .filter(Boolean);
     fetch('/api/cart-activity', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, name: bagNameInput.value.trim(), items, subtotal: cartSubtotal(keys) }),
+      body: JSON.stringify({ email, name: bagNameInput.value.trim(), items }),
     }).catch(() => {});
   });
 
@@ -1999,7 +2512,8 @@
       setFormMsg(signupMsg, 'É preciso aceitar a política de privacidade.', 'error');
       return;
     }
-    if (!isValidCPF(document.getElementById('suCpf').value)) {
+    const cpfValue = document.getElementById('suCpf').value.trim();
+    if (cpfValue && !isValidCPF(cpfValue)) {
       setFormMsg(signupMsg, 'CPF inválido.', 'error');
       return;
     }
@@ -2117,7 +2631,7 @@
 
   // ---------- área da conta: meus pedidos ----------
   const profileOrderList = document.getElementById('profileOrderList');
-  const PROFILE_ORDER_STATUS_LABELS = { novo: 'Novo', em_andamento: 'Em andamento', concluido: 'Concluído', cancelado: 'Cancelado' };
+  const PROFILE_ORDER_STATUS_LABELS = { novo: 'Novo', em_andamento: 'Em andamento', enviado: 'Enviado', concluido: 'Concluído', cancelado: 'Cancelado' };
 
   async function loadProfileOrders() {
     profileOrderList.innerHTML = '<p class="bag-empty">Carregando...</p>';
@@ -2147,9 +2661,10 @@
         const statusLabel = PROFILE_ORDER_STATUS_LABELS[o.status] || o.status;
         return `
           <div class="profile-order-item">
-            <div class="profile-order-header"><span>${when}</span><span>${money(o.total)}</span></div>
+            <div class="profile-order-header"><span><strong>${orderShortCode(o.id)}</strong> · ${when}</span><span>${money(o.total)}</span></div>
             <p class="profile-order-items">${itemsText}</p>
             <span class="profile-order-meta">${escapeHtml(o.paymentMethod)} · ${escapeHtml(o.deliveryMethod)}${o.couponCode ? ` · cupom ${escapeHtml(o.couponCode)}` : ''}${o.shipping ? ` · frete ${money(o.shipping)}` : ''}</span>
+            ${o.trackingCode ? `<span class="profile-order-meta">📦 Rastreio: ${escapeHtml(o.trackingCode)}</span>` : ''}
             <span class="profile-order-status st-${o.status}">${statusLabel}</span>
           </div>
         `;
@@ -2607,6 +3122,60 @@
     if (productActionsEl) buyBarObserver.observe(productActionsEl);
   }
 
+  // ---------- calculadora de frete na página de produto ----------
+  // Usa a mesma tabela por UF do checkout: o CEP só serve para descobrir a UF (ViaCEP).
+  // Considera só o preço desta peça para o "frete grátis"; a sacola recalcula com o total real.
+  let pdpShipPrice = null;
+  const pdpShipForm = document.getElementById('pdpShipForm');
+  const PDP_CEP_KEY = 'bynana_cep';
+  if (pdpShipForm) {
+    const cepEl = document.getElementById('pdpShipCep');
+    const resultEl = document.getElementById('pdpShipResult');
+    try { cepEl.value = localStorage.getItem(PDP_CEP_KEY) || ''; } catch { /* sem storage */ }
+    cepEl.addEventListener('input', () => {
+      const d = cepEl.value.replace(/\D/g, '').slice(0, 8);
+      cepEl.value = d.length > 5 ? `${d.slice(0, 5)}-${d.slice(5)}` : d;
+    });
+    pdpShipForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const digits = cepEl.value.replace(/\D/g, '');
+      if (digits.length !== 8) {
+        resultEl.innerHTML = '<p class="is-error">Digite os 8 números do CEP.</p>';
+        return;
+      }
+      resultEl.innerHTML = '<p>Calculando...</p>';
+      let place;
+      try {
+        const res = await fetch(`https://viacep.com.br/ws/${digits}/json/`);
+        place = await res.json();
+      } catch {
+        resultEl.innerHTML = '<p class="is-error">Não foi possível consultar o CEP agora. Tente de novo em instantes.</p>';
+        return;
+      }
+      if (!place || place.erro) {
+        resultEl.innerHTML = '<p class="is-error">CEP não encontrado. Confira o número.</p>';
+        return;
+      }
+      try { localStorage.setItem(PDP_CEP_KEY, cepEl.value); } catch { /* sem storage */ }
+      const rule = shippingRuleFor(place.uf);
+      const where = `${escapeHtml(place.localidade)}/${escapeHtml(place.uf)}`;
+      let delivery;
+      if (!rule) {
+        delivery = '<span>Valor combinado no atendimento</span>';
+      } else {
+        const freeAbove = rule.freeAbove != null ? Number(rule.freeAbove) : null;
+        const free = freeAbove != null && pdpShipPrice != null && pdpShipPrice >= freeAbove;
+        const days = shippingDaysText(rule);
+        delivery = `<strong>${free ? 'Grátis' : money(Number(rule.price))}</strong>${days ? `<span>${days} após a postagem</span>` : ''}`;
+        if (!free && freeAbove) delivery += `<span class="pdp-ship-note">Grátis em compras a partir de ${money(freeAbove)}</span>`;
+      }
+      resultEl.innerHTML = `
+        <div class="pdp-ship-option"><span class="pdp-ship-name">Entrega para ${where}</span><div>${delivery}</div></div>
+        <div class="pdp-ship-option"><span class="pdp-ship-name">Retirada na loja</span><div><strong>Grátis</strong></div></div>
+      `;
+    });
+  }
+
   // ---------- página de produto (produto.html) ----------
   // Reaproveita os mesmos helpers da vitrine (getEffective, money, colorDotsHtml,
   // variantLabel, isLowStock, syncAddButton, productCard) — é o mesmo main.js rodando nas duas
@@ -2622,7 +3191,7 @@
       return;
     }
 
-    window.byNanaAnalytics?.trackViewItem(p);
+    window.byNanaAnalytics?.trackViewItem(p, getEffective(p).price);
     trackRecentlyViewed(p.id);
 
     document.getElementById('pdpBreadcrumb').innerHTML =
@@ -2635,7 +3204,7 @@
     pdpMainImg.alt = p.name;
     thumbs.innerHTML = images
       .map(
-        (url, i) => `<button type="button" class="pdp-thumb${i === 0 ? ' is-active' : ''}" data-src="${url}"><img src="${url}" alt="" /></button>`
+        (url, i) => `<button type="button" class="pdp-thumb${i === 0 ? ' is-active' : ''}" data-src="${url}" aria-label="Ver foto ${i + 1}"><img src="${url}" alt="" /></button>`
       )
       .join('');
     thumbs.hidden = images.length <= 1;
@@ -2664,6 +3233,8 @@
     discountBadge.textContent = promo ? `-${promo.percent}%` : '';
     discountBadge.hidden = !promo;
     if (pdpBuyBarPrice) pdpBuyBarPrice.textContent = priceEl.textContent;
+    pdpShipPrice = p.price == null ? null : price;
+    if (pdpShipForm) pdpShipForm.hidden = !SHIPPING_RULES.some((r) => r.active);
     const installmentsEl = document.getElementById('pdpInstallments');
     installmentsEl.textContent = installmentText(price);
     installmentsEl.hidden = p.price == null;
@@ -2935,17 +3506,21 @@
     renderTopbarMessages();
     renderCart();
     restoreSession();
+    restoreAppliedCoupon();
 
     if (document.body.dataset.page === 'produto') {
       initProductPage();
     } else {
       const params = new URLSearchParams(location.search);
       const initialSearch = params.get('busca') || '';
-      const initialCategory = params.get('categoria') || 'Todos';
+      const pathMatch = location.pathname.match(CATEGORY_PATH_RE);
+      const pathCategory = pathMatch ? CATEGORIES.find((c) => categorySlug(c) === pathMatch[1]) : null;
+      const initialCategory = pathCategory || params.get('categoria') || 'Todos';
       buildFilters();
       buildCatCards();
       buildCollectionFilter();
       buildSecondaryFilters();
+      applyCatalogParams(params);
       if (searchInput) searchInput.value = initialSearch;
       renderGrid(initialCategory, initialSearch);
       filtersEl.querySelectorAll('.filter-chip').forEach((c) => c.classList.toggle('is-active', c.dataset.filter === initialCategory));
@@ -2953,12 +3528,23 @@
       renderBestSellers();
       renderRecentlyViewed();
       renderStoriesRail();
+      // /categoria/x abre direto na vitrine: só depois de todas as seções acima estarem montadas
+      if (pathCategory) requestAnimationFrame(() => document.getElementById('colecao')?.scrollIntoView());
     }
 
     initScrollReveal();
   }
 
   dataErrorRetry.addEventListener('click', init);
+
+  // Fotos de produto horizontais (sapato fotografado de lado, bolsa) num quadro vertical com
+  // object-fit:cover ficam cortadas — a cliente via só um pedaço do scarpin. Marca essas fotos
+  // pra exibir inteiras (ver .is-landscape no style.css). "load" não borbulha: captura.
+  document.addEventListener('load', (e) => {
+    const img = e.target;
+    if (!img || img.tagName !== 'IMG' || !img.closest('.pdp-gallery-main, .product-media, .pdp-thumb, .bag-item')) return;
+    img.classList.toggle('is-landscape', img.naturalWidth > img.naturalHeight * 1.15);
+  }, true);
 
   // ---------- entrada suave das seções ao rolar a página ----------
   // Classe só é adicionada aqui (nunca no HTML) — sem JS ou sem suporte a IntersectionObserver
@@ -2977,7 +3563,10 @@
           io.unobserve(entry.target);
         });
       },
-      { threshold: 0.12, rootMargin: '0px 0px -80px 0px' }
+      // threshold 0 (e não uma fração): a grade do catálogo no celular passa de 5000px de altura,
+      // então nunca chegava a 12% visível numa tela de ~660px e ficava invisível para sempre.
+      // O rootMargin já garante que o bloco entrou ~80px na tela antes de aparecer.
+      { threshold: 0, rootMargin: '0px 0px -80px 0px' }
     );
     headings.forEach((el) => {
       el.classList.add('reveal');

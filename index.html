@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,600;1,500&family=Poppins:wght@300;400;500;600&family=Great+Vibes&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/css/style.css?v=20260825" />
+<link rel="stylesheet" href="assets/css/style.css?v=20261023" />
 <script type="application/ld+json"><!--HOME_JSONLD--></script>
 </head>
 <body>
@@ -212,7 +212,11 @@
         </div>
       </div>
 
-      <div class="catalog-toolbar-secondary">
+      <button type="button" class="btn btn-ghost catalog-filter-toggle" id="catalogFilterToggle" aria-expanded="false" aria-controls="catalogFilters">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+        Filtrar e ordenar <span class="catalog-filter-count" id="catalogFilterCount" hidden></span>
+      </button>
+      <div class="catalog-toolbar-secondary" id="catalogFilters">
         <div class="filter-group">
           <span class="filter-group-label">Tamanho</span>
           <div class="filters filters-sm" id="sizeFilters"><!-- gerado via JS --></div>
@@ -234,6 +238,7 @@
 
       <p class="empty-state" id="emptyState" hidden>Nenhuma peça encontrada por aqui. Que tal ver outra categoria?</p>
       <div class="product-grid" id="productGrid"><!-- gerado via JS --></div>
+      <div class="load-more-wrap"><button type="button" class="btn btn-ghost load-more-btn" id="loadMoreBtn" hidden>Ver mais peças</button></div>
 
       <div class="category-seo" id="categorySeoBlock" hidden>
         <p class="category-seo-text" id="categorySeoText"></p>
@@ -292,13 +297,45 @@
   <section class="sobre" id="sobre">
     <div class="wrap sobre-inner">
       <div class="sobre-img">
-        <img src="assets/img/processed/site-sobre.jpg" alt="Vitrine By NaNa" />
+        <img src="assets/img/processed/site-sobre.jpg" srcset="assets/img/processed/site-sobre-320.webp 320w, assets/img/processed/site-sobre-640.webp 640w, assets/img/processed/site-sobre-1000.webp 1000w" sizes="(max-width:980px) 92vw, 45vw" alt="Vitrine By NaNa" loading="lazy" decoding="async" />
       </div>
       <div class="sobre-copy">
-        <p class="eyebrow">Nossa história</p>
-        <h2>Moda com olhar pessoal e identidade</h2>
-        <p>A By NaNa nasceu de um olhar atento para peças que fazem sentido na vida real. Nossa curadoria aproxima tendência e versatilidade, com escolhas femininas e masculinas pensadas para durar mais de uma ocasião.</p>
-        <p>Aqui, cada atendimento é uma conversa. Ajudamos a confirmar tamanho, cor, combinações e a melhor forma de receber seu pedido.</p>
+        <p class="eyebrow">Nossa história · desde 2013</p>
+        <h2>Um sonho que cresceu comigo</h2>
+        <p>A história da By NaNa começou muito antes de existir uma loja.</p>
+        <p>Quando eu era pequena, morava no interior e não tinha televisão em casa. Na casa da minha madrinha, porém, havia algo que para mim era um verdadeiro tesouro: pilhas e pilhas de revistas Manchete.</p>
+        <p>Eu passava horas folheando aquelas páginas, encantada com as roupas, os detalhes e, principalmente, com os looks das atrizes. Lembro especialmente de Bruna Lombardi, que despertava em mim uma admiração enorme.</p>
+        <p>Talvez eu ainda não soubesse naquela época, mas ali começava a nascer a minha paixão pela moda.</p>
+        <ol class="sobre-linha" aria-label="Momentos da nossa história">
+          <li><strong>Infância</strong><span>As revistas Manchete da minha madrinha despertam a paixão pela moda.</span></li>
+          <li><strong>13 anos</strong><span>Escondida na máquina de costura, transformo minhas próprias roupas.</span></li>
+          <li><strong>18 anos</strong><span>Em Belo Horizonte, aprendo numa das boutiques mais conceituadas da sociedade mineira.</span></li>
+          <li><strong>2013</strong><span>Com R$&nbsp;500, monto uma arara na copa de casa e nasce a By NaNa.</span></li>
+        </ol>
+        <details class="sobre-mais">
+          <summary><span class="sobre-mais-abrir">Ler a história completa</span><span class="sobre-mais-fechar">Mostrar menos</span></summary>
+          <p>Aos 13 anos, essa paixão já tinha virado curiosidade e vontade de criar. Eu me sentava escondida na máquina de costura, fechava a porta para minha mãe não ver e começava a transformar minhas próprias roupas em outros modelos.</p>
+          <blockquote class="sobre-citacao">Eu não tinha os recursos, mas tinha imaginação.</blockquote>
+          <p>Aos 15 anos, me mudei para Belo Horizonte. E, aos 18, tive a oportunidade de trabalhar em uma das boutiques mais conceituadas da sociedade mineira, onde conheci de perto grandes grifes italianas e vivi experiências que foram fundamentais para a minha formação e para o meu olhar sobre moda.</p>
+          <p>Ali, aprendi muito mais do que sobre roupas. Aprendi sobre atendimento, elegância, comportamento, qualidade e, principalmente, sobre a importância de fazer uma mulher se sentir especial através daquilo que veste.</p>
+          <p>Mas o meu sonho ainda estava guardado dentro de mim.</p>
+          <p>Em novembro de 2013, fiz meu primeiro investimento: com R$&nbsp;500 no bolso, montei uma arara na copa da minha casa.</p>
+          <p>Era simples, pequeno, improvisado, mas carregava algo enorme: o sonho de construir o meu próprio negócio.</p>
+          <p>Foi assim, aos poucos, com coragem, trabalho e muita vontade de fazer acontecer, que aquela menina que passava horas folheando revistas começou a transformar o seu encanto pela moda em realidade.</p>
+          <p>E foi dessa história, dessas experiências e desse amor pela moda que nasceu a By NaNa.</p>
+          <p>Hoje, quando olho para trás, percebo que a By NaNa não começou quando abri as portas de uma loja.</p>
+          <p>Ela começou naquela menina do interior, sentada diante de uma pilha de revistas, imaginando mundos através das roupas.</p>
+          <p>Começou aos 13 anos, atrás de uma porta fechada, transformando peças na máquina de costura.</p>
+          <p>Começou aos 18, quando entrei pela primeira vez no universo das grandes boutiques.</p>
+          <p>E continuou aos 32, quando tive coragem de começar na copa da minha casa.</p>
+          <p>A By NaNa é a realização de um sonho que foi crescendo comigo.</p>
+          <p>E hoje, mais do que vender roupas, eu quero proporcionar a cada mulher que entra na By NaNa aquilo que a moda despertou em mim desde menina: o encantamento, a possibilidade de se transformar e a sensação de olhar para si mesma e se sentir ainda mais bonita.</p>
+          <p class="sobre-assinatura">Essa é a minha história.<br />Essa é a história da By NaNa.</p>
+        </details>
+        <figure class="sobre-familia">
+          <img src="assets/img/processed/site-sobre-familia.jpg" srcset="assets/img/processed/site-sobre-familia-320.webp 320w, assets/img/processed/site-sobre-familia-640.webp 640w, assets/img/processed/site-sobre-familia-1000.webp 1000w" sizes="(max-width:980px) 92vw, 440px" alt="A fundadora da By NaNa com a família" loading="lazy" decoding="async" width="760" height="950" />
+          <figcaption>A família que caminha comigo em cada capítulo da By NaNa.</figcaption>
+        </figure>
         <a href="https://www.instagram.com/bynanaloja/" target="_blank" rel="noopener" class="text-link">Conheça nosso dia a dia <span aria-hidden="true">↗</span></a>
       </div>
     </div>
@@ -332,7 +369,8 @@
       <div>
         <h3>Atendimento</h3>
         <a href="#" id="footerWhats" target="_blank" rel="noopener">Fale pelo WhatsApp</a>
-        <a href="#colecao">Disponibilidade e tamanhos</a>
+        <a href="/ajuda.html">Central de Ajuda</a>
+        <a href="/trocas-e-devolucoes.html">Trocas e devoluções</a>
         <span>Frete R$ 15 · grátis a partir de R$ 499</span>
         <span>Retirada: Av. Guanabara, 237 · 14h às 19h</span>
       </div>
@@ -355,7 +393,7 @@
       <p class="footer-note">© <span id="year"></span> By NaNa. Todos os direitos reservados.</p>
       <p class="footer-note">By Nana Comércio de Vestuário Ltda · CNPJ 52.505.441/0001-49</p>
       <p class="footer-note">Av. Guanabara, 237 · bynanaloja@gmail.com · Atendimento das 14h às 19h ou com horário agendado</p>
-      <p class="footer-note"><a href="/politica-privacidade.html">Política de Privacidade e Termos de Uso</a></p>
+      <p class="footer-note"><a href="/ajuda.html">Central de Ajuda</a> · <a href="/trocas-e-devolucoes.html">Trocas e Devoluções</a> · <a href="/politica-privacidade.html">Política de Privacidade e Termos de Uso</a></p>
       <p class="footer-note"><a href="admin.html">Área administrativa</a></p>
     </div>
   </div>
@@ -370,6 +408,12 @@
     </button>
   </div>
   <div class="bag-scroll">
+    <div class="bag-confirmation" id="bagConfirmation" role="status" hidden>
+      <p class="bag-confirmation-title">Pedido <strong id="bagConfirmationCode"></strong> registrado 🤍</p>
+      <p class="bag-confirmation-text">Abrimos o WhatsApp com o resumo do seu pedido. É só enviar a mensagem para a gente confirmar disponibilidade, pagamento e entrega.</p>
+      <a class="btn btn-primary btn-block" id="bagConfirmationWhats" href="#" target="_blank" rel="noopener">Abrir o WhatsApp de novo</a>
+      <button type="button" class="account-link bag-confirmation-orders" id="bagConfirmationOrders" hidden>Acompanhar em Minha conta › Pedidos</button>
+    </div>
     <div class="bag-shipping-progress" id="bagShippingProgress" hidden>
       <p class="bag-shipping-progress-text" id="bagShippingProgressText"></p>
       <div class="bag-shipping-progress-track"><span id="bagShippingProgressFill"></span></div>
@@ -379,6 +423,11 @@
     <div class="bag-upsell" id="bagUpsell" hidden><!-- gerado via JS --></div>
 
     <div class="bag-details" id="bagDetails" hidden>
+      <ol class="bag-steps" id="bagSteps" aria-label="Etapas para finalizar">
+        <li class="is-done" data-step="bag"><span>1</span>Sacola</li>
+        <li data-step="contact"><span>2</span>Seus dados</li>
+        <li data-step="delivery"><span>3</span>Entrega e pagamento</li>
+      </ol>
       <div class="bag-field-group">
         <span class="bag-group-label">Seus dados</span>
         <div class="bag-contact-fields">
@@ -391,28 +440,28 @@
       <div class="bag-field-group">
         <span class="bag-group-label">Forma de pagamento</span>
         <div class="bag-chip-row" id="paymentRow">
-          <label class="bag-chip"><input type="radio" name="payment" value="Pix" />Pix</label>
-          <label class="bag-chip"><input type="radio" name="payment" value="Cartão de crédito" />Cartão de crédito</label>
-          <label class="bag-chip"><input type="radio" name="payment" value="Cartão de débito" />Cartão de débito</label>
-          <label class="bag-chip payment-online-chip" hidden><input type="radio" name="payment" value="Pagamento online (Pix/cartão)" />Pagar agora (Pix/cartão)</label>
+          <label class="bag-chip"><input type="radio" name="payment" autocomplete="off" value="Pix" />Pix</label>
+          <label class="bag-chip"><input type="radio" name="payment" autocomplete="off" value="Cartão de crédito" />Cartão de crédito</label>
+          <label class="bag-chip"><input type="radio" name="payment" autocomplete="off" value="Cartão de débito" />Cartão de débito</label>
+          <label class="bag-chip payment-online-chip" hidden><input type="radio" name="payment" autocomplete="off" value="Pagamento online (Pix/cartão)" />Pagar agora (Pix/cartão)</label>
         </div>
       </div>
 
       <div class="bag-field-group">
         <span class="bag-group-label">Retirada ou entrega?</span>
         <div class="bag-chip-row" id="deliveryRow">
-          <label class="bag-chip"><input type="radio" name="delivery" value="Retirada em loja" />Retirada em loja</label>
-          <label class="bag-chip"><input type="radio" name="delivery" value="Entrega" />Entrega</label>
+          <label class="bag-chip"><input type="radio" name="delivery" autocomplete="off" value="Retirada em loja" />Retirada em loja</label>
+          <label class="bag-chip"><input type="radio" name="delivery" autocomplete="off" value="Entrega" />Entrega</label>
         </div>
       </div>
 
       <div class="bag-field-group">
         <label class="account-check">
-          <input type="checkbox" id="bagIsGift" />
+          <input type="checkbox" id="bagIsGift" autocomplete="off" />
           É um presente?
         </label>
         <div class="bag-gift-message" id="bagGiftMessageWrap" hidden>
-          <textarea id="bagGiftMessage" rows="2" placeholder="Mensagem para o cartão (opcional)"></textarea>
+          <textarea id="bagGiftMessage" aria-label="Mensagem para o cartão de presente" rows="2" placeholder="Mensagem para o cartão (opcional)"></textarea>
         </div>
       </div>
 
@@ -453,11 +502,11 @@
       <span id="bagShippingValue">R$ 0,00</span>
     </div>
     <div class="bag-total">
-      <span>Total (itens com preço)</span>
+      <span id="bagTotalLabel">Total</span>
       <strong id="bagTotal">R$ 0,00</strong>
     </div>
-    <p class="bag-note">Peças "sob consulta" têm valor combinado no WhatsApp.</p>
-    <p class="bag-form-error" id="bagFormError" hidden></p>
+    <p class="bag-note" id="bagConsultNote" hidden>Peças "sob consulta" têm valor combinado no WhatsApp e não entram no total.</p>
+    <p class="bag-form-error" id="bagFormError" role="alert" hidden></p>
     <p class="bag-security-badge">🔒 Compra 100% segura</p>
     <a href="#" id="bagCheckout" target="_blank" rel="noopener" class="btn btn-primary btn-block">Finalizar no WhatsApp</a>
   </div>
@@ -508,10 +557,10 @@
       <label>E-mail<input type="email" id="suEmail" required autocomplete="email" /></label>
       <div class="account-form-row">
         <label>Telefone<input type="tel" id="suPhone" required autocomplete="tel" placeholder="(31) 90000-0000" /></label>
-        <label>Data de nascimento<input type="date" id="suBirthDate" required autocomplete="bday" /></label>
+        <label>Nascimento <small>(opcional)</small><input type="date" id="suBirthDate" autocomplete="bday" /></label>
       </div>
       <div class="account-form-row">
-        <label>CPF<input type="text" id="suCpf" required inputmode="numeric" placeholder="000.000.000-00" maxlength="14" /></label>
+        <label>CPF <small>(opcional)</small><input type="text" id="suCpf" inputmode="numeric" placeholder="000.000.000-00" maxlength="14" /></label>
         <label>Gênero
           <select id="suGender">
             <option value="nao_informado">Prefiro não informar</option>
@@ -653,8 +702,8 @@
   <button class="btn btn-primary" id="mobileBarBtn">Ver sacola</button>
 </div>
 
-<script src="assets/js/analytics.js?v=20260825"></script>
-<script src="assets/js/promo.js?v=20260825"></script>
-<script src="assets/js/main.js?v=20260825"></script>
+<script src="assets/js/analytics.js?v=20261015"></script>
+<script src="assets/js/promo.js?v=20261015"></script>
+<script src="assets/js/main.js?v=20261026"></script>
 </body>
 </html>

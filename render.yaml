@@ -2,22 +2,33 @@ services:
   - type: web
     name: by-nana
     runtime: node
-    plan: free
+    # Plano pago: o gratuito não aceita disco persistente (e dorme sem acesso).
+    plan: 0.5c-512mb
     region: oregon
-    buildCommand: npm install
+    # npm ci instala exatamente as versões do package-lock.json, as mesmas que passaram nos testes.
+    buildCommand: npm ci
     # Aplica ALTERs idempotentes antes de subir uma versão que dependa do novo esquema.
     startCommand: node db/migrate.js && npm start
     healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
         value: 20
-      # Neon (pooler) — mesma URL que já está no .env local.
+      # O Render não define NODE_ENV sozinho. Em produção, sem SITE_URL válida, links de e-mail
+      # (redefinir senha, carrinho abandonado) deixam de ser montados a partir do Host da
+      # requisição, que pode ser forjado (configuredPublicOrigin em serve.js).
+      - key: NODE_ENV
+        value: production
+      # Preenchido à mão, de propósito, e não com fromDatabase: o site só passa para o banco
+      # by-nana-db depois que a cópia do Neon for restaurada e conferida (docs/migracao-render.md).
+      # Apontar para o banco novo ainda vazio faria o migrate.js cadastrar o catálogo de exemplo.
       - key: DATABASE_URL
         sync: false
+      # O próprio Render gera um valor aleatório de 256 bits na criação do serviço; ninguém
+      # precisa digitar nem guardar. Trocar o valor depois só desloga clientes e admins.
       - key: SESSION_SECRET
-        sync: false
+        generateValue: true
       - key: ADMIN_SESSION_SECRET
-        sync: false
+        generateValue: true
       # Usados só uma vez por `node db/seed-admin.js` para criar o primeiro admin (owner).
       - key: SEED_ADMIN_NAME
         sync: false
@@ -50,3 +61,30 @@ services:
         sync: false
       - key: PAGSEGURO_SANDBOX
         sync: false
+      # E-mail da loja que recebe o aviso de cada pedido novo.
+      - key: STORE_NOTIFY_EMAIL
+        sync: false
+      # E-mail dos alertas de erro do servidor (vazio = usa o STORE_NOTIFY_EMAIL).
+      - key: ALERT_EMAIL
+        sync: false
+      # Fotos e vídeos enviados pelo painel ficam no disco persistente abaixo e sobrevivem a
+      # deploys e reinícios. O que veio no repositório continua sendo servido de assets/.
+      - key: UPLOAD_DIR
+        value: /var/data/uploads
+    # Com disco, o Render não sobe a versão nova antes de desligar a antiga: cada deploy deixa o
+    # site fora do ar por alguns segundos, e o serviço fica em uma única instância.
+    disk:
+      name: uploads
+      mountPath: /var/data
+      sizeGB: 1
+
+databases:
+  # Postgres no próprio Render, para site, banco e fotos ficarem num só provedor.
+  # Versão 17 = a mesma do pg_dump/pg_restore usado na cópia a partir do Neon.
+  - name: by-nana-db
+    plan: 0.1c-256mb
+    region: oregon
+    postgresMajorVersion: "17"
+    diskSizeGB: 1
+    databaseName: bynana
+    user: bynana

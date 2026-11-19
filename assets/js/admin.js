@@ -36,6 +36,120 @@
     return String(str == null ? '' : str).replace(/[&<>"']/g, (c) => ESCAPE_MAP[c]);
   }
 
+  // ---------- feedback: toasts e confirmação próprios (no lugar de alert()/confirm() do navegador) ----------
+  const toastStack = document.createElement('div');
+  toastStack.className = 'admin-toast-stack';
+  toastStack.setAttribute('role', 'status');
+  toastStack.setAttribute('aria-live', 'polite');
+  document.body.appendChild(toastStack);
+
+  // kind: 'success' | 'error' | 'info'. action opcional: { label, onClick } (ex.: "Desfazer").
+  function toast(message, kind = 'success', action = null) {
+    const el = document.createElement('div');
+    el.className = `admin-toast is-${kind}`;
+    el.innerHTML = `<span>${escapeHtml(message)}</span>`;
+    const dismiss = () => el.remove();
+    if (action) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'admin-toast-action';
+      btn.textContent = action.label;
+      btn.addEventListener('click', () => {
+        dismiss();
+        action.onClick();
+      });
+      el.appendChild(btn);
+    }
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'admin-toast-close';
+    close.setAttribute('aria-label', 'Fechar aviso');
+    close.textContent = '✕';
+    close.addEventListener('click', dismiss);
+    el.appendChild(close);
+    toastStack.appendChild(el);
+    setTimeout(dismiss, kind === 'error' ? 8000 : 5000);
+  }
+
+  // Promise<boolean>. options: { confirmLabel, danger }
+  function confirmDialog(message, options = {}) {
+    const { confirmLabel = 'Confirmar', danger = true } = options;
+    return new Promise((resolve) => {
+      const returnFocus = document.activeElement;
+      const overlay = document.createElement('div');
+      overlay.className = 'admin-confirm-overlay';
+      overlay.innerHTML = `
+        <div class="admin-confirm" role="alertdialog" aria-modal="true" aria-labelledby="adminConfirmMsg">
+          <p id="adminConfirmMsg">${escapeHtml(message)}</p>
+          <div class="admin-confirm-actions">
+            <button type="button" class="btn btn-ghost" data-answer="no">Cancelar</button>
+            <button type="button" class="btn ${danger ? 'btn-danger' : 'btn-primary'}" data-answer="yes">${escapeHtml(confirmLabel)}</button>
+          </div>
+        </div>`;
+      const finish = (answer) => {
+        document.removeEventListener('keydown', onKey, true);
+        overlay.remove();
+        if (returnFocus && returnFocus.focus) returnFocus.focus();
+        resolve(answer);
+      };
+      const onKey = (e) => {
+        if (e.key === 'Escape') {
+          e.stopPropagation();
+          finish(false);
+        }
+      };
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) finish(false);
+        const btn = e.target.closest('[data-answer]');
+        if (btn) finish(btn.dataset.answer === 'yes');
+      });
+      document.addEventListener('keydown', onKey, true);
+      document.body.appendChild(overlay);
+      overlay.querySelector('[data-answer="no"]').focus();
+    });
+  }
+
+  // Promise<string|null> — null quando cancelado. Mesmo visual do confirmDialog, com um campo.
+  function promptDialog(message, initialValue = '', { maxLength = 60 } = {}) {
+    return new Promise((resolve) => {
+      const returnFocus = document.activeElement;
+      const overlay = document.createElement('div');
+      overlay.className = 'admin-confirm-overlay';
+      overlay.innerHTML = `
+        <form class="admin-confirm" role="dialog" aria-modal="true" aria-labelledby="adminPromptMsg">
+          <label id="adminPromptMsg" for="adminPromptInput">${escapeHtml(message)}</label>
+          <input type="text" id="adminPromptInput" maxlength="${maxLength}" autocomplete="off" value="${escapeHtml(initialValue)}" />
+          <div class="admin-confirm-actions">
+            <button type="button" class="btn btn-ghost" data-answer="no">Cancelar</button>
+            <button type="submit" class="btn btn-primary">Confirmar</button>
+          </div>
+        </form>`;
+      const input = overlay.querySelector('input');
+      const finish = (answer) => {
+        document.removeEventListener('keydown', onKey, true);
+        overlay.remove();
+        if (returnFocus && returnFocus.focus) returnFocus.focus();
+        resolve(answer);
+      };
+      const onKey = (e) => {
+        if (e.key === 'Escape') {
+          e.stopPropagation();
+          finish(null);
+        }
+      };
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay || e.target.closest('[data-answer="no"]')) finish(null);
+      });
+      overlay.querySelector('form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        finish(input.value.trim());
+      });
+      document.addEventListener('keydown', onKey, true);
+      document.body.appendChild(overlay);
+      input.focus();
+    });
+  }
+
   const formatDate = (iso) => {
     if (!iso) return '';
     const [y, m, d] = iso.split('-');
@@ -83,12 +197,25 @@
     const res = await fetch('/api/data', { cache: 'no-store' });
     const data = await res.json();
     PRODUCTS = data.products || [];
+    try {
+      // /api/data omite produtos ocultos; o painel precisa deles para poder republicar.
+      const adminProducts = await api('/api/admin/products/list', 'POST', {});
+      PRODUCTS = adminProducts.products || PRODUCTS;
+    } catch (err) {
+      toast(`Não foi possível carregar os produtos ocultos: ${err.message}`, 'error');
+    }
     CATEGORIES = data.categories || [];
     CATEGORY_GROUPS = data.categoryGroups || [];
     CATEGORY_CONTENT = data.categoryContent || [];
     COLLECTIONS = data.collections || [];
     PROMOTIONS = data.promotions || [];
     COUPONS = data.coupons || [];
+    try {
+      // /api/data só traz o cupom de boas-vindas; o painel precisa de todos (e da contagem de usos).
+      COUPONS = (await api('/api/admin/coupons/list', 'POST', {})).coupons || COUPONS;
+    } catch (err) {
+      toast(`Não foi possível carregar os cupons: ${err.message}`, 'error');
+    }
     SHIPPING_RULES = data.shippingRules || [];
     renderCategories();
     renderCollections();
@@ -102,13 +229,10 @@
     renderPromoList();
     renderCouponList();
     renderShippingList();
-    loadSiteImages();
-    loadCustomers();
-    loadStories();
     loadOrders();
-    loadAdminUsers();
-    loadActivity();
     loadDashboard();
+    loadStockNotifications();
+    renderDashTodo();
   }
 
   // ---------- tabs (menu "Catálogo/Marketing/Conteúdo/Vendas" com submenus em dropdown) ----------
@@ -157,6 +281,15 @@
     avaliacoes: () => loadReviews(),
     newsletter: () => loadNewsletter(),
     'avise-me': () => loadStockNotifications(),
+    // carregados só quando a aba é aberta (e recarregados a cada visita) — o login não
+    // precisa esperar dados que a maioria das sessões nem chega a ver.
+    pedidos: () => loadOrders(),
+    clientes: () => loadCustomers(),
+    carrinhos: () => loadAbandonedCarts(),
+    stories: () => loadStories(),
+    imagens: () => loadSiteImages(),
+    usuarios: () => loadAdminUsers(),
+    atividade: () => loadActivity(),
   };
 
   const TAB_SUBTITLES = {
@@ -174,6 +307,7 @@
     stories: 'Carrossel de vídeo no topo do site',
     pedidos: 'Pedidos fechados pelo WhatsApp',
     clientes: 'Cadastros feitos pelos clientes',
+    carrinhos: 'Sacolas com e-mail que não viraram pedido',
     frete: 'Regras de frete por estado',
     avaliacoes: 'Avaliações enviadas por clientes',
     'rel-vendas': 'Receita e pedidos por período',
@@ -187,9 +321,16 @@
   const pageTitleEl = document.getElementById('adminPageTitle');
   const pageSubtitleEl = document.getElementById('adminPageSubtitle');
 
-  function activateAdminPanel(target) {
+  // async porque sair do editor de produto com alterações não salvas pede confirmação;
+  // showProductList: indo pra "Produtos", fecha o editor e mostra a lista (ex.: busca global).
+  async function activateAdminPanel(target, { showProductList = false } = {}) {
       const btn = document.querySelector(`.admin-tab[data-target="${target}"]`);
-      if (!btn) return;
+      if (!btn) return false;
+      const leavingEditor = !productEditorCard.hidden && (target !== 'produtos' || showProductList);
+      if (leavingEditor) {
+        if (!(await confirmLeaveEditor())) return false;
+        endEditProduct();
+      }
       document.querySelectorAll('.admin-tab').forEach((b) => b.classList.toggle('is-active', b === btn));
       document.querySelectorAll('.admin-panel').forEach((p) => {
         p.hidden = p.id !== `panel-${target}`;
@@ -200,16 +341,33 @@
       if (pageSubtitleEl) pageSubtitleEl.textContent = TAB_SUBTITLES[target] || '';
       if (TAB_LOAD_HANDLERS[target]) TAB_LOAD_HANDLERS[target]();
       window.scrollTo({ top: 0, behavior: 'smooth' });
+      return true;
   }
 
+  // ---------- menu recolhível (celular/tablet; no desktop o botão fica escondido via CSS) ----------
+  const adminSidebar = document.querySelector('.admin-sidebar');
+  const adminMenuToggle = document.getElementById('adminMenuToggle');
+  function setAdminMenu(open) {
+    adminSidebar.classList.toggle('is-open', open);
+    adminMenuToggle.setAttribute('aria-expanded', String(open));
+    document.getElementById('adminMenuLabel').textContent = open ? 'Fechar' : 'Menu';
+  }
+  adminMenuToggle.addEventListener('click', () => setAdminMenu(!adminSidebar.classList.contains('is-open')));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && adminSidebar.classList.contains('is-open')) setAdminMenu(false);
+  });
+
   document.querySelectorAll('.admin-tab').forEach((btn) => {
-    btn.addEventListener('click', () => activateAdminPanel(btn.dataset.target));
+    btn.addEventListener('click', () => {
+      setAdminMenu(false);
+      activateAdminPanel(btn.dataset.target);
+    });
   });
 
   document.querySelectorAll('[data-admin-jump]').forEach((button) => {
-    button.addEventListener('click', () => {
-      activateAdminPanel(button.dataset.adminJump);
-      if (button.dataset.newProduct === 'true') endEditProduct(true);
+    button.addEventListener('click', async () => {
+      if (!(await activateAdminPanel(button.dataset.adminJump))) return;
+      if (button.dataset.newProduct === 'true') openNewProduct();
     });
   });
 
@@ -218,10 +376,10 @@
   // ---------- busca global do topo (atalho pra busca de produtos) ----------
   const globalSearchForm = document.getElementById('globalSearchForm');
   if (globalSearchForm) {
-    globalSearchForm.addEventListener('submit', (e) => {
+    globalSearchForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       const term = document.getElementById('globalSearch').value.trim();
-      activateAdminPanel('produtos');
+      if (!(await activateAdminPanel('produtos', { showProductList: true }))) return;
       const target = document.getElementById('productSearch');
       if (target) {
         target.value = term;
@@ -341,7 +499,7 @@
           CATEGORY_GROUPS = data.categoryGroups;
           renderCategoryGroupOptions();
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
       row.querySelector('.admin-category-remove').addEventListener('click', async () => {
@@ -349,7 +507,7 @@
         const msg = count
           ? `${count} produto${count > 1 ? 's' : ''} ${count > 1 ? 'usam' : 'usa'} a categoria "${c}" — a remoção vai falhar até você mover ou remover ${count > 1 ? 'esses produtos' : 'esse produto'}. Tentar mesmo assim?`
           : `Remover a categoria "${c}"?`;
-        if (!confirm(msg)) return;
+        if (!(await confirmDialog(msg))) return;
         try {
           const data = await api('/api/categories', 'DELETE', { name: c });
           CATEGORIES = data.categories;
@@ -357,7 +515,7 @@
           renderCategorySelect();
           renderPromoTargetOptions();
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
 
@@ -384,7 +542,7 @@
           const data = await api('/api/categories/seo', 'POST', { name: c, seoText, faq: faqPayload });
           CATEGORY_CONTENT = data.categoryContent;
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
 
@@ -404,7 +562,7 @@
       renderCategorySelect();
       renderPromoTargetOptions();
     } catch (err) {
-      alert(err.message);
+      toast(err.message, 'error');
     }
   });
 
@@ -427,7 +585,7 @@
         const msg = count
           ? `${count} produto${count > 1 ? 's' : ''} ${count > 1 ? 'estão' : 'está'} na coleção "${c}" e ${count > 1 ? 'perderão' : 'perderá'} essa marcação. Remover mesmo assim?`
           : `Remover a coleção "${c}"?`;
-        if (!confirm(msg)) return;
+        if (!(await confirmDialog(msg))) return;
         const data = await api('/api/collections', 'DELETE', { name: c });
         COLLECTIONS = data.collections;
         renderCollections();
@@ -450,7 +608,7 @@
       renderCollectionSelect();
       renderPromoTargetOptions();
     } catch (err) {
-      alert(err.message);
+      toast(err.message, 'error');
     }
   });
 
@@ -503,6 +661,9 @@
   let imageDataUrl = '';
   let editorVariants = [];
   let galleryImages = [];
+  // fotos escolhidas antes do 1º salvamento de um produto novo (ainda sem id no servidor):
+  // ficam só no navegador e são enviadas logo depois que o produto é criado.
+  let pendingGallery = [];
   const gradePresets = {
     clothing: ['PP', 'P', 'M', 'G', 'GG', 'XGG'],
     shoes_feminino: ['33', '34', '35', '36', '37', '38', '39', '40', '41', '42'],
@@ -535,12 +696,30 @@
   }
 
   function renderGallery() {
-    pGalleryGrid.innerHTML = galleryImages.map((img) => `
+    const isNew = !pEditId.value;
+    const saved = galleryImages.map((img) => `
       <div class="admin-gallery-thumb">
-        <img src="${img.url}" alt="" />
-        <button type="button" class="admin-gallery-remove" data-id="${img.id}" aria-label="Remover foto">✕</button>
+        <img src="${escapeHtml(img.url)}" alt="" />
+        <button type="button" class="admin-gallery-remove" data-id="${escapeHtml(img.id)}" aria-label="Remover foto">✕</button>
       </div>
-    `).join('');
+    `);
+    const pending = isNew
+      ? pendingGallery.map((dataUrl, index) => `
+      <div class="admin-gallery-thumb is-pending">
+        <img src="${dataUrl}" alt="" />
+        <span class="admin-gallery-pending-tag">ao salvar</span>
+        <button type="button" class="admin-gallery-remove-pending" data-index="${index}" aria-label="Remover foto">✕</button>
+      </div>
+    `)
+      : [];
+    pGalleryGrid.innerHTML = [...saved, ...pending].join('');
+    pGalleryGrid.querySelectorAll('.admin-gallery-remove-pending').forEach((button) => {
+      button.addEventListener('click', () => {
+        pendingGallery.splice(Number(button.dataset.index), 1);
+        markEditorDirty();
+        renderGallery();
+      });
+    });
     pGalleryGrid.querySelectorAll('.admin-gallery-remove').forEach((button) => {
       button.addEventListener('click', async () => {
         button.disabled = true;
@@ -554,30 +733,57 @@
         }
       });
     });
-    const full = galleryImages.length >= PRODUCT_GALLERY_MAX_EXTRA;
-    pGalleryInput.disabled = !pEditId.value || full;
-    pGalleryHint.textContent = !pEditId.value
-      ? 'Salve o produto antes de enviar a galeria'
-      : full
-        ? `Limite de ${PRODUCT_GALLERY_MAX_EXTRA} fotos extras atingido`
-        : `${galleryImages.length}/${PRODUCT_GALLERY_MAX_EXTRA} fotos extras`;
+    const count = isNew ? pendingGallery.length : galleryImages.length;
+    const full = count >= PRODUCT_GALLERY_MAX_EXTRA;
+    pGalleryInput.disabled = full;
+    if (full) pGalleryHint.textContent = `Limite de ${PRODUCT_GALLERY_MAX_EXTRA} fotos extras atingido`;
+    else if (isNew) pGalleryHint.textContent = `${count}/${PRODUCT_GALLERY_MAX_EXTRA} — enviadas junto ao salvar o produto`;
+    else pGalleryHint.textContent = `${count}/${PRODUCT_GALLERY_MAX_EXTRA} fotos extras`;
+  }
+
+  const readFileAsDataUrl = (file) => new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.readAsDataURL(file);
+  });
+
+  // envia as fotos pendentes de um produto recém-criado; devolve quantas falharam.
+  async function uploadPendingGallery(productId) {
+    let failed = 0;
+    for (const image of pendingGallery) {
+      try {
+        await api('/api/products/images', 'POST', { productId, image });
+      } catch {
+        failed += 1;
+      }
+    }
+    pendingGallery = [];
+    return failed;
   }
 
   pGalleryInput.addEventListener('change', async () => {
     const files = Array.from(pGalleryInput.files || []);
     pGalleryInput.value = '';
-    if (!files.length || !pEditId.value) return;
+    if (!files.length) return;
     setGalleryMsg('', '');
+    if (!pEditId.value) {
+      for (const file of files) {
+        if (pendingGallery.length >= PRODUCT_GALLERY_MAX_EXTRA) {
+          setGalleryMsg(`Limite de ${PRODUCT_GALLERY_MAX_EXTRA} fotos extras atingido.`, 'error');
+          break;
+        }
+        pendingGallery.push(await readFileAsDataUrl(file));
+      }
+      markEditorDirty();
+      renderGallery();
+      return;
+    }
     for (const file of files) {
       if (galleryImages.length >= PRODUCT_GALLERY_MAX_EXTRA) {
         setGalleryMsg(`Limite de ${PRODUCT_GALLERY_MAX_EXTRA} fotos extras atingido.`, 'error');
         break;
       }
-      const image = await new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.readAsDataURL(file);
-      });
+      const image = await readFileAsDataUrl(file);
       try {
         const data = await api('/api/products/images', 'POST', { productId: pEditId.value, image });
         galleryImages = data.gallery || [];
@@ -719,6 +925,7 @@
     document.getElementById('pPrice').value = p.price == null ? '' : p.price;
     document.getElementById('pDesc').value = p.desc;
     pComposition.value = p.composition || '';
+    document.getElementById('pActive').checked = p.active !== false;
     imageDataUrl = '';
     pImage.value = '';
     pPreview.src = p.img;
@@ -727,18 +934,19 @@
     productFormEyebrow.textContent = 'Editando produto';
     productFormTitle.textContent = p.name;
     pSubmit.textContent = 'Salvar produto completo';
-    pCancelEdit.hidden = false;
     setMsg('', '');
     editorVariants = [];
     renderEditorVariants();
     galleryImages = [];
+    pendingGallery = [];
     renderGallery();
-    renderProductList();
-    productForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    showProductEditor(true);
     try {
       const data = await api('/api/products/variants/list', 'POST', { productId: p.id });
       if (pEditId.value !== p.id) return;
-      editorVariants = (data.variants || []).map((variant) => ({ ...variant, stock: Number(variant.stock || 0) }));
+      // loadedStock = estoque no momento em que o produto foi aberto; o servidor recusa o salvar
+      // se ele mudou nesse meio tempo (venda), em vez de sobrescrever a baixa.
+      editorVariants = (data.variants || []).map((variant) => ({ ...variant, stock: Number(variant.stock || 0), loadedStock: Number(variant.stock || 0) }));
       renderEditorVariants();
       galleryImages = data.gallery || [];
       renderGallery();
@@ -747,7 +955,30 @@
     }
   }
 
-  function endEditProduct(scroll = false) {
+  // ---------- editor em tela própria: a lista aparece primeiro; o editor abre por cima dela ----------
+  const productEditorCard = document.getElementById('productEditorCard');
+  const productListCard = document.getElementById('productListCard');
+  let editorDirty = false;
+
+  function markEditorDirty() {
+    editorDirty = true;
+  }
+
+  function showProductEditor(show) {
+    productEditorCard.hidden = !show;
+    productListCard.hidden = show;
+    editorDirty = false;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (show) document.getElementById('pName').focus({ preventScroll: true });
+  }
+
+  // true = pode sair (editor fechado, sem alterações ou a pessoa confirmou descartar)
+  async function confirmLeaveEditor() {
+    if (productEditorCard.hidden || !editorDirty) return true;
+    return confirmDialog('Existem alterações não salvas neste produto. Sair e descartar?', { confirmLabel: 'Descartar alterações' });
+  }
+
+  function resetProductEditor() {
     pEditId.value = '';
     productForm.reset();
     document.getElementById('pBrand').value = 'By NaNa';
@@ -757,17 +988,37 @@
     productFormEyebrow.textContent = 'Novo produto';
     productFormTitle.textContent = 'Cadastre o produto completo';
     pSubmit.textContent = 'Salvar produto completo';
-    pCancelEdit.hidden = true;
+    setMsg('', '');
     editorVariants = [];
     renderEditorVariants();
     galleryImages = [];
+    pendingGallery = [];
     renderGallery();
-    renderProductList();
-    if (scroll) productForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
-  pCancelEdit.addEventListener('click', () => endEditProduct());
-  pNewProduct.addEventListener('click', () => endEditProduct(true));
+  function openNewProduct() {
+    resetProductEditor();
+    showProductEditor(true);
+  }
+
+  // fecha o editor e volta pra lista (sem perguntar — quem chama já decidiu)
+  function endEditProduct() {
+    resetProductEditor();
+    showProductEditor(false);
+    renderProductList();
+  }
+
+  productForm.addEventListener('input', markEditorDirty);
+  productForm.addEventListener('change', markEditorDirty);
+  [pGenerateGrade, pAddVariant].forEach((btn) => btn.addEventListener('click', markEditorDirty));
+  window.addEventListener('beforeunload', (e) => {
+    if (!productEditorCard.hidden && editorDirty) e.preventDefault();
+  });
+
+  pCancelEdit.addEventListener('click', async () => {
+    if (await confirmLeaveEditor()) endEditProduct();
+  });
+  pNewProduct.addEventListener('click', openNewProduct);
   renderEditorVariants();
   renderGallery();
 
@@ -792,6 +1043,7 @@
         color: variant.color.trim(),
         sku: variant.sku.trim(),
         stock: Number(variant.stock || 0),
+        expectedStock: variant.id && variant.loadedStock != null ? variant.loadedStock : undefined,
         measurements: (variant.measurements || '').trim(),
       }))
       .filter((variant) => variant.size);
@@ -819,6 +1071,7 @@
         price: document.getElementById('pPrice').value,
         desc: document.getElementById('pDesc').value.trim(),
         composition: pComposition.value.trim(),
+        active: document.getElementById('pActive').checked,
         image: imageDataUrl,
         variants,
       };
@@ -833,6 +1086,11 @@
         COLLECTIONS = data.collections;
         renderCategories();
         renderCollections();
+        if (pendingGallery.length) {
+          pSubmit.textContent = 'Enviando galeria...';
+          const failed = await uploadPendingGallery(data.product.id);
+          if (failed) toast(`${failed} foto${failed > 1 ? 's' : ''} da galeria não ${failed > 1 ? 'puderam' : 'pôde'} ser enviada${failed > 1 ? 's' : ''} — abra o produto e tente de novo.`, 'error');
+        }
       }
       renderCategorySelect();
       renderCollectionSelect();
@@ -843,7 +1101,9 @@
 
       const wasEditing = editing;
       endEditProduct();
-      setMsg(wasEditing ? 'Produto atualizado ✓' : 'Produto publicado no catálogo ✓', 'ok');
+      renderDashTodo();
+      const savedHidden = !payload.active;
+      toast(wasEditing ? `"${payload.name}" atualizado.` : savedHidden ? `Rascunho de "${payload.name}" salvo — oculto na loja.` : `"${payload.name}" publicado no catálogo.`);
     } catch (err) {
       setMsg(err.message, 'error');
     } finally {
@@ -857,7 +1117,106 @@
   const productCount = document.getElementById('productCount');
   const productSearch = document.getElementById('productSearch');
   const productCategoryFilter = document.getElementById('productCategoryFilter');
+  const productStatusFilter = document.getElementById('productStatusFilter');
   const productSort = document.getElementById('productSort');
+
+  // mesmo limite da vitrine ("Últimas unidades" em main.js) — abaixo disso vale repor.
+  const LOW_STOCK_THRESHOLD = 3;
+
+  // 'empty' | 'low' | 'ok' — produto sem grade cadastrada não controla estoque, fica 'ok'.
+  function productStockState(p) {
+    const variants = p.variants || [];
+    if (!variants.length) return 'ok';
+    const total = Number(p.totalStock || 0);
+    if (total <= 0) return 'empty';
+    if (total <= LOW_STOCK_THRESHOLD || variants.some((v) => Number(v.stock) <= 0)) return 'low';
+    return 'ok';
+  }
+
+  function stockBadgeHtml(p) {
+    const state = productStockState(p);
+    if (state === 'empty') return '<span class="admin-product-badge is-empty">Esgotado</span>';
+    if (state === 'low') {
+      const soldOutSizes = (p.variants || []).filter((v) => Number(v.stock) <= 0).length;
+      return `<span class="admin-product-badge is-low">${soldOutSizes ? `${soldOutSizes} tam. esgotado${soldOutSizes > 1 ? 's' : ''}` : 'Estoque baixo'}</span>`;
+    }
+    return '';
+  }
+
+  function afterProductsChanged() {
+    renderDashTodo();
+    renderProductList();
+    renderPromoTargetOptions();
+    renderStoryProductSelect();
+    renderFeaturedList();
+    renderUpsellList();
+  }
+
+  async function setProductVisibility(p, active) {
+    try {
+      const data = await api('/api/products/visibility', 'POST', { id: p.id, active });
+      PRODUCTS = data.products;
+      afterProductsChanged();
+      toast(active ? `"${p.name}" está visível na loja.` : `"${p.name}" foi ocultado da loja.`, 'success', {
+        label: 'Desfazer',
+        onClick: () => setProductVisibility(p, !active),
+      });
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  // ajuste rápido: só a quantidade de cada tamanho, sem abrir o editor completo.
+  function renderQuickStock(p, container) {
+    const variants = p.variants || [];
+    if (!variants.length) {
+      container.innerHTML = '<p class="admin-field-help">Sem grade cadastrada — use "Editar produto" para gerar os tamanhos.</p>';
+      return;
+    }
+    container.innerHTML = `
+      <div class="admin-quick-stock-rows">
+        ${variants.map((v) => `
+          <label class="admin-quick-stock-row${Number(v.stock) <= 0 ? ' is-empty' : ''}">
+            <span>${escapeHtml(v.size || '—')}${v.color ? ` · ${escapeHtml(v.color)}` : ''}</span>
+            <input type="number" min="0" step="1" value="${Number(v.stock) || 0}" data-variant-id="${escapeHtml(v.id)}" aria-label="Estoque do tamanho ${escapeHtml(v.size || '')}" />
+          </label>`).join('')}
+      </div>
+      <button type="button" class="btn btn-primary admin-quick-stock-save">Salvar estoque</button>`;
+    container.querySelector('.admin-quick-stock-save').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const changed = [...container.querySelectorAll('input[data-variant-id]')]
+        .map((input) => ({ input, variant: variants.find((v) => v.id === input.dataset.variantId) }))
+        .filter(({ input, variant }) => variant && Math.max(0, Math.floor(Number(input.value) || 0)) !== Number(variant.stock));
+      if (!changed.length) {
+        toast('Nenhuma quantidade foi alterada.', 'info');
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = 'Salvando...';
+      try {
+        let data = null;
+        // em série: cada ajuste grava um movimento de estoque e pode disparar o "avise-me"
+        for (const { input, variant } of changed) {
+          data = await api('/api/products/variants/update', 'POST', {
+            id: variant.id,
+            size: variant.size,
+            color: variant.color || '',
+            sku: variant.sku || '',
+            stock: Math.max(0, Math.floor(Number(input.value) || 0)),
+            expectedStock: Number(variant.stock),
+            note: 'Ajuste rápido pela lista de produtos',
+          });
+        }
+        if (data && data.products) PRODUCTS = data.products;
+        afterProductsChanged();
+        toast(`Estoque de "${p.name}" atualizado (${changed.length} tamanho${changed.length > 1 ? 's' : ''}).`);
+      } catch (err) {
+        toast(err.message, 'error');
+        btn.disabled = false;
+        btn.textContent = 'Salvar estoque';
+      }
+    });
+  }
 
   function renderProductList() {
     const selectedCategory = productCategoryFilter.value;
@@ -868,6 +1227,11 @@
       ? PRODUCTS.filter((p) => `${p.name} ${p.brand} ${p.category} ${p.collection || ''}`.toLowerCase().includes(term))
       : [...PRODUCTS];
     if (productCategoryFilter.value) list = list.filter((product) => product.category === productCategoryFilter.value);
+    const statusFilter = productStatusFilter.value;
+    if (statusFilter === 'visible') list = list.filter((p) => p.active !== false);
+    if (statusFilter === 'hidden') list = list.filter((p) => p.active === false);
+    if (statusFilter === 'low') list = list.filter((p) => productStockState(p) === 'low');
+    if (statusFilter === 'empty') list = list.filter((p) => productStockState(p) === 'empty');
     if (productSort.value === 'name') list.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
     if (productSort.value === 'stock-low') list.sort((a, b) => Number(a.totalStock || 0) - Number(b.totalStock || 0));
     if (productSort.value === 'price-high') list.sort((a, b) => Number(b.price || 0) - Number(a.price || 0));
@@ -883,10 +1247,17 @@
       const priceHtml = promo
         ? `<span class="admin-product-item-price"><s>${money(p.price)}</s> ${money(promo.price)} <em>(-${promo.percent}%)</em></span>`
         : `<span class="admin-product-item-price">${money(p.price)}</span>`;
+      const hidden = p.active === false;
       const div = document.createElement('div');
-      div.className = `admin-product-item${pEditId.value === p.id ? ' is-editing' : ''}`;
+      div.className = `admin-product-item${pEditId.value === p.id ? ' is-editing' : ''}${hidden ? ' is-hidden' : ''}`;
       div.innerHTML = `
-        <img src="${escapeHtml(p.img)}" alt="${escapeHtml(p.name)}" />
+        <div class="admin-product-item-media">
+          <img src="${escapeHtml(p.img)}" alt="${escapeHtml(p.name)}" />
+          <div class="admin-product-badges">
+            ${hidden ? '<span class="admin-product-badge is-hidden">Oculto</span>' : ''}
+            ${stockBadgeHtml(p)}
+          </div>
+        </div>
         <div class="admin-product-item-body">
           <span class="admin-product-item-name">${escapeHtml(p.name)}</span>
           <span class="admin-product-item-meta">${escapeHtml(p.category)}${p.collection ? ` · ${escapeHtml(p.collection)}` : ''}</span>
@@ -894,24 +1265,41 @@
           ${priceHtml}
           <div class="admin-product-item-actions">
             <button type="button" class="admin-product-item-edit" data-id="${p.id}">Editar produto</button>
+            <button type="button" class="admin-product-item-stock" aria-expanded="false">Estoque</button>
+            <button type="button" class="admin-product-item-visibility">${hidden ? 'Mostrar na loja' : 'Ocultar'}</button>
             <button type="button" class="admin-product-item-remove" data-id="${p.id}">Remover</button>
           </div>
+          <div class="admin-quick-stock" hidden></div>
         </div>
       `;
       div.querySelector('.admin-product-item-edit').addEventListener('click', () => startEditProduct(p));
+      const stockBtn = div.querySelector('.admin-product-item-stock');
+      const quickStock = div.querySelector('.admin-quick-stock');
+      stockBtn.addEventListener('click', () => {
+        const open = quickStock.hidden;
+        quickStock.hidden = !open;
+        stockBtn.setAttribute('aria-expanded', String(open));
+        if (open) {
+          renderQuickStock(p, quickStock);
+          const firstInput = quickStock.querySelector('input');
+          if (firstInput) firstInput.focus();
+        }
+      });
+      div.querySelector('.admin-product-item-visibility').addEventListener('click', () => setProductVisibility(p, hidden));
       div.querySelector('.admin-product-item-remove').addEventListener('click', async () => {
-        if (!confirm(`Remover "${p.name}" do catálogo?`)) return;
+        const ok = await confirmDialog(
+          `Remover "${p.name}" do catálogo de vez? Se a ideia é só tirar do ar por um tempo, use "Ocultar" — assim você não perde fotos, grade e avaliações.`,
+          { confirmLabel: 'Remover de vez' }
+        );
+        if (!ok) return;
         try {
           const data = await api('/api/products', 'DELETE', { id: p.id });
           PRODUCTS = data.products;
           if (pEditId.value === p.id) endEditProduct();
-          renderProductList();
-          renderPromoTargetOptions();
-          renderStoryProductSelect();
-          renderFeaturedList();
-          renderUpsellList();
+          afterProductsChanged();
+          toast(`"${p.name}" foi removido do catálogo.`);
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
       productList.appendChild(div);
@@ -920,6 +1308,7 @@
 
   productSearch.addEventListener('input', renderProductList);
   productCategoryFilter.addEventListener('change', renderProductList);
+  productStatusFilter.addEventListener('change', renderProductList);
   productSort.addEventListener('change', renderProductList);
 
 
@@ -962,7 +1351,7 @@
           PRODUCTS = data.products;
           renderFeaturedList();
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
       div.querySelectorAll('.admin-featured-move').forEach((btn) => {
@@ -972,7 +1361,7 @@
             PRODUCTS = data.products;
             renderFeaturedList();
           } catch (err) {
-            alert(err.message);
+            toast(err.message, 'error');
           }
         });
       });
@@ -1021,7 +1410,7 @@
           PRODUCTS = data.products;
           renderUpsellList();
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
       div.querySelectorAll('.admin-featured-move').forEach((btn) => {
@@ -1031,7 +1420,7 @@
             PRODUCTS = data.products;
             renderUpsellList();
           } catch (err) {
-            alert(err.message);
+            toast(err.message, 'error');
           }
         });
       });
@@ -1122,7 +1511,7 @@
       `;
       div.querySelector('.admin-promo-edit').addEventListener('click', () => startEditPromo(promo));
       div.querySelector('.admin-promo-remove').addEventListener('click', async () => {
-        if (!confirm('Remover esta promoção?')) return;
+        if (!(await confirmDialog('Remover esta promoção?'))) return;
         try {
           const data = await api('/api/promotions', 'DELETE', { id: promo.id });
           PROMOTIONS = data.promotions;
@@ -1130,7 +1519,7 @@
           renderPromoList();
           renderProductList();
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
       promoList.appendChild(div);
@@ -1204,6 +1593,7 @@
   const couponValue = document.getElementById('couponValue');
   const couponEnd = document.getElementById('couponEnd');
   const couponFirstPurchaseOnly = document.getElementById('couponFirstPurchaseOnly');
+  const couponMaxUses = document.getElementById('couponMaxUses');
   const couponSubmit = document.getElementById('couponSubmit');
   const couponCancelEdit = document.getElementById('couponCancelEdit');
   const couponFormTitle = document.getElementById('couponFormTitle');
@@ -1226,11 +1616,14 @@
       const discountText = c.type === 'percent' ? `${c.value}% OFF` : `${money(c.value)} OFF`;
       const validity = c.endDate ? ` · válido até ${formatDate(c.endDate)}` : '';
       const firstPurchaseTag = c.firstPurchaseOnly ? ' · só 1ª compra' : '';
+      let usageTag = '';
+      if (c.maxUses != null) usageTag = ` · ${Number(c.uses) || 0}/${c.maxUses} usos${Number(c.uses) >= c.maxUses ? ' (esgotado)' : ''}`;
+      else if (c.uses) usageTag = ` · ${Number(c.uses)} uso(s)`;
       const li = document.createElement('li');
-      li.innerHTML = `<span>${escapeHtml(c.code)} — ${discountText}${validity}${firstPurchaseTag}</span><button type="button" class="admin-coupon-edit" aria-label="Editar">✎</button><button type="button" aria-label="Remover">✕</button>`;
+      li.innerHTML = `<span>${escapeHtml(c.code)} — ${discountText}${validity}${firstPurchaseTag}${usageTag}</span><button type="button" class="admin-coupon-edit" aria-label="Editar">✎</button><button type="button" aria-label="Remover">✕</button>`;
       li.querySelector('.admin-coupon-edit').addEventListener('click', () => startEditCoupon(c));
       li.querySelector('button:not(.admin-coupon-edit)').addEventListener('click', async () => {
-        if (!confirm(`Remover o cupom "${c.code}"?`)) return;
+        if (!(await confirmDialog(`Remover o cupom "${c.code}"?`))) return;
         const data = await api('/api/coupons', 'DELETE', { code: c.code });
         COUPONS = data.coupons;
         if (couponEditCode.value === c.code) endEditCoupon();
@@ -1248,6 +1641,7 @@
     couponValue.value = c.value;
     couponEnd.value = c.endDate || '';
     couponFirstPurchaseOnly.checked = !!c.firstPurchaseOnly;
+    couponMaxUses.value = c.maxUses != null ? c.maxUses : '';
     couponFormTitle.textContent = `Editando cupom "${c.code}"`;
     couponSubmit.textContent = 'Salvar alterações';
     couponCancelEdit.hidden = false;
@@ -1279,6 +1673,7 @@
         value: couponValue.value,
         endDate: couponEnd.value,
         firstPurchaseOnly: couponFirstPurchaseOnly.checked,
+        maxUses: couponMaxUses.value,
       };
       const data = editing
         ? await api('/api/coupons/update', 'POST', payload)
@@ -1301,6 +1696,8 @@
   const shippingLabel = document.getElementById('shippingLabel');
   const shippingPrice = document.getElementById('shippingPrice');
   const shippingFreeAbove = document.getElementById('shippingFreeAbove');
+  const shippingDaysMin = document.getElementById('shippingDaysMin');
+  const shippingDaysMax = document.getElementById('shippingDaysMax');
   const shippingActive = document.getElementById('shippingActive');
   const shippingSubmit = document.getElementById('shippingSubmit');
   const shippingCancelEdit = document.getElementById('shippingCancelEdit');
@@ -1323,12 +1720,13 @@
     SHIPPING_RULES.forEach((r) => {
       const ufText = r.uf === '*' ? 'Padrão (demais estados)' : r.uf;
       const freeText = r.freeAbove != null ? ` · grátis acima de ${money(r.freeAbove)}` : '';
+      const daysText = r.daysMin != null ? ` · ${r.daysMin === r.daysMax ? r.daysMin : `${r.daysMin} a ${r.daysMax}`} dias úteis` : '';
       const inactiveText = r.active ? '' : ' · inativa';
       const li = document.createElement('li');
-      li.innerHTML = `<span>${ufText}${r.label ? ` — ${escapeHtml(r.label)}` : ''} · ${money(r.price)}${freeText}${inactiveText}</span><button type="button" class="admin-coupon-edit" aria-label="Editar">✎</button><button type="button" aria-label="Remover">✕</button>`;
+      li.innerHTML = `<span>${ufText}${r.label ? ` — ${escapeHtml(r.label)}` : ''} · ${money(r.price)}${freeText}${daysText}${inactiveText}</span><button type="button" class="admin-coupon-edit" aria-label="Editar">✎</button><button type="button" aria-label="Remover">✕</button>`;
       li.querySelector('.admin-coupon-edit').addEventListener('click', () => startEditShipping(r));
       li.querySelector('button:not(.admin-coupon-edit)').addEventListener('click', async () => {
-        if (!confirm(`Remover a regra de frete "${ufText}"?`)) return;
+        if (!(await confirmDialog(`Remover a regra de frete "${ufText}"?`))) return;
         const data = await api('/api/shipping-rules', 'DELETE', { id: r.id });
         SHIPPING_RULES = data.shippingRules;
         if (Number(shippingEditId.value) === r.id) endEditShipping();
@@ -1345,6 +1743,8 @@
     shippingLabel.value = r.label || '';
     shippingPrice.value = r.price;
     shippingFreeAbove.value = r.freeAbove != null ? r.freeAbove : '';
+    shippingDaysMin.value = r.daysMin != null ? r.daysMin : '';
+    shippingDaysMax.value = r.daysMax != null ? r.daysMax : '';
     shippingActive.checked = r.active;
     shippingFormTitle.textContent = `Editando regra "${r.uf === '*' ? 'Padrão' : r.uf}"`;
     shippingSubmit.textContent = 'Salvar alterações';
@@ -1378,6 +1778,8 @@
             label: shippingLabel.value.trim(),
             price: shippingPrice.value,
             freeAbove: shippingFreeAbove.value,
+            daysMin: shippingDaysMin.value,
+            daysMax: shippingDaysMax.value,
             active: shippingActive.checked,
           }
         : {
@@ -1385,6 +1787,8 @@
             label: shippingLabel.value.trim(),
             price: shippingPrice.value,
             freeAbove: shippingFreeAbove.value,
+            daysMin: shippingDaysMin.value,
+            daysMax: shippingDaysMax.value,
           };
       const data = editing
         ? await api('/api/shipping-rules/update', 'POST', payload)
@@ -1488,7 +1892,7 @@
       div.innerHTML = `
         <div class="admin-customer-info">
           <span class="admin-customer-name">${escapeHtml(c.firstName)} ${escapeHtml(c.lastName)}</span>
-          <span class="admin-customer-meta">${escapeHtml(c.email)} · ${escapeHtml(c.phone)} · CPF ${escapeHtml(c.cpf)} · cliente desde ${formatDate(c.createdAt.slice(0, 10))}</span>
+          <span class="admin-customer-meta">${escapeHtml(c.email)} · ${escapeHtml(c.phone)}${c.cpf ? ` · CPF ${escapeHtml(c.cpf)}` : ''} · cliente desde ${formatDate(c.createdAt.slice(0, 10))}</span>
         </div>
         <div class="admin-customer-actions">
           <span class="admin-customer-badge ${c.marketingOptIn ? '' : 'is-off'}">${c.marketingOptIn ? 'Recebe novidades' : 'Não recebe novidades'}</span>
@@ -1496,13 +1900,13 @@
         </div>
       `;
       div.querySelector('.admin-customer-remove').addEventListener('click', async () => {
-        if (!confirm(`Remover o cadastro de "${c.firstName} ${c.lastName}"?`)) return;
+        if (!(await confirmDialog(`Remover o cadastro de "${c.firstName} ${c.lastName}"?`))) return;
         try {
           const data = await api('/api/customers', 'DELETE', { id: c.id });
           CUSTOMERS = data.customers;
           renderCustomerList();
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
       customerList.appendChild(div);
@@ -1513,7 +1917,7 @@
 
   document.getElementById('customerExport').addEventListener('click', () => {
     if (!CUSTOMERS.length) {
-      alert('Não há clientes para exportar.');
+      toast('Não há clientes para exportar.', 'info');
       return;
     }
     const header = ['Nome', 'Sobrenome', 'E-mail', 'Telefone', 'Recebe novidades', 'Cliente desde'];
@@ -1587,6 +1991,7 @@
       const data = await api('/api/admin/stock-notifications/list', 'POST', {});
       STOCK_NOTIFICATIONS = data.stockNotifications || [];
       renderStockNotifications();
+      renderDashTodo();
     } catch (err) {
       stockNotifyList.innerHTML = `<p class="admin-empty-block">${escapeHtml(err.message)}</p>`;
     }
@@ -1618,7 +2023,7 @@
             await api('/api/admin/stock-notifications/mark-contacted', 'POST', { id: n.id });
             loadStockNotifications();
           } catch (err) {
-            alert(err.message);
+            toast(err.message, 'error');
             btn.disabled = false;
           }
         });
@@ -1631,7 +2036,7 @@
   if (newsletterExportBtn) {
     newsletterExportBtn.addEventListener('click', () => {
       if (!NEWSLETTER_SUBSCRIBERS.length) {
-        alert('Não há contatos para exportar.');
+        toast('Não há contatos para exportar.', 'info');
         return;
       }
       const header = ['Contato', 'Canal', 'Captado em'];
@@ -1654,80 +2059,387 @@
     });
   }
 
+  // ---------- carrinhos abandonados ----------
+  let ABANDONED_CARTS = [];
+  let abandonedFilter = 'open';
+  const abandonedList = document.getElementById('abandonedList');
+  const abandonedCount = document.getElementById('abandonedCount');
+  const abandonedStats = document.getElementById('abandonedStats');
+  const abandonedTabs = document.getElementById('abandonedTabs');
+  const ABANDONED_TABS = [
+    { id: 'open', label: 'Sem pedido', match: (c) => !c.convertedAt },
+    { id: 'converted', label: 'Recuperados', match: (c) => !!c.convertedAt },
+    { id: 'all', label: 'Todos', match: () => true },
+  ];
+
+  async function loadAbandonedCarts() {
+    try {
+      const data = await api('/api/admin/abandoned-carts/list', 'POST', {});
+      ABANDONED_CARTS = data.carts || [];
+      renderAbandonedCarts();
+    } catch (err) {
+      abandonedList.innerHTML = `<p class="admin-empty-block">${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  function renderAbandonedCarts() {
+    const open = ABANDONED_CARTS.filter((c) => !c.convertedAt);
+    const converted = ABANDONED_CARTS.length - open.length;
+    const openValue = open.reduce((sum, c) => sum + Number(c.subtotal || 0), 0);
+    const rate = ABANDONED_CARTS.length ? Math.round((converted / ABANDONED_CARTS.length) * 100) : 0;
+    abandonedCount.textContent = open.length;
+    abandonedStats.innerHTML = [
+      ['Sem pedido', open.length],
+      ['Valor parado nas sacolas', money(openValue)],
+      ['Taxa de recuperação', `${rate}%`],
+    ].map(([label, value]) => `<div class="admin-stat-card"><span class="admin-stat-label">${label}</span><span class="admin-stat-value">${value}</span></div>`).join('');
+
+    abandonedTabs.innerHTML = ABANDONED_TABS.map((t) => {
+      const active = t.id === abandonedFilter;
+      return `<button type="button" class="admin-status-tab${active ? ' is-active' : ''}" data-abandoned-tab="${t.id}" aria-pressed="${active}">${t.label} <span>${ABANDONED_CARTS.filter(t.match).length}</span></button>`;
+    }).join('');
+
+    const tab = ABANDONED_TABS.find((t) => t.id === abandonedFilter) || ABANDONED_TABS[0];
+    const list = ABANDONED_CARTS.filter(tab.match);
+    if (!list.length) {
+      abandonedList.innerHTML = '<p class="admin-empty-block">Nenhum carrinho por aqui nos últimos 30 dias.</p>';
+      return;
+    }
+    abandonedList.innerHTML = list.map((c) => {
+      const items = (c.items || []).map((it) => `${escapeHtml(it.qty)}x ${escapeHtml(it.name)}`).join(', ');
+      const when = new Date(c.updatedAt).toLocaleString('pt-BR');
+      let status = '<span class="admin-order-payment-badge pay-pending">Lembrete na fila</span>';
+      if (c.convertedAt) status = '<span class="admin-order-payment-badge pay-paid">Virou pedido</span>';
+      else if (c.remindedAt) status = '<span class="admin-order-payment-badge pay-refunded">Lembrete enviado</span>';
+      const firstName = String(c.customerName || '').trim().split(/\s+/)[0];
+      const subject = encodeURIComponent('Sua sacola na By NaNa');
+      const bodyText = encodeURIComponent(`Olá${firstName ? `, ${firstName}` : ''}! Vi que você separou ${(c.items || []).map((it) => it.name).join(', ')} na By NaNa. Posso te ajudar com tamanho, cor ou entrega?`);
+      return `
+        <div class="admin-customer-item">
+          <div class="admin-customer-info">
+            <span class="admin-customer-name">${escapeHtml(c.customerName || 'Sem nome')} ${status}</span>
+            <span class="admin-customer-meta">${escapeHtml(c.email)} · ${when} · ${money(c.subtotal)}</span>
+            <span class="admin-customer-meta">${items}</span>
+          </div>
+          ${c.convertedAt ? '' : `<a class="btn btn-outline btn-sm" href="mailto:${escapeHtml(c.email)}?subject=${subject}&body=${bodyText}">Escrever e-mail</a>`}
+        </div>`;
+    }).join('');
+  }
+
+  abandonedTabs.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-abandoned-tab]');
+    if (!btn) return;
+    abandonedFilter = btn.dataset.abandonedTab;
+    renderAbandonedCarts();
+  });
+
   // ---------- pedidos (fechados no checkout do site) ----------
   const orderList = document.getElementById('orderList');
   const orderCount = document.getElementById('orderCount');
   const orderSearch = document.getElementById('orderSearch');
 
-  const ORDER_STATUS_LABELS = { novo: 'Novo', em_andamento: 'Em andamento', concluido: 'Concluído', cancelado: 'Cancelado' };
+  const openFinancePanels = new Set();
+  const ORDER_STATUS_LABELS = { novo: 'Novo', em_andamento: 'Em andamento', enviado: 'Enviado', concluido: 'Concluído', cancelado: 'Cancelado' };
+  // Mesma regra do servidor (ORDER_STATUS_TRANSITIONS em serve.js): só oferece os próximos
+  // status possíveis, para a equipe não esbarrar num erro ao escolher.
+  const ORDER_STATUS_TRANSITIONS = {
+    novo: ['em_andamento', 'enviado', 'concluido', 'cancelado'],
+    em_andamento: ['novo', 'enviado', 'concluido', 'cancelado'],
+    enviado: ['em_andamento', 'concluido', 'cancelado'],
+    concluido: ['enviado'],
+    cancelado: ['novo', 'em_andamento'],
+  };
   // 'manual' (pagamento combinado no WhatsApp) é o caso comum e não precisa de destaque — só os
   // status de um pagamento online (gateway) ganham selo, pra chamar atenção quando precisar agir.
-  const PAYMENT_STATUS_LABELS = { pending: 'Pagamento pendente', paid: 'Pago', failed: 'Pagamento falhou', refunded: 'Reembolsado' };
+  const PAYMENT_STATUS_LABELS = {
+    pending: 'Pagamento pendente', paid: 'Pago', failed: 'Pagamento falhou', refunded: 'Estornado',
+    refund_pending: 'Estorno pendente', partially_refunded: 'Estorno parcial', refund_failed: 'Estorno com falha',
+  };
+  const PAYMENT_ATTENTION_LABELS = {
+    paid_after_cancel: 'Pago após cancelamento — decidir',
+    check_failing: 'Consulta ao PagBank falhando',
+    refund_uncertain: 'Estorno sem confirmação',
+    amount_mismatch: 'Valor pago menor que o total — conferir',
+  };
+  const ORDER_EVENT_LABELS = {
+    checkout_created: 'Link de pagamento criado', checkout_failed: 'Falha ao criar link (pedido foi para o WhatsApp)',
+    checkout_expired_notice: 'PagBank avisou: link de pagamento vencido',
+    payment_approved: 'Pagamento aprovado', payment_amount_mismatch: 'Valor pago diferente do total do pedido', payment_declined: 'Tentativa de pagamento recusada',
+    payment_after_cancel: 'Pagamento aprovado em pedido cancelado', payment_expired: 'Pagamento não concluído no prazo (pedido cancelado)',
+    payment_checked: 'Pagamento consultado no PagBank', payment_check_failed: 'Falha ao consultar o PagBank',
+    refund_requested: 'Estorno solicitado', refund_response: 'Resposta do PagBank ao estorno', refund_retry: 'Nova tentativa de estorno', refund_superseded: 'Tentativa sem resposta encerrada (PagBank sem estorno)',
+    refund_confirmed: 'Estorno confirmado', partial_refund_confirmed: 'Estorno parcial confirmado', refund_failed: 'Estorno com falha',
+    refund_after_shipment: 'Estorno de pedido já enviado (sem reposição de estoque)', order_cancelled: 'Pedido cancelado',
+    order_cancelled_by_refund: 'Pedido cancelado pelo estorno (peças devolvidas ao estoque)',
+    order_status_changed: 'Status alterado', admin_decision: 'Decisão da equipe', reactivation_denied: 'Reativação negada (sem estoque)',
+  };
+  const EVENT_SOURCE_LABELS = { webhook: 'PagBank (notificação)', sweep: 'verificação automática', admin: 'painel', checkout: 'checkout' };
 
   async function loadOrders() {
     try {
       const data = await api('/api/orders/list', 'POST', {});
       ORDERS = data.orders || [];
       renderOrderList();
+      renderDashTodo();
     } catch (err) {
       orderList.innerHTML = `<p class="admin-empty-block">${escapeHtml(err.message)}</p>`;
     }
   }
 
+  // abas de status: "Em aberto" (novo + em andamento) é a fila de trabalho do dia e vem por padrão.
+  const ORDER_STATUS_TABS = [
+    { id: 'abertos', label: 'Em aberto', match: (o) => o.status === 'novo' || o.status === 'em_andamento' },
+    { id: 'novo', label: 'Novos', match: (o) => o.status === 'novo' },
+    { id: 'parados', label: 'Segurando estoque', match: (o) => isHoldingStock(o) },
+    { id: 'em_andamento', label: 'Em andamento', match: (o) => o.status === 'em_andamento' },
+    { id: 'enviado', label: 'Enviados', match: (o) => o.status === 'enviado' },
+    { id: 'concluido', label: 'Concluídos', match: (o) => o.status === 'concluido' },
+    { id: 'cancelado', label: 'Cancelados', match: (o) => o.status === 'cancelado' },
+    { id: 'todos', label: 'Todos', match: () => true },
+  ];
+  let orderStatusFilter = 'abertos';
+  const orderStatusTabs = document.getElementById('orderStatusTabs');
+
+  function renderOrderStatusTabs() {
+    orderStatusTabs.innerHTML = ORDER_STATUS_TABS.map((t) => {
+      const count = ORDERS.filter(t.match).length;
+      const active = t.id === orderStatusFilter;
+      return `<button type="button" class="admin-status-tab${active ? ' is-active' : ''}" data-status-tab="${t.id}" aria-pressed="${active}">${t.label} <span>${count}</span></button>`;
+    }).join('');
+  }
+
+  orderStatusTabs.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-status-tab]');
+    if (!btn) return;
+    orderStatusFilter = btn.dataset.statusTab;
+    renderOrderList();
+  });
+
+  // ids são "pedido-<uuid>" — o código curto usa o começo do uuid, não o prefixo.
+  const orderCode = (id) => `#${String(id).replace(/^pedido-/, '').slice(0, 8).toUpperCase()}`;
+
+  // pedido "novo" há mais de 2h sem virar em_andamento provavelmente não recebeu retorno
+  // no WhatsApp ainda — sinalizado pra não passar batido numa loja de poucas vendas/dia.
+  const isStaleOrder = (o) => o.status === 'novo' && Date.now() - new Date(o.createdAt).getTime() > 2 * 60 * 60 * 1000;
+  // Pedido combinado no WhatsApp não vence sozinho (só o online tem prazo no PagBank): parado
+  // como "novo" por dias, ele segura a peça no estoque sem venda. Sinaliza para a equipe
+  // cancelar (devolvendo as peças) ou dar andamento.
+  const HELD_STOCK_DAYS = 3;
+  const orderAgeDays = (o) => Math.floor((Date.now() - new Date(o.createdAt).getTime()) / (24 * 60 * 60 * 1000));
+  const isHoldingStock = (o) => o.status === 'novo' && (!o.paymentStatus || o.paymentStatus === 'manual') && orderAgeDays(o) >= HELD_STOCK_DAYS;
+
+  // telefone digitado pela cliente no checkout ("(31) 99999-0000") → número internacional p/ wa.me
+  function whatsappLinkFor(o) {
+    let digits = String(o.customerPhone || '').replace(/\D/g, '');
+    if (!digits) return '';
+    if (digits.length <= 11) digits = `55${digits}`;
+    const firstName = String(o.customerName || '').trim().split(/\s+/)[0] || '';
+    const text = `Olá${firstName ? `, ${firstName}` : ''}! Aqui é da By NaNa, sobre o seu pedido ${orderCode(o.id)}.`;
+    return `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
+  }
+
+  function orderMatchesTerm(o, term) {
+    if (!term) return true;
+    const items = (o.items || []).map((it) => `${it.name} ${it.variantLabel || ''}`).join(' ');
+    const phoneDigits = String(o.customerPhone || '').replace(/\D/g, '');
+    const haystack = `${o.id} ${orderCode(o.id)} ${o.customerName} ${o.customerPhone} ${phoneDigits} ${items}`.toLowerCase();
+    return haystack.includes(term);
+  }
+
   function renderOrderList() {
     const term = (orderSearch.value || '').trim().toLowerCase();
-    const list = term
-      ? ORDERS.filter((o) => `${o.customerName} ${o.customerPhone}`.toLowerCase().includes(term))
-      : ORDERS;
+    const tab = ORDER_STATUS_TABS.find((t) => t.id === orderStatusFilter) || ORDER_STATUS_TABS[0];
+    // buscando um termo, procura em todos os status — quem busca "#AB12" quer achar o pedido onde estiver
+    const list = ORDERS.filter((o) => (term ? true : tab.match(o)) && orderMatchesTerm(o, term));
 
     orderCount.textContent = ORDERS.length;
+    renderOrderStatusTabs();
     orderList.innerHTML = '';
     if (!list.length) {
-      orderList.innerHTML = '<p class="admin-empty-block">Nenhum pedido encontrado.</p>';
+      let emptyText = 'Nenhum pedido neste status.';
+      if (term) emptyText = 'Nenhum pedido encontrado para essa busca.';
+      else if (orderStatusFilter === 'abertos') emptyText = 'Nenhum pedido em aberto. Tudo em dia!';
+      orderList.innerHTML = `<p class="admin-empty-block">${emptyText}</p>`;
       return;
     }
     list.forEach((o) => {
       const itemsText = (o.items || []).map((it) => `${escapeHtml(it.qty)}x ${escapeHtml(it.name)}${it.variantLabel ? ` (${escapeHtml(it.variantLabel)})` : ''}`).join(', ');
       const when = new Date(o.createdAt).toLocaleString('pt-BR');
-      // pedido "novo" há mais de 2h sem virar em_andamento provavelmente não recebeu retorno
-      // no WhatsApp ainda — sinalizado aqui pra não passar batido numa loja de poucas vendas/dia.
-      const isStale = o.status === 'novo' && Date.now() - new Date(o.createdAt).getTime() > 2 * 60 * 60 * 1000;
+      const isStale = isStaleOrder(o);
       const a = o.address;
       const addressText = a
         ? `${escapeHtml(a.rua || '')}, ${escapeHtml(a.numero || '')}${a.complemento ? ` - ${escapeHtml(a.complemento)}` : ''} - ${escapeHtml(a.bairro || '')}, ${escapeHtml(a.cidade || '')}/${escapeHtml(a.estado || '')} - CEP ${escapeHtml(a.cep || '')}`
         : '';
+      const waHref = whatsappLinkFor(o);
       const div = document.createElement('div');
       div.className = 'admin-order-item';
       div.innerHTML = `
         <div class="admin-order-info">
-          <span class="admin-order-name">${escapeHtml(o.customerName)} · ${escapeHtml(o.customerPhone)}${isStale ? ' <span class="admin-order-stale-badge" title="Sem retorno há mais de 2h">⏰ Aguardando retorno</span>' : ''}${o.paymentStatus && o.paymentStatus !== 'manual' ? ` <span class="admin-order-payment-badge pay-${o.paymentStatus}">${escapeHtml(PAYMENT_STATUS_LABELS[o.paymentStatus] || o.paymentStatus)}</span>` : ''}</span>
+          <span class="admin-order-name"><span class="admin-order-code">${orderCode(o.id)}</span>${escapeHtml(o.customerName)} · ${escapeHtml(o.customerPhone)}${isHoldingStock(o) ? ` <span class="admin-order-stale-badge" title="Pedido combinado no WhatsApp parado: as peças continuam reservadas até alguém cancelar ou dar andamento">🔒 Segurando estoque há ${orderAgeDays(o)} dias</span>` : (isStale ? ' <span class="admin-order-stale-badge" title="Sem retorno há mais de 2h">⏰ Aguardando retorno</span>' : '')}${o.paymentStatus && o.paymentStatus !== 'manual' ? ` <span class="admin-order-payment-badge pay-${o.paymentStatus}">${escapeHtml(PAYMENT_STATUS_LABELS[o.paymentStatus] || o.paymentStatus)}</span>` : ''}${o.paymentMethod === 'Pix' && /^Desconto Pix/.test(o.discountLabel || '') && ['novo', 'em_andamento'].includes(o.status) ? ' <span class="admin-order-stale-badge" title="O total já tem o desconto de Pix: confirme que a cliente pagou por Pix antes de separar">💠 Desconto Pix: confirmar Pix</span>' : ''}${o.paymentAttention ? ` <span class="admin-order-stale-badge" title="Precisa de ação da equipe">⚠ ${escapeHtml(PAYMENT_ATTENTION_LABELS[o.paymentAttention] || o.paymentAttention)}</span>` : ''}</span>
           <span class="admin-order-meta">${when}${o.couponCode ? ` · cupom ${escapeHtml(o.couponCode)}` : ''} · ${escapeHtml(o.paymentMethod)} · ${escapeHtml(o.deliveryMethod)}${o.shipping ? ` · frete ${money(o.shipping)}` : ''}</span>
           ${addressText ? `<span class="admin-order-address">📍 ${addressText}</span>` : ''}
           <p class="admin-order-items">${itemsText}</p>
+          ${o.trackingCode ? `<span class="admin-order-meta">📦 Rastreio: ${escapeHtml(o.trackingCode)}</span>` : ''}
           <span class="admin-order-total">${money(o.total)}</span>
         </div>
         <div class="admin-order-actions">
-          <select class="admin-order-status-select st-${o.status}" aria-label="Status do pedido">
-            ${Object.entries(ORDER_STATUS_LABELS).map(([value, label]) => `<option value="${value}" ${value === o.status ? 'selected' : ''}>${label}</option>`).join('')}
+          <select class="admin-order-status-select st-${o.status}" aria-label="Status do pedido ${orderCode(o.id)}">
+            ${Object.entries(ORDER_STATUS_LABELS).filter(([value]) => value === o.status || (ORDER_STATUS_TRANSITIONS[o.status] || []).includes(value)).map(([value, label]) => `<option value="${value}" ${value === o.status ? 'selected' : ''}>${label}</option>`).join('')}
           </select>
+          ${waHref ? `<a class="btn btn-ghost admin-order-whats" href="${escapeHtml(waHref)}" target="_blank" rel="noopener">Chamar no WhatsApp</a>` : ''}
+          ${o.paymentStatus && o.paymentStatus !== 'manual' ? '<button type="button" class="btn btn-ghost admin-order-finance-toggle" aria-expanded="false">Financeiro</button>' : ''}
         </div>
+        <div class="admin-order-finance" hidden></div>
       `;
-      div.querySelector('.admin-order-status-select').addEventListener('change', async (e) => {
-        const status = e.target.value;
-        e.target.className = `admin-order-status-select st-${status}`;
-        try {
-          const data = await api('/api/orders/status', 'POST', { id: o.id, status });
-          ORDERS = data.orders;
-        } catch (err) {
-          alert(err.message);
-          renderOrderList();
+      const financeToggle = div.querySelector('.admin-order-finance-toggle');
+      if (financeToggle) {
+        const panel = div.querySelector('.admin-order-finance');
+        const setOpen = (open) => {
+          panel.hidden = !open;
+          financeToggle.setAttribute('aria-expanded', String(open));
+          if (open) {
+            openFinancePanels.add(o.id);
+            loadOrderFinance(o, panel);
+          } else {
+            openFinancePanels.delete(o.id);
+          }
+        };
+        // a lista é redesenhada a cada atualização (e depois de cada ação): o painel aberto continua aberto
+        if (openFinancePanels.has(o.id)) setOpen(true);
+        financeToggle.addEventListener('click', () => setOpen(panel.hidden));
+      }
+      const select = div.querySelector('.admin-order-status-select');
+      select.addEventListener('change', async () => {
+        const status = select.value;
+        // cancelar devolve o estoque e reativar um cancelado baixa de novo (e os dois avisam a
+        // cliente por e-mail) — um clique errado no select não pode passar direto.
+        let question = '';
+        if (status === 'cancelado' && ['paid', 'partially_refunded'].includes(o.paymentStatus)) {
+          question = `O pedido ${orderCode(o.id)} já foi pago online. Cancelar vai solicitar ao PagBank o estorno de ${money((o.paidAmount != null ? o.paidAmount : o.total) - (o.refundedAmount || 0))} e devolver as peças ao estoque. Continuar?`;
+        } else if (status === 'cancelado') {
+          question = `Cancelar o pedido ${orderCode(o.id)} de ${o.customerName}? As peças voltam para o estoque e a cliente é avisada por e-mail, se tiver informado um.`;
+        } else if (o.status === 'cancelado') {
+          question = `Reativar o pedido ${orderCode(o.id)}? As peças serão baixadas do estoque novamente.`;
         }
+        if (question) {
+          const ok = await confirmDialog(question, {
+            confirmLabel: status === 'cancelado' ? 'Cancelar pedido' : 'Reativar pedido',
+            danger: status === 'cancelado',
+          });
+          if (!ok) {
+            select.value = o.status;
+            return;
+          }
+        }
+        let trackingCode = '';
+        if (status === 'enviado' && o.deliveryMethod === 'Entrega') {
+          trackingCode = await promptDialog(`Código de rastreio do pedido ${orderCode(o.id)} (opcional — vai no e-mail para a cliente):`, o.trackingCode || '');
+          if (trackingCode === null) {
+            select.value = o.status;
+            return;
+          }
+        }
+        select.disabled = true;
+        try {
+          const data = await api('/api/orders/status', 'POST', { id: o.id, status, trackingCode });
+          ORDERS = data.orders;
+          toast(data.message ? `Pedido ${orderCode(o.id)}: ${data.message}` : `Pedido ${orderCode(o.id)} agora está "${ORDER_STATUS_LABELS[status]}".`);
+        } catch (err) {
+          toast(err.message, 'error');
+        }
+        renderOrderList();
+        renderDashTodo();
       });
       orderList.appendChild(div);
     });
   }
 
   orderSearch.addEventListener('input', renderOrderList);
+
+  // ---------- financeiro do pedido (pagamento online, estornos e histórico) ----------
+  // Os botões só aparecem quando a ação faz sentido, mas quem decide é o servidor: toda ação é
+  // validada de novo no backend (permissão, estado do pagamento e estoque).
+  const formatDateTime = (iso) => (iso ? new Date(iso).toLocaleString('pt-BR') : '—');
+
+  async function loadOrderFinance(o, panel) {
+    panel.innerHTML = '<p class="admin-order-meta">Carregando financeiro…</p>';
+    try {
+      const data = await api('/api/orders/payment/detail', 'POST', { id: o.id });
+      renderOrderFinance(o, panel, data.finance);
+    } catch (err) {
+      panel.innerHTML = `<p class="admin-order-meta">${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  function renderOrderFinance(o, panel, f) {
+    const st = f.paymentStatus;
+    const actions = [];
+    if (st !== 'manual') actions.push('<button type="button" class="btn btn-ghost" data-fin="refresh">Atualizar pagamento</button>');
+    if (f.attention === 'paid_after_cancel' && f.status === 'cancelado' && st === 'paid') {
+      actions.push('<button type="button" class="btn btn-primary" data-fin="reactivate">Reativar pedido (valida estoque)</button>');
+      actions.push('<button type="button" class="btn btn-ghost" data-fin="refund">Solicitar estorno</button>');
+    } else if (f.status === 'cancelado' && ['paid', 'partially_refunded'].includes(st)) {
+      actions.push('<button type="button" class="btn btn-ghost" data-fin="refund">Solicitar estorno</button>');
+    }
+    if (st === 'refund_failed') actions.push('<button type="button" class="btn btn-primary" data-fin="retry-refund">Tentar estorno novamente</button>');
+
+    const events = (f.events || []).map((ev) => {
+      const change = [];
+      if (ev.fromStatus !== ev.toStatus) change.push(`pedido ${escapeHtml(ORDER_STATUS_LABELS[ev.fromStatus] || ev.fromStatus || '—')} → ${escapeHtml(ORDER_STATUS_LABELS[ev.toStatus] || ev.toStatus || '—')}`);
+      if (ev.fromPayment !== ev.toPayment) change.push(`pagamento ${escapeHtml(PAYMENT_STATUS_LABELS[ev.fromPayment] || ev.fromPayment || '—')} → ${escapeHtml(PAYMENT_STATUS_LABELS[ev.toPayment] || ev.toPayment || '—')}`);
+      const meta = ev.metadata || {};
+      const detail = meta.error ? ` · ${escapeHtml(meta.error)}` : (meta.amount ? ` · ${money(meta.amount)}` : '');
+      return `<li><strong>${escapeHtml(ORDER_EVENT_LABELS[ev.type] || ev.type)}</strong>${detail}
+        <span class="admin-order-meta">${formatDateTime(ev.createdAt)} · ${escapeHtml(EVENT_SOURCE_LABELS[ev.source] || ev.source)}${ev.adminName ? ` · ${escapeHtml(ev.adminName)}` : ''}${change.length ? ` · ${change.join(' · ')}` : ''}${ev.reason ? ` · "${escapeHtml(ev.reason)}"` : ''}</span></li>`;
+    }).join('');
+
+    panel.innerHTML = `
+      ${f.attention ? `<p class="admin-order-finance-alert">⚠ ${escapeHtml(PAYMENT_ATTENTION_LABELS[f.attention] || f.attention)}${f.attention === 'paid_after_cancel' ? ' — o pedido NÃO foi reativado automaticamente. Reative (se houver estoque) ou solicite o estorno.' : ''}${f.attention === 'refund_uncertain' ? ' — não informe à cliente que o dinheiro foi devolvido até a confirmação.' : ''}</p>` : ''}
+      <dl class="admin-order-finance-grid">
+        <div><dt>Situação do pagamento</dt><dd>${escapeHtml(PAYMENT_STATUS_LABELS[st] || st)}</dd></div>
+        <div><dt>Valor pago</dt><dd>${f.paidAmount != null ? money(f.paidAmount) : '—'}</dd></div>
+        <div><dt>Valor estornado</dt><dd>${money(f.refundedAmount || 0)}</dd></div>
+        <div><dt>Ainda não estornado</dt><dd>${money(f.notRefundedAmount || 0)}</dd></div>
+        <div><dt>Cobrança PagBank</dt><dd>${f.chargeId ? escapeHtml(f.chargeId) : '—'}</dd></div>
+        <div><dt>Última consulta</dt><dd>${formatDateTime(f.checkedAt)}${f.checkFailures ? ` (${f.checkFailures} sem sucesso)` : ''}</dd></div>
+      </dl>
+      ${actions.length ? `<div class="admin-order-finance-actions">${actions.join('')}</div>` : ''}
+      <h4 class="admin-order-finance-title">Histórico financeiro</h4>
+      ${events ? `<ul class="admin-order-finance-events">${events}</ul>` : '<p class="admin-order-meta">Nenhum evento registrado ainda.</p>'}
+    `;
+
+    panel.querySelectorAll('[data-fin]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const action = btn.dataset.fin;
+        let reason = '';
+        if (action === 'refund' || action === 'reactivate') {
+          const question = action === 'refund'
+            ? `Justificativa do estorno de ${money(f.notRefundedAmount)} do pedido ${orderCode(o.id)}:`
+            : `Justificativa para reativar o pedido ${orderCode(o.id)} (as peças serão baixadas do estoque):`;
+          reason = await promptDialog(question, '', { maxLength: 300 });
+          if (reason === null) return;
+          if (reason.length < 3) {
+            toast('Informe a justificativa.', 'error');
+            return;
+          }
+        } else if (action === 'retry-refund') {
+          const ok = await confirmDialog(`Tentar de novo o estorno do pedido ${orderCode(o.id)}? Se a tentativa anterior ficou sem resposta, o PagBank é consultado antes e o estorno não é repetido.`, { confirmLabel: 'Tentar novamente' });
+          if (!ok) return;
+        }
+        panel.querySelectorAll('[data-fin]').forEach((b) => { b.disabled = true; });
+        try {
+          const data = await api(`/api/orders/payment/${action}`, 'POST', { id: o.id, reason });
+          ORDERS = data.orders || ORDERS;
+          toast(data.message || 'Feito.');
+          renderOrderList();
+          renderDashTodo();
+        } catch (err) {
+          toast(err.message, 'error');
+          loadOrderFinance(o, panel);
+        }
+      });
+    });
+  }
 
   // ---------- avaliações (moderação: só remoção, publicação é automática) ----------
   let REVIEWS = [];
@@ -1773,7 +2485,7 @@
         </div>
       `;
       div.querySelector('button').addEventListener('click', async () => {
-        if (!confirm('Remover essa avaliação?')) return;
+        if (!(await confirmDialog('Remover essa avaliação?'))) return;
         const data = await api('/api/reviews', 'DELETE', { id: r.id });
         REVIEWS = data.reviews;
         renderReviewList();
@@ -1955,7 +2667,7 @@
           STORIES = data.stories;
           renderStoryList();
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
       div.querySelectorAll('.admin-story-move').forEach((btn) => {
@@ -1965,7 +2677,7 @@
             STORIES = data.stories;
             renderStoryList();
           } catch (err) {
-            alert(err.message);
+            toast(err.message, 'error');
           }
         });
       });
@@ -1975,17 +2687,17 @@
           STORIES = data.stories;
           renderStoryList();
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
       div.querySelector('.admin-story-remove').addEventListener('click', async () => {
-        if (!confirm('Remover este story?')) return;
+        if (!(await confirmDialog('Remover este story?'))) return;
         try {
           const data = await api('/api/stories', 'DELETE', { id: s.id });
           STORIES = data.stories;
           renderStoryList();
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
       storyList.appendChild(div);
@@ -2044,7 +2756,7 @@
           ADMIN_USERS = data.adminUsers;
           renderAdminUserList();
         } catch (err) {
-          alert(err.message);
+          toast(err.message, 'error');
         }
       });
       adminUserList.appendChild(div);
@@ -2107,6 +2819,8 @@
     'product.create': 'criou o produto',
     'product.update': 'editou o produto',
     'product.delete': 'removeu o produto',
+    'product.hide': 'ocultou da loja o produto',
+    'product.show': 'publicou na loja o produto',
     'promotion.create': 'criou a promoção',
     'promotion.update': 'editou a promoção',
     'promotion.delete': 'removeu a promoção',
@@ -2284,6 +2998,114 @@
     `;
   }
 
+  // ---------- "Para fazer hoje": pendências calculadas com os dados já carregados no painel ----------
+  function daysUntil(isoDate) {
+    if (!isoDate) return null;
+    const end = new Date(`${String(isoDate).slice(0, 10)}T12:00:00`);
+    const today = new Date(`${todayISO()}T12:00:00`);
+    return Math.round((end - today) / (24 * 60 * 60 * 1000));
+  }
+
+  function renderDashTodo() {
+    const container = document.getElementById('dashTodo');
+    if (!container) return;
+    const items = [];
+
+    const newOrders = ORDERS.filter((o) => o.status === 'novo');
+    const staleOrders = newOrders.filter(isStaleOrder);
+    if (newOrders.length) {
+      items.push({
+        tone: staleOrders.length ? 'urgent' : 'warn',
+        text: `${newOrders.length} pedido${newOrders.length > 1 ? 's' : ''} novo${newOrders.length > 1 ? 's' : ''} para responder`
+          + (staleOrders.length ? ` — ${staleOrders.length} há mais de 2h sem retorno` : ''),
+        action: 'Ver pedidos',
+        onClick: async () => {
+          if (!(await activateAdminPanel('pedidos'))) return;
+          orderStatusFilter = 'novo';
+          renderOrderList();
+        },
+      });
+    }
+
+    const visible = PRODUCTS.filter((p) => p.active !== false);
+    const emptyProducts = visible.filter((p) => productStockState(p) === 'empty');
+    const lowProducts = visible.filter((p) => productStockState(p) === 'low');
+    const jumpToProducts = (status) => async () => {
+      if (!(await activateAdminPanel('produtos', { showProductList: true }))) return;
+      productStatusFilter.value = status;
+      renderProductList();
+      productList.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    if (emptyProducts.length) {
+      items.push({
+        tone: 'urgent',
+        text: `${emptyProducts.length} produto${emptyProducts.length > 1 ? 's' : ''} visíve${emptyProducts.length > 1 ? 'is' : 'l'} na loja, mas esgotado${emptyProducts.length > 1 ? 's' : ''}`,
+        action: 'Repor ou ocultar',
+        onClick: jumpToProducts('empty'),
+      });
+    }
+    if (lowProducts.length) {
+      items.push({
+        tone: 'warn',
+        text: `${lowProducts.length} produto${lowProducts.length > 1 ? 's' : ''} com estoque baixo ou tamanho esgotado`,
+        action: 'Ver estoque',
+        onClick: jumpToProducts('low'),
+      });
+    }
+
+    // e-mail é avisado automaticamente na reposição; WhatsApp depende de alguém chamar.
+    const waitingNotify = STOCK_NOTIFICATIONS.filter((n) => n.channel === 'whatsapp' && Number(n.stock) > 0);
+    if (waitingNotify.length) {
+      items.push({
+        tone: 'warn',
+        text: `${waitingNotify.length} cliente${waitingNotify.length > 1 ? 's' : ''} do "avise-me" para chamar no WhatsApp — a peça já voltou ao estoque`,
+        action: 'Ver avisos',
+        onClick: () => activateAdminPanel('avise-me'),
+      });
+    }
+
+    const endsWithinWeek = (endDate) => {
+      const d = daysUntil(endDate);
+      return d !== null && d >= 0 && d <= 7;
+    };
+    const expiringCoupons = COUPONS.filter((c) => c.active !== false && endsWithinWeek(c.endDate));
+    const expiringPromos = PROMOTIONS.filter((pr) => pr.active !== false && endsWithinWeek(pr.endDate));
+    if (expiringCoupons.length) {
+      items.push({
+        tone: 'info',
+        text: `${expiringCoupons.length} cupo${expiringCoupons.length > 1 ? 'ns vencem' : 'm vence'} nos próximos 7 dias (${expiringCoupons.map((c) => c.code).slice(0, 3).join(', ')})`,
+        action: 'Ver cupons',
+        onClick: () => activateAdminPanel('cupons'),
+      });
+    }
+    if (expiringPromos.length) {
+      items.push({
+        tone: 'info',
+        text: `${expiringPromos.length} promoç${expiringPromos.length > 1 ? 'ões terminam' : 'ão termina'} nos próximos 7 dias`,
+        action: 'Ver promoções',
+        onClick: () => activateAdminPanel('promocoes'),
+      });
+    }
+
+    if (!items.length) {
+      container.innerHTML = '<p class="admin-todo-done">Nenhuma pendência agora. Tudo em dia! ✓</p>';
+      return;
+    }
+    container.innerHTML = '';
+    items.forEach((item) => {
+      const row = document.createElement('div');
+      row.className = `admin-todo-item is-${item.tone}`;
+      row.innerHTML = `<span class="admin-todo-dot" aria-hidden="true"></span><span class="admin-todo-text">${escapeHtml(item.text)}</span>`;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-ghost admin-todo-action';
+      btn.textContent = item.action;
+      btn.addEventListener('click', item.onClick);
+      row.appendChild(btn);
+      container.appendChild(row);
+    });
+  }
+
   async function loadDashboard() {
     try {
       const data = await api('/api/admin/dashboard', 'POST', {});
@@ -2346,7 +3168,7 @@
           <div class="admin-order-item admin-order-item-compact">
             <div class="admin-order-info">
               <span class="admin-order-name">
-                <span class="admin-order-code">#${o.id.slice(0, 8).toUpperCase()}</span>
+                <span class="admin-order-code">${orderCode(o.id)}</span>
                 ${escapeHtml(o.customerName)}
               </span>
               <span class="admin-order-meta">${new Date(o.createdAt).toLocaleString('pt-BR')} · ${money(o.total)}</span>
