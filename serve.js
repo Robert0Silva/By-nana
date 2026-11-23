@@ -41,6 +41,11 @@ const host = process.env.HOST || '0.0.0.0';
 // As URLs públicas continuam as mesmas (assets/img/processed/..., assets/videos/...): o
 // servidor procura primeiro no UPLOAD_DIR e depois nos arquivos do repositório.
 const persistentUploadDir = process.env.UPLOAD_DIR ? path.resolve(process.env.UPLOAD_DIR) : null;
+// No Render (que define RENDER=true) sem disco persistente, o que o painel envia some no próximo
+// deploy/reinício — o painel avisa a equipe antes de ela subir fotos definitivas.
+function ephemeralUploads() {
+  return !persistentUploadDir && process.env.RENDER === 'true';
+}
 const PERSISTED_ASSET_PREFIXES = ['assets/img/processed/', 'assets/videos/'];
 
 // Caminho em disco de um asset enviado pelo painel ("assets/img/processed/x.jpg").
@@ -2223,14 +2228,14 @@ async function handleApi(req, res, pathname) {
       resetLoginAttempts(req, email);
       const tokenUser = { id: row.id, name: row.name, email: row.email, role: row.role, sessionVersion: row.sessionVersion };
       const adminUser = { id: row.id, name: row.name, email: row.email, role: row.role };
-      return sendJSON(res, 200, { adminUser, token: signAdminSessionToken(tokenUser) });
+      return sendJSON(res, 200, { adminUser, token: signAdminSessionToken(tokenUser), ephemeralUploads: ephemeralUploads() });
     }
 
     if (pathname === '/api/admin/session' && req.method === 'POST') {
       const body = await readJSONBody(req);
       const admin = await requireAdmin(body);
       if (!admin) return sendJSON(res, 401, { error: 'Sessão inválida ou expirada' });
-      return sendJSON(res, 200, { adminUser: { id: admin.id, name: admin.name, email: admin.email, role: admin.role } });
+      return sendJSON(res, 200, { adminUser: { id: admin.id, name: admin.name, email: admin.email, role: admin.role }, ephemeralUploads: ephemeralUploads() });
     }
 
     if (pathname === '/api/admin/users/list' && req.method === 'POST') {

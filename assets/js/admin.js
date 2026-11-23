@@ -20,6 +20,7 @@
   let PROMOTIONS = [];
   let COUPONS = [];
   let SHIPPING_RULES = [];
+  let EPHEMERAL_UPLOADS = false;
   let CUSTOMERS = [];
   let STORIES = [];
   let ORDERS = [];
@@ -397,6 +398,7 @@
       body: JSON.stringify({ adminToken: token }),
     });
     const data = await res.json().catch(() => ({}));
+    if (res.ok) EPHEMERAL_UPLOADS = data.ephemeralUploads === true;
     return res.ok ? data.adminUser : null;
   }
 
@@ -422,6 +424,7 @@
       if (!res.ok) throw new Error(data.error || 'Falha no login');
       ADMIN_TOKEN = data.token;
       CURRENT_ADMIN = data.adminUser;
+      EPHEMERAL_UPLOADS = data.ephemeralUploads === true;
       sessionStorage.setItem(TOKEN_KEY, ADMIN_TOKEN);
       loginForm.reset();
       showApp();
@@ -3024,6 +3027,25 @@
           orderStatusFilter = 'novo';
           renderOrderList();
         },
+      });
+    }
+
+    // sem nenhuma regra ativa o site recusa toda "Entrega" (só retirada em loja funciona)
+    if (!SHIPPING_RULES.some((r) => r.active !== false)) {
+      items.push({
+        tone: 'urgent',
+        text: 'Nenhuma regra de frete ativa — clientes só conseguem fechar pedido com retirada em loja',
+        action: 'Cadastrar frete',
+        onClick: () => activateAdminPanel('frete'),
+      });
+    }
+
+    if (EPHEMERAL_UPLOADS) {
+      items.push({
+        tone: 'warn',
+        text: 'Servidor sem disco permanente: fotos e vídeos enviados pelo painel somem na próxima atualização do site. Evite subir fotos definitivas até ativar o disco no Render.',
+        action: 'Ver imagens',
+        onClick: () => activateAdminPanel('imagens'),
       });
     }
 
