@@ -1297,6 +1297,10 @@ body.pdp-buy-bar-open .float-whats{bottom:88px;}
 .editorial-grid{display:grid;grid-template-columns:1.3fr .85fr .85fr;gap:14px;align-items:start;}
 .editorial-card{position:relative;display:block;overflow:hidden;aspect-ratio:3/4;background:var(--card);}
 .editorial-card-large{aspect-ratio:4/5;}
+/* o card grande define a altura da linha e os menores acompanham — antes sobrava um vão
+   vazio embaixo deles (no celular o bloco 720px volta tudo pra 4/5) */
+.editorial-grid{align-items:stretch;}
+.editorial-card:not(.editorial-card-large){aspect-ratio:auto;}
 .editorial-card img{width:100%;height:100%;object-fit:cover;object-position:center 15%;transition:transform .7s ease;}
 .editorial-card:hover img{transform:scale(1.035);}
 .editorial-card::after{content:'';position:absolute;inset:45% 0 0;background:linear-gradient(transparent,rgba(10,9,8,.7));}
@@ -1335,7 +1339,7 @@ body.pdp-buy-bar-open .float-whats{bottom:88px;}
 .sobre-linha li:last-child{padding-bottom:0;}
 .sobre-linha li::before{content:"";position:absolute;left:-5px;top:.45em;width:9px;height:9px;border-radius:50%;background:var(--wine);}
 .sobre-linha strong{font-family:var(--serif);font-weight:600;color:var(--wine);}
-.sobre-linha span{line-height:1.5;}
+.sobre-linha span{line-height:1.5;color:var(--ink-soft);}
 @media (max-width:480px){.sobre-linha li{grid-template-columns:1fr;gap:2px;}}
 .sobre-citacao{margin:22px 0;padding:4px 0 4px 20px;border-left:2px solid var(--wine);font-family:var(--serif);font-style:italic;font-size:clamp(1.3rem,2vw,1.6rem);line-height:1.3;}
 .sobre-assinatura{font-family:var(--serif);font-style:italic;font-size:1.25rem;margin-top:24px;}
@@ -1376,6 +1380,12 @@ body.pdp-buy-bar-open .float-whats{bottom:88px;}
   .spotlight-media{max-width:300px;width:100%;margin:0 auto;}
   .spotlight-media img{height:auto;aspect-ratio:auto;}
   .sobre-img{max-width:520px;width:100%;margin:0 auto;}
+  /* no tablet o texto do destaque ficava centralizado com o fio dourado do eyebrow à esquerda */
+  .spotlight-inner{text-align:left;}
+  .spotlight-text{margin-left:0;margin-right:0;}
+}
+/* Menu em gaveta só existe até 720px (acima disso a barra horizontal continua) */
+@media (max-width:720px){
   /* menu mobile: o ".main-nav{gap:42px}" do refresh (pensado pra barra horizontal) deixava os
      itens empilhados muito afastados; aqui eles ficam colados, separados por uma linha fina. */
   .main-nav{gap:0;}
@@ -1387,11 +1397,15 @@ body.pdp-buy-bar-open .float-whats{bottom:88px;}
   /* com um grupo só, o título da coluna repete o "Categorias" do botão logo acima */
   .mega-menu-col:only-child .mega-menu-col-title{display:none;}
   .header-row-nav .main-nav .mega-menu-col a{padding:10px 0 10px 14px;}
+}
+@media (max-width:980px){
   .hero{height:680px;min-height:0;}
   .hero-image{width:62%;}
   .hero-inner{display:flex;}
   .hero-copy{text-align:left;}
   .hero-copy h1,.hero-text{margin-left:0;margin-right:0;}
+  /* botões seguem o alinhamento à esquerda do texto (o bloco antigo de 980px centralizava) */
+  .hero-ctas{justify-content:flex-start;}
   .hero-caption{display:none;}
   .benefits-inner{justify-content:center;}
   .editorial-grid{grid-template-columns:1.2fr 1fr;}
