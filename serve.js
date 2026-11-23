@@ -4622,7 +4622,10 @@ async function serveCategoryPage(req, res, slug) {
       .replace(/<meta name="description" content="[^"]*" \/>/, `<meta name="description" content="${escapeHtml(description)}" />`)
       .replace(/<meta property="og:title" content="[^"]*" \/>/, `<meta property="og:title" content="${escapeHtml(title)}" />`)
       .replace(/<meta property="og:description" content="[^"]*" \/>/, `<meta property="og:description" content="${escapeHtml(description)}" />`)
-      .replace('<h2>Explore toda a coleção</h2>', `<h2>${escapeHtml(name)}</h2>`);
+      .replace('<h2>Explore toda a coleção</h2>', `<h2>${escapeHtml(name)}</h2>`)
+      // a capa ganha o título da categoria (o h1 da home se repetiria em toda categoria para o Google)
+      .replace(/<h1 id="heroTitle">[\s\S]*?<\/h1>/, `<h1 id="heroTitle">${escapeHtml(name)}<br> <em>By NaNa.</em></h1>`)
+      .replace('<p class="eyebrow">Curadoria By NaNa · 2026</p>', '<p class="eyebrow">Categoria · Curadoria By NaNa</p>');
     sendBody(req, res, 200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' }, html, { compressible: true });
   });
 }

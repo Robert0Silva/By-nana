@@ -577,6 +577,11 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 }
 .variant-chip:hover:not(:disabled){border-color:var(--ink);}
 .variant-chip.is-active{background:var(--ink);color:#fff;border-color:var(--ink);}
+.variant-picker.needs-size .variant-chip:not(:disabled){border-color:var(--camel);}
+.variant-picker.needs-size{animation:sizeNudge .4s ease;}
+@keyframes sizeNudge{0%,100%{transform:translateX(0);}25%{transform:translateX(-4px);}75%{transform:translateX(4px);}}
+@media (prefers-reduced-motion:reduce){.variant-picker.needs-size{animation:none;}}
+.size-hint{margin:2px 0 4px;font-size:.74rem;font-weight:600;color:#9a5b2e;}
 .variant-chip.is-soldout,.variant-chip:disabled{
   opacity:.4;text-decoration:line-through;cursor:not-allowed;background:var(--card);
 }

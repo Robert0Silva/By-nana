@@ -208,6 +208,13 @@
     return `<div class="color-dot-row">${dots}${extra}</div>`;
   }
 
+  // com mais de uma opção a cliente escolhe o tamanho (nada vem marcado: evita levar o tamanho
+  // errado sem perceber); com uma opção só não há o que escolher e ela já vale.
+  function defaultVariantOf(variants) {
+    const list = variants || [];
+    return list.length > 1 ? null : list.find((v) => v.stock > 0) || null;
+  }
+
   function isLowStock(p, soldOut) {
     return !!p.hasVariants && !soldOut && typeof p.totalStock === 'number' && p.totalStock > 0 && p.totalStock <= LOW_STOCK_THRESHOLD;
   }
@@ -572,7 +579,7 @@
     const variants = p.variants || [];
     const inStock = variants.filter((v) => v.stock > 0);
     const soldOut = p.hasVariants && inStock.length === 0;
-    const defaultVariant = inStock[0] || null;
+    const defaultVariant = defaultVariantOf(variants);
     const lowStock = isLowStock(p, soldOut);
     const variantHtml = variants.length > 1
       ? `<div class="variant-picker">
@@ -1953,7 +1960,7 @@
         ${candidates
           .map((p) => {
             const variants = p.variants || [];
-            const defaultVariant = variants.filter((v) => v.stock > 0)[0] || null;
+            const defaultVariant = defaultVariantOf(variants);
             const { price } = getEffective(p);
             const priceLabel = p.price == null ? 'Sob consulta' : money(price);
             return `
@@ -1973,6 +1980,34 @@
   const cartAnnouncer = document.getElementById('cartAnnouncer');
   function announce(text) {
     if (cartAnnouncer) cartAnnouncer.textContent = text;
+  }
+
+  function needsSizeChoice(productId, variantId) {
+    if (variantId) return false;
+    const product = PRODUCTS.find((p) => p.id === productId);
+    return !!product && product.hasVariants && (product.variants || []).length > 1;
+  }
+
+  function clearSizeHint(picker) {
+    picker.classList.remove('needs-size');
+    const hint = picker.nextElementSibling;
+    if (hint && hint.classList.contains('size-hint')) hint.remove();
+  }
+
+  // "Adicionar" sem tamanho escolhido: destaca o seletor com um aviso visível em vez de falhar calado
+  function askForSize(btn) {
+    const picker = btn.id === 'pdpAdd' || btn.id === 'pdpBuyBarAdd'
+      ? document.getElementById('pdpVariantPicker')
+      : btn.closest('.product-card, .rel-card')?.querySelector('.variant-picker');
+    announce('Escolha um tamanho.');
+    if (!picker) return;
+    if (!(picker.nextElementSibling && picker.nextElementSibling.classList.contains('size-hint'))) {
+      picker.insertAdjacentHTML('afterend', '<p class="size-hint" role="alert">Escolha um tamanho</p>');
+    }
+    picker.classList.remove('needs-size');
+    void picker.offsetWidth; // reinicia a animação a cada clique
+    picker.classList.add('needs-size');
+    if (btn.id === 'pdpBuyBarAdd') picker.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
   function addToCart(productId, variantId) {
@@ -2022,6 +2057,7 @@
       if (chip.disabled) return;
       const picker = chip.closest('.variant-picker');
       picker.querySelectorAll('.variant-chip').forEach((c) => c.classList.toggle('is-active', c === chip));
+      clearSizeHint(picker);
       const addBtnForChip =
         picker.id === 'pdpVariantPicker' ? document.getElementById('pdpAdd') : picker.closest('.product-card, .rel-card')?.querySelector('.add-btn');
       if (addBtnForChip) {
@@ -2040,6 +2076,10 @@
     const addBtn = e.target.closest('.add-btn');
     if (addBtn) {
       if (addBtn.disabled) return;
+      if (needsSizeChoice(addBtn.dataset.id, addBtn.dataset.variantId)) {
+        askForSize(addBtn);
+        return;
+      }
       if (addToCart(addBtn.dataset.id, addBtn.dataset.variantId || null)) openBag();
       return;
     }
@@ -2048,6 +2088,11 @@
     // que não cabe no card compacto. O item some da faixa assim que entra na sacola (renderCart).
     const upsellAddBtn = e.target.closest('.bag-upsell-add');
     if (upsellAddBtn) {
+      // peça com vários tamanhos: o "+" leva à página dela para escolher o tamanho
+      if (needsSizeChoice(upsellAddBtn.dataset.id, upsellAddBtn.dataset.variantId)) {
+        window.location.href = `/produto/${upsellAddBtn.dataset.id}`;
+        return;
+      }
       addToCart(upsellAddBtn.dataset.id, upsellAddBtn.dataset.variantId || null);
       return;
     }
@@ -3258,7 +3303,7 @@
     const variants = p.variants || [];
     const inStock = variants.filter((v) => v.stock > 0);
     const soldOut = p.hasVariants && inStock.length === 0;
-    const defaultVariant = inStock[0] || null;
+    const defaultVariant = defaultVariantOf(variants);
     document.getElementById('pdpLowStock').hidden = !isLowStock(p, soldOut);
     document.getElementById('pdpColorDots').innerHTML = colorDotsHtml(variants);
 
